@@ -299,6 +299,31 @@ so that latency drains unseen. It is never shorter. It returns 0, and the
 vblank thread keeps its own 60 Hz, when the display runs at another rate,
 present wait is missing, or nothing has been shown for half a second.
 
+### More than 60 frames a second
+
+`MW2_FPS_LIMIT` (`runtime/frame_rate.h`) at anything but 60 takes the title off
+the blank. Three things hold it at 60, and each is released its own way:
+
+- **D3D's present interval.** The title's present puts the device's
+  `D3DRS_PRESENTINTERVAL` in the flip request, and D3D's flip handler queues
+  the frame for the next blank. `T_D3D_Present`'s hook sets the state to
+  `D3DPRESENT_INTERVAL_IMMEDIATE` first, and the handler then retires the frame
+  when the command processor reaches the swap
+  ([d3d9-seam.md](d3d9-seam.md#the-flip-handshake)).
+- **The title's limiter.** `Com_Frame` sleeps until `1000 / com_maxfps` whole
+  milliseconds have passed since the last frame; `com_maxfps` is 60 unless
+  set. The hook queues `com_maxfps <limit>` on the title's console, and
+  `r_vsync 0`: with `r_vsync` on, the title takes a frame's length from the
+  blanks it counted between swaps instead of from its clock.
+- **The window.** It still presents one frame a blank, without tearing, but
+  the newest: frames finished before it and not yet shown are let go. Nothing
+  waits behind the frame on screen, so the guest's blank is never lengthened.
+
+The guest's blank itself stays the display's; only the retiring of frames
+leaves it. The simulation's speed does not change: a route walked at 93 frames
+a second takes the time it takes at 60. `MW2_STUTTERS`, which counts blanks
+without a new frame, is off in this mode.
+
 ## Occlusion queries
 
 The title brackets counted draws with two `EVENT_WRITE_ZPD` events, with the

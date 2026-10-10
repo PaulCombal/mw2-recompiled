@@ -1,6 +1,7 @@
 #include "presenter.h"
 #include "../../diagnostics.h"
 #include "../../env.h"
+#include "../../frame_rate.h"
 #include "../../log.h"
 #include "../../crash.h"
 #include "../../console.h"
@@ -495,7 +496,9 @@ namespace
     void SawDisplayed(uint64_t id, int64_t at)
     {
         const uint64_t queued = g.lastQueued.load(std::memory_order_relaxed);
-        const double behind = queued > id ? double(queued - id) : 0.0;
+        // Off the blank nothing waits its turn behind the frame on screen:
+        // the frames after it are let go for the newest (DrawOneFrame).
+        const double behind = frame_rate::Console() && queued > id ? double(queued - id) : 0.0;
         if (g.lastShownNs >= 0 && id > g.lastShownId)
         {
             const double gap = double(at - g.lastShownNs);
@@ -704,6 +707,15 @@ namespace
         if (!idle)
         {
             std::lock_guard lock(g.lock);
+            // Off the blank (MW2_FPS_LIMIT) the title finishes frames whenever
+            // it likes, and the display still takes one a blank: the newest is
+            // shown and the ones before it are let go.
+            while (!frame_rate::Console() && g.frameQueue.size() > 1)
+            {
+                g.taken = std::max(g.taken, g.frameQueue.front().serial);
+                g.frameQueue.pop_front();
+                g.takenWake.notify_all();
+            }
             if (!g.frameQueue.empty())
             {
                 shown = g.frameQueue.front();

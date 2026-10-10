@@ -1,5 +1,6 @@
 // See stutters.h.
 #include "stutters.h"
+#include "frame_rate.h"
 #include "log.h"
 #include "pacing_trace.h"
 
@@ -109,7 +110,13 @@ namespace
 
 bool stutters::On()
 {
-    static const bool on = diag::Flag("MW2_STUTTERS");
+    // A frame at every blank is the console's pacing; off it (MW2_FPS_LIMIT)
+    // there is no blank a frame was due at.
+    static const bool on = [] {
+        if (!diag::Flag("MW2_STUTTERS")) return false;
+        if (!frame_rate::Console()) LOGW("stutters: MW2_STUTTERS is for the console's 60, not MW2_FPS_LIMIT; off");
+        return frame_rate::Console();
+    }();
     return on;
 }
 

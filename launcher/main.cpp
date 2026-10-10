@@ -30,6 +30,7 @@
 #include <imgui_impl_sdlrenderer3.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <atomic>
 #include <chrono>
@@ -193,7 +194,7 @@ namespace
         Profile, Back, NextPlayer, Rename, PlayAs, MaxRank, Prestige, UnlockEverything, UnlockMissions, AllStars,
         CheckUpdate, InstallUpdate,
         // The graphics screen, and the next of the sizes the game draws at.
-        Graphics, Resolution,
+        Graphics, Resolution, FpsLimit,
         // The bug report screen: a run of either game with its log kept.
         Report, ReportCampaign, ReportMultiplayer,
         // The question a start asks when a recorded run was never reported.
@@ -239,6 +240,24 @@ namespace
         bool gameRunning = false;       // looked up once a second while the profile screen shows
         bool reportScreen = false;
         bool graphicsScreen = false;
+        // What FPS LIMIT goes through: the console's 60, two rates screens
+        // commonly have, and none. A screen at another rate has its own in
+        // place of the common one nearest to it, and until the player chooses,
+        // the limit is the screen's.
+        std::vector<int> fpsLimits{ settings::kConsoleFps, 120, 144, 0 };
+        int screenFps = settings::kConsoleFps;
+
+        void FindScreenRate()
+        {
+            if (const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window)))
+                screenFps = std::max(settings::kConsoleFps, int(std::lround(mode->refresh_rate)));
+            if (std::find(fpsLimits.begin(), fpsLimits.end(), screenFps) == fpsLimits.end())
+            {
+                fpsLimits[std::abs(screenFps - fpsLimits[1]) <= std::abs(screenFps - fpsLimits[2]) ? 1 : 2] = screenFps;
+                std::sort(fpsLimits.begin() + 1, fpsLimits.begin() + 3);
+            }
+            if (!settings::HasFpsLimit()) settings::SetFpsLimit(screenFps);
+        }
         bool recording = false;         // the reported run goes on
         bool pendingReport = false;     // a recorded run was never reported: the start asks about it
         std::chrono::steady_clock::time_point recordingSince{};
@@ -381,6 +400,15 @@ namespace
             case Action::Resolution:
                 settings::SetScale(settings::Scale() % settings::kMaxScale + 1);
                 break;
+            case Action::FpsLimit:
+            {
+                // The choice after the one kept; one written by hand that is
+                // none of them goes back to the first.
+                const auto kept = std::find(fpsLimits.begin(), fpsLimits.end(), settings::FpsLimit());
+                const bool last = kept == fpsLimits.end() || kept + 1 == fpsLimits.end();
+                settings::SetFpsLimit(last ? fpsLimits.front() : kept[1]);
+                break;
+            }
             case Action::Rename:
                 renaming = true;
                 newName = players[player].name;
@@ -625,13 +653,18 @@ namespace
                 "\n\nChoose to go to the next: 720p, 1440p, 4K. A larger one is sharper and needs a faster graphics card: "
                 "1440p draws four times the pixels and 4K nine times."
                 "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
-            add(Action::None, "FPS LIMIT", "FPS LIMIT", "How many frames a second the game draws at most.\n\nNot available yet.");
-            add(Action::None, "FOV", "FIELD OF VIEW", "How wide the game's view is.\n\nNot available yet.");
-            for (size_t i = 1; i < entries.size(); i++)
-            {
-                entries[i].shown.enabled = false;
-                entries[i].shown.tag = "SOON";
-            }
+            const int limit = settings::FpsLimit();
+            add(Action::FpsLimit, "FPS LIMIT " + (limit ? std::to_string(limit) : std::string("NONE")), "FPS LIMIT",
+                std::string("How many frames a second the game draws at most: now ") +
+                (limit == settings::kConsoleFps ? "60, the console's own." : limit ? std::to_string(limit) + "." : "as many as the computer manages.") +
+                "\n\nChoose to go to the next: " + std::to_string(fpsLimits[0]) + ", " + std::to_string(fpsLimits[1]) + ", " +
+                std::to_string(fpsLimits[2]) + ", none. This screen shows " + std::to_string(screenFps) + " pictures a second. More than 60 "
+                "makes the game answer the controller sooner, and looks smoother on a screen that shows more. It needs a faster "
+                "computer, and the game was made for 60: if something misbehaves, go back to it."
+                "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
+            Entry* fov = add(Action::None, "FOV", "FIELD OF VIEW", "How wide the game's view is.\n\nNot available yet.");
+            fov->shown.enabled = false;
+            fov->shown.tag = "SOON";
             add(Action::Back, "BACK", "", "")->shown.ruleAbove = true;
             return entries;
         }
@@ -794,7 +827,7 @@ namespace
             if (!reinstall) install()->shown.ruleAbove = true;
 
             // What the game is played with.
-            add(Action::Graphics, "GRAPHICS", true, "GRAPHICS", "The size the game draws at.")->shown.ruleAbove = true;
+            add(Action::Graphics, "GRAPHICS", true, "GRAPHICS", "The size the game draws at and how many frames a second.")->shown.ruleAbove = true;
             add(Action::Profile, "PROFILES", true, "PROFILES",
                 "Set the multiplayer rank and prestige, unlock everything, and open the campaign's and Special Ops' missions.");
             add(Action::None, "MAPS", false, "MAPS", "Add and remove custom maps.\n\nNot available yet.")->shown.tag = "SOON";
@@ -848,6 +881,7 @@ namespace
         // another -- it does when the program starting it was not in front --
         // answers to nothing but the mouse until it is clicked.
         SDL_RaiseWindow(app.window);
+        app.FindScreenRate();
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();

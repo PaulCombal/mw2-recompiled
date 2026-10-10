@@ -7,10 +7,43 @@
 #include "gpu.h"
 #include "internal.h"
 #include "../diagnostics.h"
+#include "../console.h"
+#include "../frame_rate.h"
 #include "../guest.h"
 #include "../log.h"
 
 #include <atomic>
+#include <cstdio>
+
+namespace
+{
+    // MW2_FPS_LIMIT (frame_rate.h) takes the title off the display's blank
+    // with what the console has for it. D3D's present puts the device's
+    // D3DRS_PRESENTINTERVAL in the flip request, and its flip handler retires
+    // a frame asked for with D3DPRESENT_INTERVAL_IMMEDIATE when the command
+    // processor reaches it instead of queueing it for the blank. The title
+    // never sets that state, but a state block put back restores it, so it is
+    // set at every present. The title's side is two settings of its own:
+    // com_maxfps, its limiter, and r_vsync, which has it take a frame's
+    // length from the blanks counted rather than from the clock.
+    void Unsynchronise(uint32_t device)
+    {
+        constexpr uint32_t kPresentInterval = 13596;    // in D3D9's device structure
+        constexpr uint32_t kIntervalImmediate = 0x80000000;
+        *GuestPtr<be32>(device + kPresentInterval) = kIntervalImmediate;
+
+        static const bool told = [] {
+            char limit[32];
+            std::snprintf(limit, sizeof limit, "com_maxfps %u", frame_rate::Limit());
+            console::RunNow(limit);
+            console::RunNow("r_vsync 0");
+            if (frame_rate::Limit()) LOGI("d3d: frames are retired off the blank, %u a second at most", frame_rate::Limit());
+            else LOGI("d3d: frames are retired off the blank, as many a second as there are");
+            return true;
+        }();
+        (void)told;
+    }
+}
 
 // D3D9's present. Its frame is retired the way the console retires it: the
 // command stream has the command processor raise an interrupt whose handler
@@ -18,6 +51,7 @@
 GUEST_HOOK(T_D3D_Present)
 {
     pacing::Note(pacing::kPresent);
+    if (!frame_rate::Console()) Unsynchronise(ctx.r3.u32);
     GUEST_ORIG(T_D3D_Present)(ctx, base);
     pacing::Note(pacing::kPresentEnd);
     gpu::Presented();
