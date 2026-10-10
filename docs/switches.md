@@ -10,7 +10,7 @@ development run) holds switches as `NAME=value`, one a line. The runtime reads
 it first thing (`runtime/settings.cpp`) and sets each `MW2_` switch the
 environment does not already have, so a variable given on the command line
 decides. The launcher writes its own settings there (RESOLUTION is
-`MW2_SCALE`, FPS LIMIT is `MW2_FPS_LIMIT`) and keeps the other lines. When the
+`MW2_SCALE`, FPS LIMIT is `MW2_FPS_LIMIT`, FOV is `MW2_FOV`) and keeps the other lines. When the
 file has no `MW2_FPS_LIMIT`, the launcher writes the screen's refresh rate as
 it opens (60 for a 60 Hz screen, which is the console's pacing). `MW2_LAUNCHER_SOUNDS=0`, written there
 by hand, keeps the launcher's own menus silent.
@@ -99,6 +99,7 @@ walking to it.
 |---|---|---|
 | `MW2_SCALE=<2 or 3>` | R | draws every surface that many times wider and taller than the title's: a 2560x1440 or 3840x2160 frame. The launcher's RESOLUTION entry sets it in the settings file ([rendering.md](rendering.md#resolution-scale)) |
 | `MW2_FPS_LIMIT=<n>` | R | how many frames a second the title draws at most. Unset or 60 is the console's pacing, a frame at every blank. Any other number takes the title off the blank, with that number as its own limiter's; 0 is no limit. The limiter counts whole milliseconds a frame, so 120 gives 125 and 144 gives 166. The launcher's FPS LIMIT entry sets it in the settings file ([rendering.md](rendering.md#more-than-60-frames-a-second)) |
+| `MW2_FOV=<degrees>` | R | the field of view, 65 (the console's) to 120, counted as the title's `cg_fov` is: the width of a 4:3 picture, so 65 is 81 degrees across the 16:9 one and 90 is 106. It scales every view the title draws, a weapon's sight included, and leaves the title's own settings to its scripts. The launcher's FOV entry sets it in the settings file ([gameplay.md](gameplay.md#field-of-view)) |
 | `MW2_MSAA=<n>` | R | draws every surface the title multisamples at n samples, rounded down to what the device offers |
 | `MW2_NO_MSAA=1` | R | draws the title's 2x and 4x surfaces at one sample |
 | `MW2_ARENA_MB=<n>` | R | the upload arena for constants, vertices and indices, shared by the frame slots (512) |

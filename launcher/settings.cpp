@@ -58,6 +58,18 @@ void settings::SetFpsLimit(int limit)
     Save();
 }
 
+int settings::Fov()
+{
+    const auto kept = g_kept.find("MW2_FOV");
+    return kept == g_kept.end() ? kConsoleFov : std::clamp(std::atoi(kept->second.c_str()), kConsoleFov, kWidestFov);
+}
+
+void settings::SetFov(int fov)
+{
+    g_kept["MW2_FOV"] = std::to_string(std::clamp(fov, kConsoleFov, kWidestFov));
+    Save();
+}
+
 bool settings::Sounds()
 {
     const auto kept = g_kept.find("MW2_LAUNCHER_SOUNDS");

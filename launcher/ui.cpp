@@ -1,5 +1,6 @@
 #include "ui.h"
 #include "fonts.h"
+#include "preview.h"
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
@@ -186,8 +187,9 @@ void ui::DestroyBackdrop(Backdrop& backdrop)
     backdrop = {};
 }
 
-int ui::Draw(const Fonts& fonts, const Frame& frame, float scale, int& focus)
+int ui::Draw(const Fonts& fonts, const Frame& frame, float scale, int& focus, float& slid)
 {
+    slid = -1;
     ImDrawList* draw = ImGui::GetBackgroundDrawList();
     const ImGuiIO& io = ImGui::GetIO();
     auto S = [&](float v) { return std::round(v * scale); };
@@ -266,6 +268,28 @@ int ui::Draw(const Fonts& fonts, const Frame& frame, float scale, int& focus)
         const float detailWidth = fonts.body->CalcTextSizeA(fonts.body->FontSize, FLT_MAX, 0, frame.detail.c_str()).x;
         draw->AddText(fonts.body, fonts.body->FontSize, { right - detailWidth, py }, IM_COL32(236, 236, 232, 170), frame.detail.c_str());
         py += fonts.body->FontSize + S(24);
+    }
+    if (frame.slider >= 0)
+    {
+        // A track as wide as the picture under it, filled as far as the knob.
+        const float width = S(416), track = S(4), knob = S(7), at = left + width * std::clamp(frame.slider, 0.0f, 1.0f);
+        const float middle = py + knob;
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+            ImGui::IsMouseHoveringRect({ left - knob, py - S(4) }, { left + width + knob, py + knob * 2 + S(4) }, false))
+            slid = std::clamp((io.MousePos.x - left) / width, 0.0f, 1.0f);
+        draw->AddRectFilled({ left, middle - track * 0.5f }, { left + width, middle + track * 0.5f }, IM_COL32(0, 0, 0, 150));
+        draw->AddRectFilled({ left, middle - track * 0.5f }, { at, middle + track * 0.5f }, kAmber);
+        draw->AddQuadFilled({ at, middle - knob }, { at + knob, middle }, { at, middle + knob }, { at - knob, middle }, kWhite);
+        py += knob * 2 + S(12);
+    }
+    if (frame.fov > 0)
+    {
+        const ImVec2 min{ left, py }, max{ left + S(416), py + S(234) };
+        preview::Draw(draw, min, max, frame.fov);
+        char across[48];
+        std::snprintf(across, sizeof(across), "%.0f DEGREES ACROSS THE SCREEN", preview::Across(frame.fov));
+        draw->AddText(fonts.small, fonts.small->FontSize, { max.x + S(14), min.y }, kAmber, across);
+        py = max.y + S(12);
     }
     if (!frame.text.empty())
         draw->AddText(fonts.body, fonts.body->FontSize, { left, py }, frame.error ? kRed : IM_COL32(236, 236, 232, 225),

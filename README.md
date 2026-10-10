@@ -45,7 +45,8 @@ where to get it and takes the file (`--update <file>`).
 The launcher also has PROFILES (set the multiplayer rank and prestige, unlock
 everything, open the campaign's and Special Ops' missions), GRAPHICS (the
 RESOLUTION the game draws at: 720p as on the console, 1440p or 4K, which need
-a faster graphics card; the FPS LIMIT: 60 as on the console, or more) and CHECK FOR UPDATES, which installs a newer release
+a faster graphics card; the FPS LIMIT: 60 as on the console, or more; the FOV:
+65 as on the console, up to 120) and CHECK FOR UPDATES, which installs a newer release
 over this one.
 
 Something wrong? REPORT A BUG runs the game once with its log kept, then
@@ -85,7 +86,7 @@ new one. Two copies of `mw2-mp` on one PC can play a SYSTEM LINK match, each wit
 the controller that chose SYSTEM LINK in it.
 
 **Settings**: `MW2_FULLSCREEN=1`, `MW2_SCALE=<2 or 3>` (what RESOLUTION
-sets), `MW2_FPS_LIMIT=<n>` (what FPS LIMIT sets; 0 is no limit), `MW2_MSAA=<n>` or `MW2_NO_MSAA=1`, `MW2_NO_AUDIO=1`. Set them as
+sets), `MW2_FPS_LIMIT=<n>` (what FPS LIMIT sets; 0 is no limit), `MW2_FOV=<65 to 120>` (what FOV sets), `MW2_MSAA=<n>` or `MW2_NO_MSAA=1`, `MW2_NO_AUDIO=1`. Set them as
 environment variables, or keep them in a file named `.env` beside the
 executables, one per line.
 

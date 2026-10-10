@@ -177,3 +177,41 @@ components with `w` in the top two bits, laid out like D3DCOLOR; like that case
 the instruction only moves each field into the mantissa of `3.0f`, and the
 caller's multiply-add by `(511 * 2^-22, -3.0)` finishes it, which is why full
 scale is 511 -- and the `float16_2` pack.
+
+## Field of view
+
+`MW2_FOV` (`runtime/field_of_view.cpp`) widens the view. The number is counted
+as the title's own `cg_fov` is: the angle across a 4:3 picture, 65 by default.
+The title makes the 16:9 picture as tall as the 4:3 one and wider (the angle's
+tangent times 0.75 is the half height, and that times the picture's shape the
+half width), so 65 is 81 degrees across the screen, 90 is 106 and 120 is 133.
+
+Neither of the title's two settings can carry the player's choice, because its
+scripts write both. `cg_fov` is set to 65 at every multiplayer spawn
+(`_playerlogic.gsc`) and walked through other angles by the campaign's climbs
+and cinematics (`_climb.gsc`, `lerp_fov_overtime` in `_utility.gsc`);
+`cg_fovScale` is written at every level load and every multiplayer connect,
+0.75 in split screen and 1 otherwise (`_load.gsc`, `_playerlogic.gsc`), and
+walked by `lerp_fovscale_overtime`. A value put in either lasts until the next
+script that writes it.
+
+So the settings are left alone, and the title is made to see `cg_fovScale` as
+what its scripts last wrote times `MW2_FOV / 65`, in the two functions that
+read it:
+
+| | campaign | multiplayer | |
+|---|---|---|---|
+| `T_CG_ViewFov` | `8210FCD8` | `8215B9A8` | the angle a client's view is drawn with: `cg_fov`, or the weapon's while aiming (blended in as the sight comes up), or a turret's or a kill camera's; times `cg_fovScale`; held between `cg_fovMin` and 170 |
+| `T_CG_CullZoom` | `8210FF80` | `8215BC28` | the zoom the distance culls take from that view, divided by `cg_fovScale` so the scale does not bring them nearer |
+
+Each hook scales the function's result: the first multiplies it and holds it
+under the title's 170 again, the second divides it. That is the result the
+function would have had with the scale in the setting, except for a view the
+title was already holding at one of its bounds, which is scaled from the bound.
+
+Everything the title draws is scaled by the same factor, as its own
+`cg_fovScale` does: a sight zooms in less at a wider view, and a scripted zoom
+or split screen's narrower view keeps its proportion. The weapon in the
+player's hands is drawn with the view's angle as well: at 120 it is smaller
+and longer, and more of the arms shows. A wider view has more in it: the S.S.D.D. flight spends
+14.9 ms a frame in the renderer at 90 where it spends 13.2 at 65.

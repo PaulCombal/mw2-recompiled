@@ -59,12 +59,16 @@ namespace ui
         std::string stepTitle, detail, amount;
         float fraction = -1;        // of the step, or below zero when it has no amount
 
+        float slider = -1;          // a setting with a range: where it is on its track, 0 to 1
+        float fov = 0;              // and the field of view the pane shows a picture of (preview.h)
+
         std::string status;         // one line at the bottom left
         std::string corner;         // and one at the top right
         std::string hint;           // which controls do what, bottom right
     };
 
     // Draws the frame. Returns the entry the pointer chose, or -1; `focus`
-    // follows the pointer when it moves over an entry.
-    int Draw(const Fonts& fonts, const Frame& frame, float scale, int& focus);
+    // follows the pointer when it moves over an entry. `slid` is where the
+    // pointer holds the frame's slider, 0 to 1, or below zero.
+    int Draw(const Fonts& fonts, const Frame& frame, float scale, int& focus, float& slid);
 }

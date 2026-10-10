@@ -194,7 +194,10 @@ does the same from a terminal; with no disc it updates the install in place.
 The screen is a description (`ui::Frame`) that `main.cpp` fills each frame from
 a list of entries, each with an action and the text the pane shows for it.
 PROFILES, GRAPHICS and REPORT A BUG swap the list for their own (`ProfileEntries`, `GraphicsEntries`,
-`ReportEntries`); MAPS is an entry without an action yet.
+`ReportEntries`); MAPS is an entry without an action yet. An entry with a range (FOV) sets
+`ui::Frame::slider`, and the pane draws a track for it; FOV's also shows a street drawn at the
+angle (`preview.cpp`), with the game's projection, to say what the number does before the game
+is started.
 PLAY CAMPAIGN and PLAY MULTIPLAYER start `mw2-sp` and `mw2-mp` beside the
 launcher, the names a release gives the two game executables.
 
@@ -317,6 +320,7 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `shader_preload.cpp` | hands shaders loaded with a level to the renderer to compile |
 | `engine.h`, `engine_log.cpp`, `predicate_waits.cpp`, `console.cpp` | hooks into the engine: print and error paths, spin waits, the console command buffer |
 | `player.cpp` | the headless walker and route recorder |
+| `field_of_view.cpp` | `MW2_FOV`: scales the view angle the title computes |
 | `stutters.cpp`, `pacing_trace.cpp` | the stutter detector and the frame pacing timeline |
 | `report.cpp` | `MW2_REPORT=1`: the driver's name and a run's performance summary, for a bug report |
 | `crash.cpp`, `watchpoint.cpp`, `mmio_hook.h` | the fault handler, the write watchpoint, the hardware-register store hook |

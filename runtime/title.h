@@ -49,6 +49,9 @@
 #define T_Cbuf_AddText         82275C60
 #define T_Memcard_InitializeSystem 8233D890
 #define T_Image_FlushMove      823DE738
+// the view's angle, and the zoom the distance culls take from it (field_of_view.cpp)
+#define T_CG_ViewFov           8215B9A8
+#define T_CG_CullZoom          8215BC28
 // not located in the multiplayer: T_DB_MissingAsset
 
 // data
@@ -87,6 +90,8 @@
 #define T_DB_MissingAsset      82172340
 #define T_Memcard_InitializeSystem 8230DF90
 #define T_Image_FlushMove      823A52F8
+#define T_CG_ViewFov           8210FCD8
+#define T_CG_CullZoom          8210FF80
 
 // data
 #define T_DATA_TimeStampBundlePtr 0x82000780u   // the KeTimeStampBundle import record
@@ -116,6 +121,8 @@
 #define T_Cbuf_AddText         82275470
 #define T_Memcard_InitializeSystem 8233CAF0
 #define T_Image_FlushMove      823DD658
+#define T_CG_ViewFov           8215B9D0
+#define T_CG_CullZoom          8215BC50
 #define T_DATA_TimeStampBundlePtr 0x820007B4u
 #define T_DATA_DebugMonitorPtr    0x820007F4u
 #define T_DATA_DeviceTable        0u
@@ -141,6 +148,8 @@
 #define T_DB_MissingAsset      82172340
 #define T_Memcard_InitializeSystem 8230DF88
 #define T_Image_FlushMove      823A52F8
+#define T_CG_ViewFov           8210FCD8
+#define T_CG_CullZoom          8210FF80
 #define T_DATA_TimeStampBundlePtr 0x82000780u
 #define T_DATA_DebugMonitorPtr    0x820007F8u
 #define T_DATA_DeviceTable        0x83A53020u

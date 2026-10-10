@@ -193,8 +193,8 @@ namespace
         // The profile screen and what it does.
         Profile, Back, NextPlayer, Rename, PlayAs, MaxRank, Prestige, UnlockEverything, UnlockMissions, AllStars,
         CheckUpdate, InstallUpdate,
-        // The graphics screen, and the next of the sizes the game draws at.
-        Graphics, Resolution, FpsLimit,
+        // The graphics screen, and the next of what each of its entries sets.
+        Graphics, Resolution, FpsLimit, Fov,
         // The bug report screen: a run of either game with its log kept.
         Report, ReportCampaign, ReportMultiplayer,
         // The question a start asks when a recorded run was never reported.
@@ -409,6 +409,10 @@ namespace
                 settings::SetFpsLimit(last ? fpsLimits.front() : kept[1]);
                 break;
             }
+            case Action::Fov:
+                // Choosing goes one step wider, and round to the console's.
+                settings::SetFov(settings::Fov() >= settings::kWidestFov ? settings::kConsoleFov : settings::Fov() + settings::kFovStep);
+                break;
             case Action::Rename:
                 renaming = true;
                 newName = players[player].name;
@@ -662,9 +666,13 @@ namespace
                 "makes the game answer the controller sooner, and looks smoother on a screen that shows more. It needs a faster "
                 "computer, and the game was made for 60: if something misbehaves, go back to it."
                 "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
-            Entry* fov = add(Action::None, "FOV", "FIELD OF VIEW", "How wide the game's view is.\n\nNot available yet.");
-            fov->shown.enabled = false;
-            fov->shown.tag = "SOON";
+            const int fov = settings::Fov();
+            add(Action::Fov, "FOV " + std::to_string(fov), "FIELD OF VIEW",
+                std::string("How wide the game's view is: now ") + std::to_string(fov) +
+                (fov == settings::kConsoleFov ? ", the console's own." : ", where the console's is 65.") +
+                " Left and right change it. A wider view shows more to the sides and makes what is ahead smaller, "
+                "aiming down a sight included; it needs a faster computer. "
+                "It applies to the campaign and the multiplayer, from the next time either is started.");
             add(Action::Back, "BACK", "", "")->shown.ruleAbove = true;
             return entries;
         }
@@ -827,7 +835,7 @@ namespace
             if (!reinstall) install()->shown.ruleAbove = true;
 
             // What the game is played with.
-            add(Action::Graphics, "GRAPHICS", true, "GRAPHICS", "The size the game draws at and how many frames a second.")->shown.ruleAbove = true;
+            add(Action::Graphics, "GRAPHICS", true, "GRAPHICS", "The size the game draws at, how many frames a second and how wide its view is.")->shown.ruleAbove = true;
             add(Action::Profile, "PROFILES", true, "PROFILES",
                 "Set the multiplayer rank and prestige, unlock everything, and open the campaign's and Special Ops' missions.");
             add(Action::None, "MAPS", false, "MAPS", "Add and remove custom maps.\n\nNot available yet.")->shown.tag = "SOON";
@@ -1000,7 +1008,31 @@ namespace
                          : app.profileScreen || app.reportScreen || app.graphicsScreen ? "ENTER OR (A) TO CHOOSE, ESC OR (B) TO GO BACK"
                                                                  : "ENTER OR (A) TO CHOOSE";
 
-            const int pointed = ui::Draw(fonts, frame, scale, app.focus);
+            if (current.action == Action::Fov)
+            {
+                const int range = settings::kWidestFov - settings::kConsoleFov;
+                frame.slider = float(settings::Fov() - settings::kConsoleFov) / float(range);
+                frame.fov = float(settings::Fov());
+                frame.hint = "LEFT AND RIGHT TO CHANGE, ESC OR (B) TO GO BACK";
+            }
+
+            float slid = -1;
+            const int pointed = ui::Draw(fonts, frame, scale, app.focus, slid);
+            if (current.action == Action::Fov)
+            {
+                // The slider: a step a press to either side, or wherever the pointer holds it.
+                int fov = settings::Fov();
+                if (pressed({ ImGuiKey_LeftArrow, ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadLStickLeft }, true)) fov -= settings::kFovStep;
+                if (pressed({ ImGuiKey_RightArrow, ImGuiKey_GamepadDpadRight, ImGuiKey_GamepadLStickRight }, true)) fov += settings::kFovStep;
+                if (slid >= 0)
+                    fov = settings::kConsoleFov + int(std::lround(slid * float(settings::kWidestFov - settings::kConsoleFov) / settings::kFovStep)) * settings::kFovStep;
+                fov = std::clamp(fov, settings::kConsoleFov, settings::kWidestFov);
+                if (fov != settings::Fov())
+                {
+                    settings::SetFov(fov);
+                    sound::Play(sound::Clip::Over);
+                }
+            }
             if (pointed >= 0) chosen = pointed;
             // The game's menus tick as another entry is reached and sound a
             // choice; a screen that has just come up has reached nothing.
