@@ -52,9 +52,13 @@
 // the view's angle, and the zoom the distance culls take from it (field_of_view.cpp)
 #define T_CG_ViewFov           8215B9A8
 #define T_CG_CullZoom          8215BC28
+// the fastfile loader's signature gate and the stream start it guards (unsigned_fastfiles.cpp)
+#define T_DB_StartStream       821B0958
+#define T_DB_AuthLoadInit      821AFA10
 // not located in the multiplayer: T_DB_MissingAsset
 
 // data
+#define T_DATA_DB_Load            0x82678600u   // the loader's state: +0 the file being read (its name at +8), +52 its stream
 #define T_DATA_TimeStampBundlePtr 0x820007B4u   // the KeTimeStampBundle import record
 #define T_DATA_DebugMonitorPtr    0x820007F4u   // the KeDebugMonitorData import record
 #define T_DATA_DeviceTable        0u

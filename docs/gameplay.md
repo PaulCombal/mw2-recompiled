@@ -17,6 +17,12 @@ Every fastfile is needed, not only the current level's: a zone whose file is
 missing makes the title report a dirty disc and fail, and the multiplayer picks
 its own zones.
 
+The disc's and the update's fastfiles are signed, and the multiplayer refuses
+one that is not with the same dirty-disc report. `runtime/unsigned_fastfiles.cpp`
+lets it load them, which is what a map converted from the PC game is: its two
+files (`<map>.ff`, `<map>_load.ff`) in the game root, and `map <map>` at the
+console (`MW2_CONSOLE`). A signed file is still checked.
+
 ## Movies
 
 Bink is linked into the title (its own `BINK` section) and decodes on the CPU,
