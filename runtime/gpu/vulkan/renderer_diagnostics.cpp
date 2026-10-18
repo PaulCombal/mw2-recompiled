@@ -767,6 +767,9 @@ void vk::renderer::Report()
          (unsigned long long)g.frames, (unsigned long long)g.drawsRecorded,
          (unsigned long long)g.draws, (unsigned long long)g.resolves,
          (unsigned long long)g.depthResolves, g.pipelineCount, g.shaderCount);
+    if (g.textureSlotsKept || g.textureSlotsLookedUp)
+        LOGI("renderer: texture slots bound: %llu kept from the draw before, %llu looked up",
+             (unsigned long long)g.textureSlotsKept, (unsigned long long)g.textureSlotsLookedUp);
     if (g.drawNanoseconds || g.submitNanoseconds)
         LOGI("renderer: %llu ms in Draw (%llu ms of it binding textures), %llu ms in Resolve,"
              " %llu ms in Submit, %llu ms waiting for the queue",

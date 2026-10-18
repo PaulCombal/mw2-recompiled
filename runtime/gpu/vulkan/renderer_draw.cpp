@@ -80,6 +80,7 @@ namespace vk::renderer::detail
         scaled = 0;
         Stopwatch watch(g.textureNanoseconds);
         uint64_t ids[vk::textures::kSlots]{};
+        const uint64_t epoch = vk::textures::Epoch();
         for (uint32_t slot = 0; slot < vk::textures::kSlots; slot++)
         {
             if (!(mask & (1u << slot))) continue;
@@ -87,6 +88,34 @@ namespace vk::renderer::detail
             for (uint32_t i = 0; i < 6; i++)
                 fetch.d[i] = r[gpu::kConstantBaseFetch + slot * 6 + i];
             if (!fetch.IsTexture() || (!fetch.BaseAddress() && !fetch.MipAddress())) continue;
+
+            // The same six dwords as the last draw that bound this slot, with
+            // nothing since that could make the lookup answer otherwise or
+            // have more to do (vk::textures::Epoch, a resolve): that draw's
+            // answer. Most draws keep most of their textures, and the lookup
+            // -- two hash tables, the watch -- was a tenth of the consumer.
+            State::TextureSlot& kept = g.textureSlots[slot];
+            if (kept.valid && kept.epoch == epoch && kept.resolveEpoch == g.resolveEpoch &&
+                !g.drawRecord && std::memcmp(kept.fetch, fetch.d, sizeof kept.fetch) == 0)
+            {
+                g.textureSlotsKept++;
+                ids[slot] = kept.id;
+                if (kept.scaled) scaled |= 1u << slot;
+                else if constexpr (diag::kOn)
+                    if (ids[slot] && g.currentSamples > 1)
+                        ids[slot] = vk::textures::NoteDrawnInWorld(ids[slot]);
+                continue;
+            }
+            g.textureSlotsLookedUp++;
+            const auto keep = [&](uint64_t id, bool isScaled) {
+                std::memcpy(kept.fetch, fetch.d, sizeof kept.fetch);
+                kept.id = id;
+                kept.scaled = isScaled;
+                kept.epoch = epoch;
+                kept.resolveEpoch = g.resolveEpoch;
+                kept.valid = true;
+            };
+
             auto found = g.resolvedTo.find(fetch.BaseAddress());
             const Resolved* newest =
                 found == g.resolvedTo.end() ? nullptr
@@ -108,11 +137,13 @@ namespace vk::renderer::detail
                 if (ids[slot])
                 {
                     scaled |= 1u << slot;
+                    keep(ids[slot], true);
                     if (g.drawRecord) NoteDrawTexture(slot, fetch, ids[slot], true);
                     continue;
                 }
             }
             ids[slot] = vk::textures::Upload(fetch, nullptr);
+            keep(ids[slot], false);
             // MW2_MARK_EMPTY: the world pass is the multisampled one; the
             // interface and the post chain are not. A texture read from an empty
             // block matters when a draw into the world binds it.

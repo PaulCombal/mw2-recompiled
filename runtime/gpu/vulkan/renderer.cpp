@@ -19,6 +19,7 @@ void vk::renderer::FlashSeen(const char*) {}
 uint64_t vk::renderer::CompletedSubmission() { return 0; }
 void vk::renderer::BeforeStreamWrite(uint32_t, uint32_t) {}
 void vk::renderer::BeforeCompletion() {}
+void vk::renderer::Idle() {}
 #else
 
 #include "renderer_state.h"
@@ -362,6 +363,7 @@ void vk::renderer::Shutdown()
             if (resolved.memory) vkFreeMemory(g.device, resolved.memory, nullptr);
         }
     g.resolvedTo.clear();
+    g.resolveEpoch++;
     if (g.readBack) vkDestroyBuffer(g.device, g.readBack, nullptr);
     if (g.readBackMemory) vkFreeMemory(g.device, g.readBackMemory, nullptr);
     g.readBack = VK_NULL_HANDLE;
@@ -398,5 +400,7 @@ void vk::renderer::Shutdown()
 }
 
 bool vk::renderer::Ready() { return g.device != VK_NULL_HANDLE; }
+
+void vk::renderer::Idle() { vk::record::Flush(); }
 
 #endif  // MW2_HAVE_VULKAN

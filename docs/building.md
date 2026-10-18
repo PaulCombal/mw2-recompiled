@@ -140,6 +140,7 @@ The switches are in [switches.md](switches.md).
 | `MW2_ONLINE` | `none` | the online service: `none`, `lan`, or `steam` (Steam, then lan) |
 | `MW2_PORTABLE` | `OFF` | links libstdc++ and libgcc statically (Linux) |
 | `MW2_USE_SDL` | `ON` | SDL3 for the window, input and audio |
+| `MW2_X86_LEVEL` | `x86-64-v2` | the `-march` the game is compiled for. Below SSSE3 every big-endian vector load, store and permute of the recompiled code becomes sixteen byte moves; `runtime/cpu_level.cpp`, compiled for the baseline, tells a player whose processor lacks the level |
 
 CMake reads the SHA-256 of the executables in `mw2/` and `mw2/tu0/` and of the
 update's fastfiles in `mw2/update/` at configure time: a game executable runs

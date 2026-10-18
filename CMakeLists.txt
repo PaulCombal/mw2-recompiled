@@ -13,6 +13,15 @@ option(MW2_LOGGING "Emit the runtime's log" ON)
 option(MW2_PORTABLE "Link the C++ runtime statically, for a binary that runs on other machines" OFF)
 option(MW2_DIAGNOSTICS "Build the traces, dumps, statistics, reports and test harness (runtime/diagnostics.h)" ON)
 
+# The x86-64 level the game is compiled for. The 360's vector unit reads memory
+# big-endian, so nearly every vector load, store and permute of the recompiled
+# code is a byte shuffle: one pshufb from SSSE3 on, sixteen single-byte moves
+# below it, where SIMDe has nothing better. x86-64-v2 adds SSSE3, SSE4.1, SSE4.2
+# and POPCNT: Intel Core processors since 2008, AMD since 2011. The game says
+# so on an older one (runtime/cpu_level.cpp) rather than stopping on the first
+# instruction it lacks.
+set(MW2_X86_LEVEL "x86-64-v2" CACHE STRING "The -march the game is compiled for")
+
 # ---- which executable ------------------------------------------------------
 # The disc carries two: default.xex (the campaign and special ops) and
 # default_mp.xex (the multiplayer). Each is recompiled into its own tree by
@@ -49,7 +58,7 @@ target_include_directories(ppc_recomp PUBLIC
     "${MW2_PPC_DIR}"
     "${CMAKE_SOURCE_DIR}/XenonRecomp/thirdparty/simde")
 # The generated code is machine output; its warnings are noise.
-target_compile_options(ppc_recomp PRIVATE -w)
+target_compile_options(ppc_recomp PRIVATE -w -march=${MW2_X86_LEVEL})
 # The console's hardware registers are plain memory in this address space. The
 # recompiler marks the stores that address them (eieio follows), and this header
 # routes those through a hook so the XMA decoder sees its kick, lock and clear
@@ -105,6 +114,9 @@ add_executable(mw2 ${RUNTIME_SOURCES}
     ${MW2_ONLINE_SOURCES}
     "${MW2_PPC_DIR}/stubs_generated.cpp")
 target_link_libraries(mw2 PRIVATE ppc_recomp)
+target_compile_options(mw2 PRIVATE -march=${MW2_X86_LEVEL})
+# The one file that must run on any x86-64 processor: it checks for the others.
+set_source_files_properties("${CMAKE_SOURCE_DIR}/runtime/cpu_level.cpp" PROPERTIES COMPILE_OPTIONS "-march=x86-64")
 target_compile_definitions(mw2 PRIVATE ${MW2_ONLINE_DEFINITIONS})
 if(MW2_DIAGNOSTICS)
     target_compile_definitions(mw2 PRIVATE MW2_DIAGNOSTICS=1)

@@ -35,7 +35,8 @@ Activision's servers). Special Ops is untested.
 
 - An ISO of the Xbox 360 disc, version 1.0.557 (USA/Europe). The launcher
   checks it, and downloads title update 6 itself.
-- Linux or Windows, 64-bit
+- Linux or Windows, 64-bit, on a processor with SSE4.2 (Intel Core since
+  2008, AMD since 2011)
 - A Vulkan 1.2 GPU
 - 8 GB of disk space
 - A controller (the keyboard only covers the menus)

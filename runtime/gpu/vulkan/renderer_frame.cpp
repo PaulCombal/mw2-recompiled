@@ -207,6 +207,8 @@ namespace vk::renderer::detail
                                                "a frame's submission"))
                 vkQueueSubmit(queue, 0, nullptr, fence);
         });
+        // The GPU gets it now, not when more calls have gathered behind it.
+        vk::record::Flush();
         slot.inFlight = true;
         slot.serial = ++g.submissionSerial;
         slot.queuedAt = vk::record::Position();

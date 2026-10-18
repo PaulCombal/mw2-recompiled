@@ -394,6 +394,18 @@ namespace vk::renderer::detail
         uint32_t presentWidth = 1280, presentHeight = 720;
 
         std::unordered_map<uint32_t, ResolveRing> resolvedTo;
+        uint64_t resolveEpoch = 0;     // moves on at every resolve: resolvedTo may have changed
+
+        // The binding each texture slot got from the last draw that bound it,
+        // kept while neither epoch has moved (TextureSetFor).
+        struct TextureSlot
+        {
+            uint32_t fetch[6];
+            uint64_t id, epoch, resolveEpoch;
+            bool scaled, valid;
+        };
+        TextureSlot textureSlots[vk::textures::kSlots]{};
+        uint64_t textureSlotsKept = 0, textureSlotsLookedUp = 0;
         std::map<uint32_t, ResolveSurface> resolveSurfaces;
 
         uint64_t frames = 0, draws = 0, drawsRecorded = 0;

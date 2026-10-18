@@ -129,7 +129,10 @@ of the ring consumer's time on Team Player.
 - **Float constants.** Each stage reads 256 from its `SQ_VS_CONST` /
   `SQ_PS_CONST` base. The runtime copies only as many as the shader reads (all
   of them under relative addressing), and reuses the copy while the register
-  file's write stamp over that range is unchanged.
+  file's write stamp over that range is unchanged. D3D sends a draw's constants
+  whole, so a write of the value a register already holds does not stamp it.
+  Fetch constants are stamped by every write: the vertex data they name is
+  copied with them, and the title rewrites some buffers in place.
 - **Vertex data is relocated, not mapped.** Each vertex fetch's reachable
   window (lowest to highest index times the stride, plus the fetch tail,
   clipped to the declared size) is copied. Its address in the uploaded fetch
@@ -278,6 +281,14 @@ freed memory and the GPU page-faults.
 arguments, in a byte ring. The recorder thread makes the calls in order,
 including submissions and the frame's hand-off to the window. The swap is
 parsed on the consumer, so the title's frame retires at parse time.
+
+The recorder works in bursts. It sleeps while less than 64 KB is queued and
+none of it is due, and is woken when that much is waiting, at once for a
+submission or a hand-off, when a thread waits for it, and after a millisecond
+in which the consumer had nothing to read. Calls come every couple of
+microseconds and the recorder is faster than that, so a recorder that spun
+until the next one never slept, and held a core; one that waited on the queue
+position itself woke at every call, because the wait spins first.
 
 - A queued call must copy what it uses. It must never point at a local or read
   `g.`, which will have moved on by the time the call runs.

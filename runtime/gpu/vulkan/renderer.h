@@ -97,5 +97,9 @@ namespace vk::renderer
     // (vk::textures::EndSegment), and nothing read later reaches them.
     void BeforeCompletion();
 
+    // The ring consumer has nothing to read: what is queued for the recorder
+    // thread is made now rather than left to gather (recorder.h).
+    void Idle();
+
     void Report();
 }

@@ -38,6 +38,9 @@ namespace vk::record
     // WaitFor waits until it has, Drain until it has made them all. Positions
     // are all 0, and everything done, when there is no thread.
     uint64_t Position();
+    // Wakes the recorder for whatever is queued, which it otherwise lets
+    // gather (recorder.cpp): for when nothing more is coming for a while.
+    void Flush();
     bool Done(uint64_t position);
     void WaitFor(uint64_t position);
     void Drain();
@@ -55,15 +58,16 @@ namespace vk::record
         static_assert(sizeof(Header) == 32);
         extern bool threaded;
         extern VkCommandBuffer into;
-        // Room for `bytes` at the end of the queue, and making it visible.
+        // Room for `bytes` at the end of the queue, and making it visible:
+        // `now` wakes the recorder for it whatever else is queued.
         void* Reserve(uint32_t bytes);
-        void Publish();
+        void Publish(bool now);
     }
 
     // `call(VkCommandBuffer)` with the buffer Into last named, on the recorder
     // thread, after every call queued before it. It must copy what it uses: it
     // runs later, and nothing it points at may be changed or freed until then.
-    template <class Call> void Command(Call&& call)
+    template <class Call> void Command(Call&& call, bool now = false)
     {
         using T = std::decay_t<Call>;
         if (!detail::threaded) { call(detail::into); return; }
@@ -80,13 +84,13 @@ namespace vk::record
             },
             detail::into, bytes };
         new (header + 1) T(std::forward<Call>(call));
-        detail::Publish();
+        detail::Publish(now);
     }
 
     // Work that is not a command but has to come after the ones before it: a
-    // submission, the frame handed to the window.
+    // submission, the frame handed to the window. It wakes the recorder.
     template <class Call> void Host(Call&& call)
     {
-        Command([call = std::forward<Call>(call)](VkCommandBuffer) mutable { call(); });
+        Command([call = std::forward<Call>(call)](VkCommandBuffer) mutable { call(); }, true);
     }
 }

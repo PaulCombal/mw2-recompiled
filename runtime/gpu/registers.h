@@ -347,8 +347,17 @@ namespace gpu
         }
         bool InRange(uint32_t index) const { return index < kRegisterCount; }
 
+        // A write of the value already there stamps nothing: D3D sends a
+        // draw's constants whole, most of them what the last draw had, and the
+        // copies the stamps guard depend only on the values. Except the fetch
+        // constants. The vertex data a fetch names is copied with the block
+        // (renderer_arena.cpp) and the title rewrites some buffers in place
+        // between draws, so a fetch constant written again, even unchanged,
+        // keeps meaning "look at the memory again", as it always has here.
         void Write(uint32_t index, uint32_t value)
         {
+            const bool fetch = index - kConstantBaseFetch < 32 * 6;
+            if (values[index] == value && !fetch) return;
             values[index] = value;
             stamps[index >> kStampShift] = ++writes;
         }

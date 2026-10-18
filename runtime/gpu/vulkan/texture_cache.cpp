@@ -49,6 +49,7 @@ bool vk::textures::BoundInThisSegment(uint32_t, uint32_t) { return false; }
 void vk::textures::TakeLateRestages(std::vector<uint64_t>& ids) { ids.clear(); }
 uint64_t vk::textures::FrameNumber() { return 0; }
 void vk::textures::MemoryWritten(uint32_t, uint32_t) {}
+uint64_t vk::textures::Epoch() { return 0; }
 void vk::textures::BeginUploads(uint32_t) {}
 #else
 
@@ -207,6 +208,7 @@ namespace
         std::vector<uint64_t> emptyThisSegment, rewrittenThisSegment;
         std::vector<uint64_t> lateRestages;   // see TakeLateRestages
         uint64_t segment = 0;                 // EndSegment calls so far
+        uint64_t epoch = 0;                   // vk::textures::Epoch
         uint64_t segmentsEnded = 0, segmentsWithUploads = 0;
         bool endingSubmission = false;   // inside EndSubmission
         uint64_t rereadRewritten = 0, changedAfterFirstBind = 0;
@@ -1205,6 +1207,7 @@ void vk::textures::MemoryWritten(uint32_t physicalAddress, uint32_t size)
     auto overlaps = [&](uint32_t address, size_t bytes) {
         return bytes && address < physicalAddress + size && address + bytes > physicalAddress;
     };
+    g.epoch++;
     for (Image& image : g.images)
     {
         if (!image.image || image.borrowed) continue;
@@ -1274,6 +1277,7 @@ namespace
     void Release(uint64_t id)
     {
         Image& image = g.images[size_t(id - 1)];
+        g.epoch++;
         for (const auto& name : image.names)
             if (auto entry = g.byFetch.find(name);
                 entry != g.byFetch.end() && (entry->second & kImageBits) == id)
@@ -1380,6 +1384,7 @@ void vk::textures::NewFrame()
     }
     g.lateReads.resize(kept);
     g.frame++;
+    g.epoch++;
     if (!g.device) return;
     // Every half minute, what the cache holds and how much of it is in use.
     if constexpr (diag::kOn)
@@ -1628,6 +1633,8 @@ namespace
     }
 }
 
+uint64_t vk::textures::Epoch() { return g.epoch; }
+
 uint32_t vk::textures::Version(uint64_t id)
 {
     const Image* image = Find(id);
@@ -1663,6 +1670,7 @@ void* vk::textures::EndSegment()
         RefreshEmpty();
     }
     g.segment++;
+    g.epoch++;
     g.segmentsEnded++;
     UploadSlot* slot = g.open;
     if (last) g.open = nullptr;

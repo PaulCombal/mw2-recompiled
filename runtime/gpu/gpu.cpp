@@ -105,6 +105,10 @@ namespace
         t_guestPcr = g.gpuPcr;
         LOGI("gpu: ring consumer started");
         g.consumerStarted = std::chrono::steady_clock::now();
+        // Laps in a row with nothing to read. The title hands the ring over
+        // in small pieces, so the consumer runs dry hundreds of times a frame;
+        // only a lull of a millisecond or so is worth waking the recorder for.
+        uint32_t idleLaps = 0;
 
         while (g.running.load(std::memory_order_relaxed))
         {
@@ -145,8 +149,10 @@ namespace
                 }
                 g.ring.readIndex = wptr;
                 if (g.rptrWriteBack) *GuestPtr<be32>(g.rptrWriteBack) = g.ring.readIndex;
+                idleLaps = 0;
                 continue;
             }
+            if (++idleLaps == 10) vk::renderer::Idle();
             std::this_thread::sleep_for(std::chrono::microseconds(100));
         }
         g.consumerStopped = std::chrono::steady_clock::now();

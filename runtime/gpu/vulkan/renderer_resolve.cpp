@@ -146,6 +146,7 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
 {
     Stopwatch watch(g.resolveNanoseconds);
     if (!g.device) return;
+    g.resolveEpoch++;
     const gpu::CopyControl control{ r[gpu::RB_COPY_CONTROL] };
     VkRect2D rect{};
     ScissorOf(r, rect);

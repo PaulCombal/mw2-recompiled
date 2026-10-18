@@ -234,6 +234,14 @@ processor parses it. Two rules follow:
    once the command processor reports the draws before it done. Every read owed
    to a draw must happen before that report.
 
+A draw binding a slot to the same six fetch dwords as the last draw that bound
+it keeps that draw's image, without a lookup, until `vk::textures::Epoch`
+moves: at a new frame or segment, when an image is let go, and at
+`MemoryWritten`. Until then a lookup would answer the same and find nothing
+more to check (the watch is consulted once a frame, and rewritten textures
+once a segment). A resolve also ends it, since it can change which copy an
+address names.
+
 A submission is therefore cut into **segments** at every point where the
 command processor tells the title that work has finished
 (`vk::renderer::BeforeCompletion`, called from `command_processor.cpp`):

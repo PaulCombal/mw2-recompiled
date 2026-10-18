@@ -513,6 +513,7 @@ namespace
         while (Running())
         {
             DeliverOcclusionQueries();
+            vk::renderer::Idle();
             std::this_thread::sleep_for(std::chrono::microseconds(50));
             if (matches(current())) { matched = true; break; }
             if (waited() > std::chrono::milliseconds(500)) break;

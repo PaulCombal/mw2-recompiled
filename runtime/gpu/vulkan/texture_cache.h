@@ -45,6 +45,13 @@ namespace vk::textures
     // the same frame.
     void MemoryWritten(uint32_t physicalAddress, uint32_t size);
 
+    // Moves on whenever binding the same fetch constant again could come out
+    // differently or have to look at the texture again: a new frame or
+    // segment, an image let go, MemoryWritten. Until it moves, Upload of the
+    // same six dwords answers the same and has nothing more to do, which is
+    // what lets a draw keep the previous draw's binding (renderer_draw.cpp).
+    uint64_t Epoch();
+
     constexpr uint32_t kSlots = vk::bindings::kTextureSlots;
     constexpr uint64_t kNone = 0;     // "nothing uploaded", never a valid id
 
