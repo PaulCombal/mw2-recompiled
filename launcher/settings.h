@@ -8,6 +8,10 @@ namespace settings
 {
     void Load();
 
+    // MW2_FULLSCREEN: the game starts fullscreen (1) or in a window.
+    bool Fullscreen();
+    void SetFullscreen(bool on);
+
     // MW2_SCALE: how many times the console's 1280x720 the game draws at.
     constexpr int kMaxScale = 3;
     int Scale();
@@ -26,6 +30,12 @@ namespace settings
     constexpr int kConsoleFov = 65, kWidestFov = 120, kFovStep = 5;
     int Fov();
     void SetFov(int fov);
+
+    // Antialiasing: the samples a pixel of the game's multisampled surfaces
+    // has. 2 is the console's own and writes nothing; 4 and 8 are
+    // MW2_MSAA=<n>; 0 is MW2_NO_MSAA=1.
+    int Msaa();
+    void SetMsaa(int samples);
 
     // MW2_LAUNCHER_SOUNDS: 0 keeps the launcher's menus silent. Written by hand.
     bool Sounds();

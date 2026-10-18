@@ -37,6 +37,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -194,7 +195,7 @@ namespace
         Profile, Back, NextPlayer, Rename, PlayAs, MaxRank, Prestige, UnlockEverything, UnlockMissions, AllStars,
         CheckUpdate, InstallUpdate,
         // The graphics screen, and the next of what each of its entries sets.
-        Graphics, Resolution, FpsLimit, Fov,
+        Graphics, Fullscreen, Resolution, Antialiasing, FpsLimit, Fov,
         // The bug report screen: a run of either game with its log kept.
         Report, ReportCampaign, ReportMultiplayer,
         // The question a start asks when a recorded run was never reported.
@@ -397,9 +398,21 @@ namespace
             case Action::NextPlayer:
                 player = (player + 1) % players.size();
                 break;
+            case Action::Fullscreen:
+                settings::SetFullscreen(!settings::Fullscreen());
+                break;
             case Action::Resolution:
                 settings::SetScale(settings::Scale() % settings::kMaxScale + 1);
                 break;
+            case Action::Antialiasing:
+            {
+                // The choice after the one kept; one written by hand that is
+                // none of them goes back to the first.
+                static constexpr int kChoices[] = { 2, 4, 8, 0 };
+                const int* kept = std::find(std::begin(kChoices), std::end(kChoices), settings::Msaa());
+                settings::SetMsaa(kept == std::end(kChoices) || kept + 1 == std::end(kChoices) ? kChoices[0] : kept[1]);
+                break;
+            }
             case Action::FpsLimit:
             {
                 // The choice after the one kept; one written by hand that is
@@ -649,6 +662,11 @@ namespace
                 entries.push_back(std::move(entry));
                 return &entries.back();
             };
+            const bool fullscreen = settings::Fullscreen();
+            add(Action::Fullscreen, std::string("FULLSCREEN ") + (fullscreen ? "ON" : "OFF"), "FULLSCREEN",
+                std::string("Whether the game starts fullscreen: now ") + (fullscreen ? "it does, at the screen's own resolution." : "it starts in a window.") +
+                "\n\nChoose to switch it. While playing, F8 switches between the two."
+                "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
             static const char* const kSizes[] = { "720P", "1440P", "4K" };
             const int scale = settings::Scale();
             add(Action::Resolution, std::string("RESOLUTION ") + kSizes[scale - 1], "RESOLUTION",
@@ -656,6 +674,13 @@ namespace
                 std::to_string(720 * scale) + (scale == 1 ? ", the console's own." : ".") +
                 "\n\nChoose to go to the next: 720p, 1440p, 4K. A larger one is sharper and needs a faster graphics card: "
                 "1440p draws four times the pixels and 4K nine times."
+                "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
+            const int msaa = settings::Msaa();
+            add(Action::Antialiasing, "ANTIALIASING " + (msaa ? std::to_string(msaa) + "X" : std::string("OFF")), "ANTIALIASING",
+                std::string("How smooth the edges of what the game draws are: now ") +
+                (msaa == 2 ? "2x, the console's own." : msaa ? std::to_string(msaa) + "x, where the console's is 2x." : "off, with jagged edges.") +
+                "\n\nChoose to go to the next: 2x, 4x, 8x, off. More is smoother and needs a faster graphics card; a graphics card "
+                "that can't draw as many uses the most it can. Off is the fastest."
                 "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
             const int limit = settings::FpsLimit();
             add(Action::FpsLimit, "FPS LIMIT " + (limit ? std::to_string(limit) : std::string("NONE")), "FPS LIMIT",
@@ -835,7 +860,7 @@ namespace
             if (!reinstall) install()->shown.ruleAbove = true;
 
             // What the game is played with.
-            add(Action::Graphics, "GRAPHICS", true, "GRAPHICS", "The size the game draws at, how many frames a second and how wide its view is.")->shown.ruleAbove = true;
+            add(Action::Graphics, "GRAPHICS", true, "GRAPHICS", "Fullscreen or a window, the size the game draws at, its antialiasing, how many frames a second and how wide its view is.")->shown.ruleAbove = true;
             add(Action::Profile, "PROFILES", true, "PROFILES",
                 "Set the multiplayer rank and prestige, unlock everything, and open the campaign's and Special Ops' missions.");
             add(Action::None, "MAPS", false, "MAPS", "Add and remove custom maps.\n\nNot available yet.")->shown.tag = "SOON";

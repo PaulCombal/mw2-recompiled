@@ -54,11 +54,12 @@ disc folder works too). If the update can't be downloaded, the launcher says
 where to get it and takes the file (`--update <file>`).
 
 The launcher also has PROFILES (set the multiplayer rank and prestige, unlock
-everything, open the campaign's and Special Ops' missions), GRAPHICS (the
-RESOLUTION the game draws at: 720p as on the console, 1440p or 4K, which need
-a faster graphics card; the FPS LIMIT: 60 as on the console, or more; the FOV:
-65 as on the console, up to 120) and CHECK FOR UPDATES, which installs a newer release
-over this one.
+everything, open the campaign's and Special Ops' missions), GRAPHICS
+(FULLSCREEN, so the game starts fullscreen; the RESOLUTION the game draws at:
+720p as on the console, 1440p or 4K, which need a faster graphics card;
+ANTIALIASING: 2x as on the console, 4x, 8x or off; the FPS LIMIT: 60 as on
+the console, or more; the FOV: 65 as on the console, up to 120) and CHECK FOR
+UPDATES, which installs a newer release over this one.
 
 Something wrong? REPORT A BUG runs the game once with its log kept, then
 writes a report file and opens a new issue with your system's description
@@ -96,8 +97,8 @@ together): choose a profile, which keeps its own rank and settings, or make a
 new one. Two copies of `mw2-mp` on one PC can play a SYSTEM LINK match, each with
 the controller that chose SYSTEM LINK in it.
 
-**Settings**: `MW2_FULLSCREEN=1`, `MW2_SCALE=<2 or 3>` (what RESOLUTION
-sets), `MW2_FPS_LIMIT=<n>` (what FPS LIMIT sets; 0 is no limit), `MW2_FOV=<65 to 120>` (what FOV sets), `MW2_MSAA=<n>` or `MW2_NO_MSAA=1`, `MW2_NO_AUDIO=1`. Set them as
+**Settings**: `MW2_FULLSCREEN=1` (what FULLSCREEN sets), `MW2_SCALE=<2 or 3>` (what RESOLUTION
+sets), `MW2_FPS_LIMIT=<n>` (what FPS LIMIT sets; 0 is no limit), `MW2_FOV=<65 to 120>` (what FOV sets), `MW2_MSAA=<n>` or `MW2_NO_MSAA=1` (what ANTIALIASING sets), `MW2_NO_AUDIO=1`. Set them as
 environment variables, or keep them in a file named `.env` beside the
 executables, one per line.
 

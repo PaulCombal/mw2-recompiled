@@ -9,8 +9,9 @@ A file named `.env` beside the executables (in the current directory for a
 development run) holds switches as `NAME=value`, one a line. The runtime reads
 it first thing (`runtime/settings.cpp`) and sets each `MW2_` switch the
 environment does not already have, so a variable given on the command line
-decides. The launcher writes its own settings there (RESOLUTION is
-`MW2_SCALE`, FPS LIMIT is `MW2_FPS_LIMIT`, FOV is `MW2_FOV`) and keeps the other lines. When the
+decides. The launcher writes its own settings there (FULLSCREEN is
+`MW2_FULLSCREEN`, RESOLUTION is `MW2_SCALE`, ANTIALIASING is `MW2_MSAA` or
+`MW2_NO_MSAA`, FPS LIMIT is `MW2_FPS_LIMIT`, FOV is `MW2_FOV`) and keeps the other lines. When the
 file has no `MW2_FPS_LIMIT`, the launcher writes the screen's refresh rate as
 it opens (60 for a 60 Hz screen, which is the console's pacing). `MW2_LAUNCHER_SOUNDS=0`, written there
 by hand, keeps the launcher's own menus silent.

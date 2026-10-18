@@ -15,11 +15,6 @@ on:
       version:
         description: "Release tag, e.g. v0.1.0"
         required: true
-      game_version:
-        description: "The game's version: tu6 (title update 6) or tu0 (the disc's)"
-        type: choice
-        options: [tu6, tu0]
-        default: tu6
 
 permissions:
   contents: write
@@ -87,7 +82,7 @@ jobs:
           for title in sp mp; do
             regenerate=1
             for online in steam lan; do
-              VERSION=${{ inputs.game_version }} TITLE=$title RELEASE=1 RELEASE_TAG=${{ inputs.version }} ONLINE=$online BUILD_DIR=out/$title-$online REGENERATE=$regenerate ./build.sh
+              TITLE=$title RELEASE=1 RELEASE_TAG=${{ inputs.version }} ONLINE=$online BUILD_DIR=out/$title-$online REGENERATE=$regenerate ./build.sh
               regenerate=0
             done
           done
@@ -166,7 +161,7 @@ jobs:
           for title in sp mp; do
             regenerate=1
             for online in steam lan; do
-              WINDOWS=1 VERSION=${{ inputs.game_version }} TITLE=$title RELEASE=1 RELEASE_TAG=${{ inputs.version }} ONLINE=$online BUILD_DIR=out/$title-$online REGENERATE=$regenerate ./build.sh
+              WINDOWS=1 TITLE=$title RELEASE=1 RELEASE_TAG=${{ inputs.version }} ONLINE=$online BUILD_DIR=out/$title-$online REGENERATE=$regenerate ./build.sh
               regenerate=0
             done
           done

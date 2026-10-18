@@ -32,6 +32,18 @@ void settings::Load()
     }
 }
 
+bool settings::Fullscreen()
+{
+    const auto kept = g_kept.find("MW2_FULLSCREEN");
+    return kept != g_kept.end() && !kept->second.empty() && kept->second != "0";
+}
+
+void settings::SetFullscreen(bool on)
+{
+    g_kept["MW2_FULLSCREEN"] = on ? "1" : "0";
+    Save();
+}
+
 int settings::Scale()
 {
     const auto kept = g_kept.find("MW2_SCALE");
@@ -67,6 +79,24 @@ int settings::Fov()
 void settings::SetFov(int fov)
 {
     g_kept["MW2_FOV"] = std::to_string(std::clamp(fov, kConsoleFov, kWidestFov));
+    Save();
+}
+
+int settings::Msaa()
+{
+    const auto off = g_kept.find("MW2_NO_MSAA");
+    if (off != g_kept.end() && !off->second.empty() && off->second != "0") return 0;
+    const auto kept = g_kept.find("MW2_MSAA");
+    const int samples = kept == g_kept.end() ? 0 : std::atoi(kept->second.c_str());
+    return samples > 1 ? samples : 2;
+}
+
+void settings::SetMsaa(int samples)
+{
+    g_kept.erase("MW2_NO_MSAA");
+    g_kept.erase("MW2_MSAA");
+    if (samples == 0) g_kept["MW2_NO_MSAA"] = "1";
+    else if (samples > 2) g_kept["MW2_MSAA"] = std::to_string(samples);
     Save();
 }
 

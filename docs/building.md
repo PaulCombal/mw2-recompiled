@@ -278,7 +278,7 @@ It needs Windows 10 1803 or later, for the placeholder mapping of guest memory.
 ## Release workflow
 
 `.github/workflows/release.yml` runs by hand from the Actions tab with a version
-tag and the game's version (`tu6` or `tu0`). It builds both titles with both `steam` and `lan` for Linux (Ubuntu 22.04,
+tag. It builds both titles of title update 6 with both `steam` and `lan` for Linux (Ubuntu 22.04,
 so the binaries need glibc 2.35 at most, with Vulkan-Headers 1.3.275 installed
 over the system's) and for Windows (cross-compiled on Ubuntu with llvm-mingw),
 with ccache, then packages `mw2-sp` and `mw2-mp` with the README per platform
