@@ -25,12 +25,15 @@
 // A device without pipeline libraries gets whole pipelines, compiled at the
 // first draw as before (renderer_pipelines.cpp).
 #include "renderer_state.h"
+#include "shader_build.h"
 #include "../../crash.h"
 #include "../../log.h"
 #include "../../pacing_trace.h"
 
 #include "../../platform.h"
+#include "../../report.h"
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -44,62 +47,8 @@ namespace
 {
     using namespace vk::renderer::detail;
 
-    constexpr VkPipelineCreateFlags kLibrary =
-        VK_PIPELINE_CREATE_LIBRARY_BIT_KHR |
-        VK_PIPELINE_CREATE_RETAIN_LINK_TIME_OPTIMIZATION_INFO_BIT_EXT;
-
     VkPipelineCache Cache() { return static_cast<VkPipelineCache>(vk::pipeline::Cache()); }
     VkPipelineLayout Layout() { return static_cast<VkPipelineLayout>(vk::pipeline::Layout()); }
-
-    // A library of one part of a pipeline. `stage` is null for the parts that
-    // hold only state.
-    VkPipeline MakeLibrary(VkGraphicsPipelineLibraryFlagsEXT part,
-                           const VkPipelineShaderStageCreateInfo* stage,
-                           VkGraphicsPipelineCreateInfo info, void* next = nullptr)
-    {
-        VkGraphicsPipelineLibraryCreateInfoEXT library{
-            VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_LIBRARY_CREATE_INFO_EXT };
-        library.pNext = next;
-        library.flags = part;
-        info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        info.pNext = &library;
-        info.flags = kLibrary;
-        info.stageCount = stage ? 1 : 0;
-        info.pStages = stage;
-        info.layout = Layout();
-        VkPipeline made = VK_NULL_HANDLE;
-        if (vkCreateGraphicsPipelines(g.device, Cache(), 1, &info, nullptr, &made) != VK_SUCCESS)
-            return VK_NULL_HANDLE;
-        return made;
-    }
-
-    VkPipeline ShaderLibrary(shader::Type type, VkShaderModule module)
-    {
-        // Without a render pass, the shader stages learn from their own
-        // rendering info whether there is a depth and stencil attachment:
-        // one format for every target here, so the libraries still fit all.
-        PipelineKey formats;
-        formats.depthFormat = uint32_t(g.depthFormat);
-        PipelineState state(formats);
-        state.rendering.colorAttachmentCount = 0;
-        VkPipelineShaderStageCreateInfo stage{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
-        stage.module = module;
-        stage.pName = "main";
-        VkGraphicsPipelineCreateInfo info{};
-        info.pDynamicState = &state.dynamic;
-        if (type == shader::Type::Vertex)
-        {
-            stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
-            info.pViewportState = &state.viewport;
-            info.pRasterizationState = &state.raster;
-            return MakeLibrary(VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT,
-                               &stage, info, &state.rendering);
-        }
-        stage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        info.pDepthStencilState = &state.depth;
-        return MakeLibrary(VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, &stage, info,
-                           &state.rendering);
-    }
 
     VkPipeline InputLibrary(uint32_t topology)
     {
@@ -113,8 +62,8 @@ namespace
         info.pInputAssemblyState = &state.assembly;
         info.pDynamicState = &state.dynamic;
         return g.inputLibraries[topology] =
-                   MakeLibrary(VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT,
-                               nullptr, info);
+                   vk::shaders::MakeLibrary(VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT,
+                                            nullptr, info);
     }
 
     VkPipeline OutputLibrary(const PipelineKey& key)
@@ -129,8 +78,8 @@ namespace
         info.pMultisampleState = &state.multisample;
         info.pDynamicState = &state.dynamic;
         return g.outputLibraries[output] =
-                   MakeLibrary(VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT,
-                               nullptr, info, &state.rendering);
+                   vk::shaders::MakeLibrary(VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT,
+                                            nullptr, info, &state.rendering);
     }
 
     VkPipeline Link(const VkPipeline (&libraries)[4], bool optimise)
@@ -172,6 +121,10 @@ namespace
     constexpr auto kRecheck = std::chrono::milliseconds(100);
 
     void Lower() { platform::LowerThreadPriority(); }
+
+    // The libraries built, by whether the driver found them in the cache:
+    // it does not say, it compiled the shader, it found it.
+    std::atomic<uint64_t> g_fromCache[3]{};
 
     // The shaders handed over at load. The consumer thread takes them out;
     // the workers put them in; PrepareShader queues them from the title's
@@ -278,20 +231,20 @@ namespace vk::renderer::detail
 {
     Shader BuildShader(shader::Type type, const uint32_t* code, size_t words)
     {
+        // The launcher built every shader the same way before the game first
+        // ran, into the pipeline cache this one starts with (shader_build.h).
+        vk::shaders::Built built = vk::shaders::Build(type, code, words, g.scale, g.depthFormat);
+        if (built.library)
+        {
+            g_fromCache[built.fromCache + 1].fetch_add(1, std::memory_order_relaxed);
+            report::ShaderBuilt(built.fromCache);
+        }
         Shader entry;
         entry.type = type;
         entry.code.assign(code, code + words);
-        entry.translation = shader::Translate(type, code, words, g.scale);
-        if (!entry.translation.ok) return entry;
-        VkShaderModuleCreateInfo info{ VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
-        info.codeSize = entry.translation.spirv.size() * 4;
-        info.pCode = entry.translation.spirv.data();
-        if (vkCreateShaderModule(g.device, &info, nullptr, &entry.module) != VK_SUCCESS)
-        {
-            entry.module = VK_NULL_HANDLE;
-            return entry;
-        }
-        if (vk::pipeline::PipelineLibraries()) entry.library = ShaderLibrary(type, entry.module);
+        entry.translation = std::move(built.translation);
+        entry.module = built.module;
+        entry.library = built.library;
         return entry;
     }
 
@@ -447,6 +400,9 @@ namespace vk::renderer::detail
              (unsigned long long)p.waited, (unsigned long long)(p.waitMicroseconds / 1000),
              (unsigned long long)p.stolen,
              (unsigned long long)(g.shadersBuiltAtDraw - p.stolen));
+        LOGI("renderer: %llu shader libraries out of the pipeline cache, %llu compiled by the driver, %llu it did"
+             " not say which", (unsigned long long)g_fromCache[2].load(), (unsigned long long)g_fromCache[1].load(),
+             (unsigned long long)g_fromCache[0].load());
         LOGI("renderer: %llu of the workers' shaders finished during play; their queue last"
              " ran dry at %.1f s", (unsigned long long)p.compiledInPlay, double(p.drainedAt) / 1e6);
         LOGI("renderer: %llu pipelines linked from libraries, %llu replaced by an optimised link",

@@ -1,0 +1,15 @@
+// =========================================
+// LoadedSound
+// =========================================
+use LoadedSound;
+set block XFILE_BLOCK_TEMP;
+set string name;
+
+// XaSoundInfo (Xbox 360)
+use XaSoundInfo;
+set block data XFILE_BLOCK_LARGE;
+set allocalign data 2048;
+set count data dataSize;
+
+// XaSeekTable
+set count XaSeekTable::data size;

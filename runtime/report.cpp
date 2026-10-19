@@ -38,6 +38,20 @@ namespace
     // one, so its part up to there is counted with the frame.
     std::chrono::steady_clock::time_point g_executingSince;
     bool g_executing = false;
+
+    std::atomic<uint64_t> g_shaders[3]{};   // by ShaderBuilt's fromCache, plus one
+    std::string g_compiled = "not used: a development run";
+}
+
+void report::ShaderBuilt(int fromCache)
+{
+    g_shaders[std::clamp(fromCache, -1, 1) + 1].fetch_add(1, std::memory_order_relaxed);
+}
+
+void report::ShadersCompiled(std::string state)
+{
+    std::lock_guard lock(s.lock);
+    g_compiled = std::move(state);
 }
 
 report::Timed::Timed(Time what) : time(what)
@@ -130,4 +144,14 @@ void report::Write()
          (unsigned long long)(s.costLongest[kShader] / 1000), (unsigned long long)s.costCount[kPipeline],
          (unsigned long long)(s.costMicroseconds[kPipeline] / 1000),
          (unsigned long long)(s.costLongest[kPipeline] / 1000));
+    // Every one should have come out of the launcher's cache.
+    const uint64_t unknown = g_shaders[0], compiled = g_shaders[1], cached = g_shaders[2];
+    LOGI("report: shaders compiled before play by the launcher: %s", g_compiled.c_str());
+    if (unknown)
+        LOGI("report: %llu shaders built in this run, %llu of them not in the launcher's (the driver says so for %llu)",
+             (unsigned long long)(unknown + compiled + cached), (unsigned long long)compiled,
+             (unsigned long long)(compiled + cached));
+    else
+        LOGI("report: %llu shaders built in this run, %llu of them not in the launcher's",
+             (unsigned long long)(compiled + cached), (unsigned long long)compiled);
 }

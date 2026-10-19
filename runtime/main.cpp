@@ -8,6 +8,10 @@
 #include "env.h"
 #include "kernel/kernel.h"
 #include "gpu/gpu.h"
+#include "gpu/vulkan/pipeline.h"
+#include "gpu/vulkan/presenter.h"
+#include "gpu/vulkan/renderer.h"
+#include "gpu/vulkan/shader_build.h"
 #include "apu/audio.h"
 #include "apu/xma.h"
 #include "crash.h"
@@ -186,10 +190,16 @@ int main(int argc, char** argv)
     // A player starts the executable with no arguments (runtime/install/); a
     // development run names the image, a flat PE or the XEX, and the game folder.
     install::Launch launch;
-    if (install::PlayerStart(argc, argv))
+    const bool playerStart = install::PlayerStart(argc, argv);
+    if (playerStart)
     {
         int exitCode = 0;
         if (!install::Prepare(argc, argv, launch, exitCode)) return exitCode;
+        // The launcher compiles every shader of the game into this cache
+        // before the game first runs (launcher/precompile.cpp), and the game
+        // draws only with that done for the device it draws on.
+        vk::pipeline::SetCachePath(vk::shaders::kCacheFile);
+        vk::renderer::CheckCompiledShaders(launch.gameRoot.string());
     }
     else
     {
@@ -214,6 +224,17 @@ int main(int argc, char** argv)
     player::Record();
     kernel::Initialise(launch.gameRoot);
     gpu::Initialise();
+    // The device is known now, and nothing of the title has run: the launcher
+    // compiles the shaders for it and starts the game again. Ended at once,
+    // without writing this run's pipeline cache over the one the launcher is
+    // about to make.
+    if (std::string why, device; playerStart && !vk::renderer::CompiledShaders(why, device) &&
+                                  install::CompileShaders(device, why))
+    {
+        std::fflush(nullptr);
+        _exit(0);
+    }
+    vk::ShowWindow();
     apu::xma::Initialise();
 
     // PPC grows down; leave a zeroed backchain at the top.

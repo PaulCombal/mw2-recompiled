@@ -105,10 +105,11 @@ walking to it.
 | `MW2_NO_MSAA=1` | R | draws the title's 2x and 4x surfaces at one sample |
 | `MW2_ARENA_MB=<n>` | R | the upload arena for constants, vertices and indices, shared by the frame slots (512) |
 | `MW2_TEXTURE_BUDGET_MB=<n>` | R | the texture cache's budget, past which it lets go of what has not been bound lately, even textures whose memory is unchanged (default half the device-local memory, within 256 MB to 2 GB) |
-| `MW2_PIPELINE_CACHE=<file>` | R | keeps the driver's compiled pipelines across runs |
+| `MW2_PIPELINE_CACHE=<file>` | R | keeps the driver's compiled pipelines across runs, in place of a player's `shaders/pipelines.bin` |
 | `MW2_SHADER_CACHE=<file>` | R | records every pipeline a run needed and builds them at the next start-up |
 | `MW2_NO_PIPELINE_LIBRARIES=1` | R | builds each pipeline whole at its first draw instead of linking it from shaders compiled at load ([rendering.md](rendering.md)) |
-| `MW2_TRACE_SHADER_LOADS=1` | | each shader compiled at load and each the command stream loads, with its hash |
+| `MW2_TRACE_SHADER_LOADS=1` | | each shader handed over at load (a pixel shader as it is made, a vertex shader once D3D binds it: "made" and "bound"), each distinct shader the command stream loads (an `IM_LOAD_IMMEDIATE` at address 0), and each the renderer builds at a draw ("shader drawn"), with its hash |
+| `MW2_SHADERS_COMPILED_FOR=<id>` | R | set by the launcher on a game it starts: the device the shaders were compiled for. A player's start that still finds them not fitting on that device says so and plays on, instead of starting the launcher again ([rendering.md](rendering.md#every-shader-compiled-before-play)) |
 | `MW2_TRACE_DRAWS=<n>` | | describes n draw packets in full; `MW2_TRACE_DRAWS_AFTER=<presents>` starts later |
 | `MW2_TRACE_FRAME=<n>` | | narrates n frames' render targets and resolves |
 | `MW2_TRACE_RENDER_AFTER=<frames>` | | where the traces below start, unless the walk arrives first |

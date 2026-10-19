@@ -67,19 +67,22 @@ namespace
     }
 
     // The launcher beside this executable, left running on its own.
-    bool StartLauncher()
+    bool StartLauncher(const std::vector<std::string>& arguments = {})
     {
 #ifdef MW2_USE_SDL
         std::error_code ec;
         const fs::path launcher = fs::absolute(kLauncher, ec);
         if (!fs::is_regular_file(launcher, ec)) return false;
         const std::string path = Utf8(launcher);
-        const char* const args[] = { path.c_str(), nullptr };
-        SDL_Process* process = spawn::Start(args);
+        std::vector<const char*> args{ path.c_str() };
+        for (const std::string& argument : arguments) args.push_back(argument.c_str());
+        args.push_back(nullptr);
+        SDL_Process* process = spawn::Start(args.data());
         if (!process) { LOGE("cannot start %s: %s", path.c_str(), SDL_GetError()); return false; }
         SDL_DestroyProcess(process);    // forgets it; the launcher keeps running
         return true;
 #else
+        (void)arguments;
         return false;
 #endif
     }
@@ -193,6 +196,30 @@ std::vector<uint8_t>& install::LaunchData()
         return bytes;
     }();
     return data;
+}
+
+bool install::CompileShaders(const std::string& device, const std::string& why)
+{
+    // The launcher names the device it compiled for in the game it starts
+    // after a pass (launcher/main.cpp).
+    const char* compiledFor = std::getenv("MW2_SHADERS_COMPILED_FOR");
+    if (compiledFor && device == compiledFor)
+    {
+        ShowError("The shaders the launcher has just compiled do not fit this game: " + why +
+                  "\n\nThe game starts anyway, and compiles shaders as it meets them, which stutters. "
+                  "Please report this (REPORT A BUG in the launcher).");
+        return false;
+    }
+    LOGI("shaders: %s The launcher compiles them for device %s, then starts the game.", why.c_str(), device.c_str());
+#ifdef MW2_TITLE_MP
+    const char* title = "multiplayer";
+#else
+    const char* title = "campaign";
+#endif
+    if (StartLauncher({ "--play", title, "--device", device })) return true;
+    ShowError(why + "\n\n" + kLauncher + " is not beside this program to compile them. The game starts anyway, "
+              "and compiles shaders as it meets them, which stutters.");
+    return false;
 }
 
 void install::SetNextTitle(const std::string& xex) { g_nextTitle = xex; }

@@ -1,0 +1,38 @@
+// =========================================
+// snd_alias_list_t
+// =========================================
+use snd_alias_list_t;
+set block XFILE_BLOCK_TEMP;
+set string aliasName;
+set reusable head;
+set count head count;
+
+// snd_alias_t
+use snd_alias_t;
+set string aliasName;
+set string subtitle;
+set string secondaryAliasName;
+set string chainAliasName;
+set string mixerGroup;
+set reusable soundFile;
+set block soundFile XFILE_BLOCK_TEMP;
+set count soundFile 1; // one entry per zone language; stock zones have one
+set reusable speakerMap;
+
+// SoundFile
+use SoundFile;
+set block XFILE_BLOCK_VIRTUAL;
+set condition u::loadSnd type == SAT_LOADED;
+
+// SpeakerMap
+set string SpeakerMap::name;
+
+// MSSChannelMap
+set count MSSChannelMap::speakers speakerCount;
+
+// StreamedSound
+use StreamedSound;
+set string dir;
+set string name;
+set condition dir fileIndex == 0;
+set condition name fileIndex == 0;

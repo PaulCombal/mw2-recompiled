@@ -1,6 +1,7 @@
 // Translated shaders, the pipelines built from them, and the shader cache that
 // rebuilds a previous run's pipelines before the title asks for them.
 #include "renderer_state.h"
+#include "shader_build.h"
 #include "../../diagnostics.h"
 #include "../../log.h"
 #include "../../report.h"
@@ -27,6 +28,9 @@ namespace vk::renderer::detail
             return &found->second;
         }
 
+        static const bool traced = diag::Flag("MW2_TRACE_SHADER_LOADS");
+        if (traced)
+            LOGI("shader drawn: %s %016llX", type == shader::Type::Pixel ? "pixel" : "vertex", (unsigned long long)hash);
         Shader entry;
         if (!TakePrepared(hash, entry))
         {
@@ -172,12 +176,7 @@ namespace vk::renderer::detail
         viewport.viewportCount = 1;
         viewport.scissorCount = 1;
 
-        raster.polygonMode = VK_POLYGON_MODE_FILL;
-        // Culling and winding are set per draw (FacesFor).
-        raster.lineWidth = 1.0f;
-        // Always on, and set per draw: a shadow map drawn without the title's
-        // bias shadows the very surfaces it was rendered from.
-        raster.depthBiasEnable = VK_TRUE;
+        raster = vk::shaders::Rasterisation();
 
         multisample.rasterizationSamples = VkSampleCountFlagBits(std::max(key.samples, 1u));
         // The tests themselves are set per draw (DepthTestsFor); `depth` stays empty.
@@ -200,15 +199,8 @@ namespace vk::renderer::detail
         blending.attachmentCount = 1;
         blending.pAttachments = &attachment;
 
-        static constexpr VkDynamicState kDynamic[] = {
-            VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_DEPTH_BIAS,
-            VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK, VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
-            VK_DYNAMIC_STATE_STENCIL_REFERENCE, VK_DYNAMIC_STATE_CULL_MODE_EXT,
-            VK_DYNAMIC_STATE_FRONT_FACE_EXT, VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE_EXT,
-            VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE_EXT, VK_DYNAMIC_STATE_DEPTH_COMPARE_OP_EXT,
-            VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE_EXT, VK_DYNAMIC_STATE_STENCIL_OP_EXT };
-        dynamic.dynamicStateCount = uint32_t(std::size(kDynamic));
-        dynamic.pDynamicStates = kDynamic;
+        dynamic.dynamicStateCount = vk::shaders::kDynamicStateCount;
+        dynamic.pDynamicStates = vk::shaders::kDynamicStates;
 
         // Dynamic rendering: the formats of the targets stand where a render
         // pass would.

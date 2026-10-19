@@ -1,0 +1,13 @@
+// =========================================
+// GfxImage (360)
+// =========================================
+use GfxImage;
+set block XFILE_BLOCK_TEMP;
+set string name;
+set count pixels cardMemory;
+set allocalign pixels 4096;
+// water images keep their pixels in runtime memory, everything else in physical memory
+set blockcond pixels semantic == TS_WATER_MAP XFILE_BLOCK_RUNTIME XFILE_BLOCK_PHYSICAL;
+reorder:
+    name
+    pixels;

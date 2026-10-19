@@ -224,7 +224,7 @@ namespace
     }
 }
 
-bool report::Start(const char* program, std::string& error)
+bool report::Start(const char* program, const std::string& shadersFor, std::string& error)
 {
     std::error_code ec;
     fs::create_directories(kFolder, ec);
@@ -235,6 +235,7 @@ bool report::Start(const char* program, std::string& error)
     SDL_Environment* environment = SDL_CreateEnvironment(true);
     SDL_SetEnvironmentVariable(environment, "MW2_REPORT", "1", true);
     SDL_SetEnvironmentVariable(environment, "MW2_LOG_FILE", log.c_str(), true);
+    if (!shadersFor.empty()) SDL_SetEnvironmentVariable(environment, "MW2_SHADERS_COMPILED_FOR", shadersFor.c_str(), true);
     SDL_Process* process = spawn::Start(args, environment);
     SDL_DestroyEnvironment(environment);
     if (!process) { error = std::string(program) + " could not be started: " + SDL_GetError(); return false; }

@@ -6,6 +6,8 @@
 
 #ifndef MW2_HAVE_VULKAN
 bool vk::renderer::Initialise() { return false; }
+void vk::renderer::CheckCompiledShaders(const std::string&) {}
+bool vk::renderer::CompiledShaders(std::string&, std::string&) { return true; }
 void vk::renderer::Shutdown() {}
 bool vk::renderer::Ready() { return false; }
 void vk::renderer::Draw(const gpu::RegisterFile&, const DrawCall&) {}
@@ -23,18 +25,43 @@ void vk::renderer::Idle() {}
 #else
 
 #include "renderer_state.h"
+#include "shader_build.h"
+#include "shader_marker.h"
 #include "display_table.h"
 #include "texture_cache.h"
 #include "../memory_watch.h"
 #include "../../guest_memory.h"
 #include "../../crash.h"
 #include "../../log.h"
+#include "../../report.h"
 
 #include <algorithm>
 
 namespace vk::renderer::detail
 {
     State g;
+}
+
+namespace
+{
+    struct Compiled
+    {
+        bool checked = false, current = true;
+        std::string gameFolder, why, device;
+    } g_compiled;
+}
+
+void vk::renderer::CheckCompiledShaders(const std::string& gameFolder)
+{
+    g_compiled.checked = true;
+    g_compiled.gameFolder = gameFolder;
+}
+
+bool vk::renderer::CompiledShaders(std::string& why, std::string& device)
+{
+    why = g_compiled.why;
+    device = g_compiled.device;
+    return g_compiled.current;
 }
 
 using namespace vk::renderer::detail;
@@ -59,16 +86,7 @@ bool vk::renderer::Initialise()
 
     // AMD has no D24_UNORM_S8_UINT, so the depth format is whichever 24-bit-ish
     // combined format the device actually has.
-    for (VkFormat candidate : { VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT })
-    {
-        VkFormatProperties format{};
-        vkGetPhysicalDeviceFormatProperties(g.physical, candidate, &format);
-        if (format.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
-        {
-            g.depthFormat = candidate;
-            break;
-        }
-    }
+    g.depthFormat = vk::shaders::DepthFormat(g.physical);
     if (g.depthFormat == VK_FORMAT_UNDEFINED) { LOGW("renderer: no depth format"); return false; }
 
     // The console's 2x and 4x surfaces are drawn with that many samples unless
@@ -113,8 +131,7 @@ bool vk::renderer::Initialise()
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(g.physical, &properties);
         const uint32_t asked = uint32_t(std::clamp<uint64_t>(env::Number("MW2_SCALE", 1), 1, 3));
-        g.scale = asked;
-        while (g.scale > 1 && 4096 * g.scale > properties.limits.maxImageDimension2D) g.scale--;
+        g.scale = vk::shaders::Scale(g.physical, asked);
         g.presentWidth *= g.scale;
         g.presentHeight *= g.scale;
         if (g.scale != asked)
@@ -123,6 +140,35 @@ bool vk::renderer::Initialise()
         if (g.scale > 1)
             LOGI("renderer: drawing at %ux the title's sizes, a %ux%u frame", g.scale,
                  g.presentWidth, g.presentHeight);
+    }
+
+    // The launcher compiled every shader for a device, a scale and the
+    // game's files; this run draws on the device and at the scale just
+    // settled.
+    if (g_compiled.checked)
+    {
+        g_compiled.device = vk::pipeline::DeviceId(g.physical);
+        const std::string fingerprint = vk::shaders::Fingerprint(g.physical, g.scale, g_compiled.gameFolder);
+        g_compiled.current = vk::shaders::Compiled(fingerprint, &g_compiled.why);
+        const vk::shaders::Marker marker = vk::shaders::ReadMarker();
+        if (g_compiled.current && marker.shaders && !vk::pipeline::CacheLoaded())
+        {
+            g_compiled.current = false;
+            g_compiled.why = "The graphics driver did not take the compiled shaders.";
+        }
+        if (g_compiled.current)
+        {
+            LOGI("renderer: every shader of the game is compiled for this device (%u)", marker.shaders);
+            report::ShadersCompiled(marker.shaders ? "yes, " + std::to_string(marker.shaders) + " for this device, driver and scale"
+                                                   : std::string("none: the device has no pipeline libraries, so each is compiled at its first draw"));
+        }
+        else
+        {
+            LOGW("renderer: the game's shaders are not compiled for this run: %s", g_compiled.why.c_str());
+            report::ShadersCompiled("no: " + g_compiled.why);
+            // What this run would write back is not what the marker describes.
+            vk::pipeline::SetCachePath(nullptr);
+        }
     }
 
     VkCommandPoolCreateInfo pool{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };

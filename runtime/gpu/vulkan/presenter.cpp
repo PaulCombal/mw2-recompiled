@@ -13,6 +13,7 @@
 // Without a loader or a window system there is nothing to present to; the rest
 // of the runtime carries on headless.
 bool     vk::Start()           { return false; }
+void     vk::ShowWindow()      {}
 void     vk::StopPresenting()  {}
 void     vk::Stop()            {}
 void     vk::ShowImage(void*, uint32_t, uint32_t, uint64_t) {}
@@ -101,6 +102,8 @@ namespace
         std::thread worker;
         std::atomic<bool> running{ false };
         std::atomic<bool> ready{ false };
+        std::atomic<bool> showAsked{ false };
+        bool shown = false;              // the window thread's own
         std::atomic<uint64_t> presented{ 0 };
 
         // The frames the renderer has finished and the window has not shown
@@ -892,8 +895,9 @@ namespace
         // borderless at the desktop's resolution, which SDL gives a window
         // asked for fullscreen without a mode of its own. F8 toggles it.
         g.fullscreen = env::Flag("MW2_FULLSCREEN");
+        // Hidden until ShowWindow.
         g.window = SDL_CreateWindow("Modern Warfare 2", kWidth, kHeight,
-                                    SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE |
+                                    SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN |
                                     (g.fullscreen ? SDL_WINDOW_FULLSCREEN : 0));
         if (!g.window) { LOGW("vulkan: no window (%s)", SDL_GetError()); return false; }
         if (!CreateInstance()) return false;
@@ -927,6 +931,14 @@ namespace
 
         while (g.running.load(std::memory_order_relaxed))
         {
+            // In front, with the keyboard's focus: a window shown a moment
+            // after its program started may otherwise open behind another.
+            if (!g.shown && g.showAsked.load(std::memory_order_acquire))
+            {
+                SDL_ShowWindow(g.window);
+                SDL_RaiseWindow(g.window);
+                g.shown = true;
+            }
             SDL_Event event;
             while (SDL_PollEvent(&event))
                 // Not `g.running = false`: that stops the pump, and with nothing
@@ -1012,6 +1024,9 @@ namespace
                 queued = !g.frameQueue.empty();
             }
             if (!g.running) break;
+            // Nothing is presented to a hidden window, where a present can
+            // wait for a frame the compositor never asks for.
+            if (!g.shown) continue;
             if (queued) DrawOneFrame(false);
             else if (!g.presented.load(std::memory_order_relaxed)) DrawOneFrame(true);
         }
@@ -1031,6 +1046,12 @@ bool vk::Start()
     g.worker = std::thread(Worker);
     while (!g.ready.load(std::memory_order_acquire)) std::this_thread::yield();
     return g.running.load();
+}
+
+void vk::ShowWindow()
+{
+    g.showAsked.store(true, std::memory_order_release);
+    g.wake.notify_one();
 }
 
 void vk::ShowImage(void* image, uint32_t width, uint32_t height, uint64_t serial)

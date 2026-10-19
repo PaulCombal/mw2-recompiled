@@ -374,11 +374,17 @@ On the console a shader is ready as soon as it is loaded. With
 `VK_EXT_graphics_pipeline_library` the runtime compiles it at that point too
 (`renderer_libraries.cpp`, `runtime/shader_preload.cpp`):
 
-- `T_D3D_InitPixelShader` / `T_D3D_InitVertexShader` are hooked. The shader
-  object's header (magic `0x102A11xx`) is at +40 (pixel) or +872 (vertex). Its
-  seventh word locates `{offset in program, byte length}`, which gives exactly
-  the bytes the stream later `IM_LOAD`s. Workers compile each shader as a
-  pre-rasterisation or fragment-shader library.
+- `T_D3D_InitPixelShader` and `T_D3D_PatchVertexFetches` are hooked. The
+  shader object's header (magic `0x102A11xx`) is at +40 (pixel) or +872
+  (vertex). Its seventh word locates `{offset in program, byte length}`, which
+  gives exactly the bytes the stream later `IM_LOAD`s. Workers compile each
+  shader as a pre-rasterisation or fragment-shader library, built by
+  `shader_build.cpp`, which the launcher's compile pass shares.
+- A vertex shader is handed over once D3D has bound it, not when it is made.
+  Its fetches name no format until the title binds it to a vertex declaration
+  (`IDirect3DVertexShader9::Bind`), and D3D rewrites them in place: fetch
+  constant, format, offset and stride, with neighbours on one stream merged
+  into mini-fetches. The shader as made is never drawn.
 - **A fragment library must carry the depth format in its own rendering info.**
   Without it, the library legally ignores depth and stencil state, and every
   draw comes out empty.
@@ -388,17 +394,73 @@ On the console a shader is ready as soon as it is loaded. With
 - Workers pause during play, defined as 30 consecutive world frames, the last
   under 500 ms ago. A world frame has at least 8 colour draws into a
   multisampled target, or 200 into any target. Shaders not seen at load are
-  compiled at their first draw. D3D patches vertex fetches per vertex
-  declaration, so some vertex shaders exist only once bound.
+  compiled at their first draw.
 
 Without pipeline libraries, or under `MW2_NO_PIPELINE_LIBRARIES=1`, whole
 pipelines are built at their first draw.
+
+### Every shader compiled before play
+
+The workers compile a level's shaders as it loads, but a driver with a cold
+cache still takes tens of milliseconds a shader, and a level has thousands. So
+a player's copy is played only with every shader of the game already in the
+pipeline cache it starts with, `shaders/pipelines.bin`. The launcher fills it
+(`launcher/precompile.cpp`, `mw2-launcher --compile-shaders` from a terminal):
+
+- **The list.** `launcher/zone/` walks every fastfile in `game/` the way the
+  game's loader streams it, using the OpenAssetTools zone definitions in
+  `launcher/zone/defs/`. Every pixel shader is listed as it is loaded. Every
+  vertex shader is listed as the title binds it: the pass's declaration, the
+  title's declaration tables (`sub_823EA570`) and D3D's patch routine are
+  reproduced from the same data (`vertex_binding.cpp`). The title binds only
+  a shader loaded fresh into one of a pass's 15 `vertexShaderArray` slots
+  (`sub_821BBE70` → `sub_823C2E28` → `Bind`). A slot whose source has no
+  stream in its declaration type is not bound, and neither is the pass's own
+  `vertexShader`, which `sub_821BBC08` loads alone. Those stay as made and are
+  never drawn. The executables add D3D's own shaders, the ones sent with
+  `IM_LOAD_IMMEDIATE` and the image pool's memory move, bound to the
+  declaration the title made for it. The list is 15,044 shaders.
+- **The build.** Each one is translated and compiled on every core as the
+  game would (`vk::shaders::Build`): same translator, layout, depth format and
+  scale, on the device the game's window would draw on. The pass reuses the
+  last cache when only the game's files changed.
+- **The marker.** `shaders/compiled.txt` is written last, after the cache is in
+  place. Both files are written beside their place and renamed over it. The
+  marker records what the cache was made for:
+  - the build of the shader code: `MW2_SHADER_BUILD`, a SHA-256 CMake takes of
+    the translator's, the layout's and the reader's sources;
+  - the device (`deviceUUID`), its driver version and `pipelineCacheUUID`;
+  - the resolution scale;
+  - each fastfile's and executable's name, size and time.
+
+  A change to any of these means the cache no longer holds what the game will
+  build.
+- **The gates.** The launcher checks the marker before PLAY and REPORT A BUG,
+  and runs the pass again first when it no longer fits; it also runs the pass
+  after an install. The game checks the marker on a player start, once the
+  renderer has settled its device and scale and before the title runs. If it
+  does not fit, the game starts `mw2-launcher --play <title> --device <id>` and
+  ends, without writing its own cache over the launcher's. Its window is made
+  hidden and shown only after this check (`vk::ShowWindow`), so a start that
+  hands over shows nothing. The launcher then
+  compiles for that device and starts the game, naming the device in
+  `MW2_SHADERS_COMPILED_FOR`. A game that still finds no fit after that says so
+  and plays on. Development runs are not gated.
+- **The check.** `VK_EXT_pipeline_creation_feedback` says, for each library,
+  whether it came out of the cache. The run's log and its bug report count the
+  ones that did not ("N of them not in the launcher's"). That count should be
+  0.
+
+A device without pipeline libraries compiles a shader only together with a
+draw's state, so the pass compiles nothing there. It leaves a marker that
+says so, and the game builds pipelines at their first draw as before.
 
 `MW2_SHADER_CACHE=<file>` records every pipeline a run builds: microcode,
 formats and state (`SMW2`, version 3). The next run rebuilds them at start-up.
 It has to be recorded, because the state a shader pair is drawn with exists
 only in a previous run. The file is written back as a union, so it never
-shrinks. `MW2_PIPELINE_CACHE=<file>` persists the driver's `VkPipelineCache`.
+shrinks. `MW2_PIPELINE_CACHE=<file>` persists the driver's `VkPipelineCache`
+in place of `shaders/pipelines.bin`.
 
 ## Not implemented
 

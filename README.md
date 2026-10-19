@@ -50,6 +50,11 @@ Activision's servers). Special Ops is untested.
 3. PLAY CAMPAIGN and PLAY MULTIPLAYER start the game; so do `mw2-sp` and
    `mw2-mp` directly.
 
+The launcher compiles all of the game's shaders for your graphics card before
+you first play, so that the game doesn't stutter on one. That takes about a
+minute, and happens again after an update of the game or your graphics driver,
+or a change of RESOLUTION.
+
 From a terminal: `./mw2-launcher --install path/to/game.iso` (an extracted
 disc folder works too). If the update can't be downloaded, the launcher says
 where to get it and takes the file (`--update <file>`).

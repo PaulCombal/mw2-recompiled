@@ -30,6 +30,13 @@ bool vk::pipeline::CreateModule(const uint32_t*, size_t, const char** error)
     return false;
 }
 bool vk::pipeline::DeviceHasExtension(void*, const char*) { return false; }
+uint32_t vk::pipeline::GraphicsFamily(void*) { return UINT32_MAX; }
+void vk::pipeline::SetCachePath(const char*) {}
+bool vk::pipeline::CacheLoaded() { return false; }
+void vk::pipeline::SetDevice(const std::string&) {}
+std::string vk::pipeline::DeviceId(void*) { return {}; }
+void* vk::pipeline::ChooseDevice(void*, const std::string&, uint32_t*) { return nullptr; }
+bool vk::pipeline::CreationFeedback() { return false; }
 bool vk::pipeline::CreateDevice(void*, uint32_t, const char* const*, uint32_t, void**, void**, void*)
 {
     return false;
@@ -42,7 +49,9 @@ void vk::pipeline::OnDeviceLost(void (*)(const char*)) {}
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -66,6 +75,8 @@ namespace
         float maxAnisotropy = 1.0f;
         bool nonSeamlessCubes = false;
         bool pipelineLibraries = false, fastLinking = false;
+        bool creationFeedback = false;
+        bool cacheLoaded = false;
         std::string name = "none";
 
         VkDescriptorSetLayout sets[3]{};
@@ -113,6 +124,18 @@ bool vk::pipeline::Failed(int vkResult, const char* where)
         }
     }
     return true;
+}
+
+uint32_t vk::pipeline::GraphicsFamily(void* physical)
+{
+    VkPhysicalDevice device = static_cast<VkPhysicalDevice>(physical);
+    uint32_t families = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &families, nullptr);
+    std::vector<VkQueueFamilyProperties> props(families);
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &families, props.data());
+    for (uint32_t i = 0; i < families; i++)
+        if (props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) return i;
+    return UINT32_MAX;
 }
 
 bool vk::pipeline::DeviceHasExtension(void* physical, const char* name)
@@ -171,6 +194,11 @@ bool vk::pipeline::CreateDevice(void* physicalDevice, uint32_t family,
     std::vector<const char*> extensions(extraExtensions, extraExtensions + extraCount);
     if (DeviceHasExtension(physical, VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME))
         extensions.push_back(VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME);
+    // The driver's word on whether a shader came out of the pipeline cache:
+    // the bug report counts the ones the launcher's compile pass had not
+    // put there.
+    g.creationFeedback = DeviceHasExtension(physical, VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME);
+    if (g.creationFeedback) extensions.push_back(VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME);
 
     // Direct3D 9 filters each cube face on its own, clamped at its edges; a
     // Vulkan cube blends across them unless told not to. Xenia asks for the
@@ -262,6 +290,8 @@ bool vk::pipeline::CreateDevice(void* physicalDevice, uint32_t family,
 
 namespace
 {
+    std::string g_wantedDevice;
+
     // Enough of a device to compile shaders on. No surface, no swapchain: the
     // point is to reach the driver's compiler, which needs neither.
     bool BringUpHeadless()
@@ -284,26 +314,14 @@ namespace
         std::vector<VkPhysicalDevice> devices(count);
         vkEnumeratePhysicalDevices(g.instance, &count, devices.data());
 
-        // Prefer real hardware: a software rasteriser accepts SPIR-V a hardware
-        // compiler refuses, so validating against one proves less.
-        uint32_t chosen = 0;
-        for (uint32_t i = 0; i < count; i++)
-        {
-            VkPhysicalDeviceProperties p{};
-            vkGetPhysicalDeviceProperties(devices[i], &p);
-            if (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ||
-                p.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) { chosen = i; break; }
-        }
-        g.physical = devices[chosen];
-
-        uint32_t families = 0;
-        vkGetPhysicalDeviceQueueFamilyProperties(g.physical, &families, nullptr);
-        std::vector<VkQueueFamilyProperties> props(families);
-        vkGetPhysicalDeviceQueueFamilyProperties(g.physical, &families, props.data());
         uint32_t family = UINT32_MAX;
-        for (uint32_t i = 0; i < families; i++)
-            if (props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) { family = i; break; }
-        if (family == UINT32_MAX) { LOGW("pipeline: no graphics queue"); return false; }
+        g.physical = static_cast<VkPhysicalDevice>(vk::pipeline::ChooseDevice(g.instance, g_wantedDevice, &family));
+        if (!g.physical)
+        {
+            if (g_wantedDevice.empty()) LOGW("pipeline: no graphics queue");
+            else LOGW("pipeline: no device %s", g_wantedDevice.c_str());
+            return false;
+        }
 
         void* device = nullptr;
         void* queue = nullptr;
@@ -387,11 +405,13 @@ namespace
         return true;
     }
 
-    // Without it the cache still works, just only within one run.
+    // MW2_PIPELINE_CACHE=<file> in place of the one the game always keeps.
+    // Without a file the cache still works, just only within one run.
+    std::string g_cachePath;
     const char* CachePath()
     {
-        static const char* path = env::Text("MW2_PIPELINE_CACHE");
-        return path;
+        if (const char* asked = env::Text("MW2_PIPELINE_CACHE")) return asked;
+        return g_cachePath.empty() ? nullptr : g_cachePath.c_str();
     }
 
     void CreateCache()
@@ -425,6 +445,7 @@ namespace
         }
         else if (!initial.empty())
         {
+            g.cacheLoaded = true;
             LOGI("pipeline: loaded %zu KB of pipeline cache", initial.size() / 1024);
         }
     }
@@ -437,12 +458,17 @@ namespace
         if (vkGetPipelineCacheData(g.device, g.cache, &size, nullptr) != VK_SUCCESS || !size) return;
         std::vector<uint8_t> data(size);
         if (vkGetPipelineCacheData(g.device, g.cache, &size, data.data()) != VK_SUCCESS) return;
-        if (std::FILE* f = std::fopen(path, "wb"))
-        {
-            std::fwrite(data.data(), 1, size, f);
-            std::fclose(f);
-            LOGI("pipeline: wrote %zu KB of pipeline cache to %s", size / 1024, path);
-        }
+        // Beside it first, then in its place: a run that ends halfway through
+        // the write leaves the cache it had, not a broken one.
+        const std::string partial = std::string(path) + ".partial";
+        std::FILE* f = std::fopen(partial.c_str(), "wb");
+        if (!f) return;
+        const bool written = std::fwrite(data.data(), 1, size, f) == size;
+        if (std::fclose(f) != 0 || !written) return;
+        std::error_code ec;
+        std::filesystem::rename(partial, path, ec);
+        if (ec) LOGW("pipeline: the pipeline cache could not be put in place at %s (%s)", path, ec.message().c_str());
+        else LOGI("pipeline: wrote %zu KB of pipeline cache to %s", size / 1024, path);
     }
 
     VkShaderModule MakeModule(const uint32_t* spirv, size_t words, VkResult& result)
@@ -454,6 +480,51 @@ namespace
         result = vkCreateShaderModule(g.device, &info, nullptr, &module);
         return module;
     }
+}
+
+void vk::pipeline::SetCachePath(const char* path) { g_cachePath = path ? path : ""; }
+bool vk::pipeline::CacheLoaded() { return g.cacheLoaded; }
+void vk::pipeline::SetDevice(const std::string& id) { g_wantedDevice = id; }
+bool vk::pipeline::CreationFeedback() { return g.creationFeedback; }
+
+std::string vk::pipeline::DeviceId(void* physical)
+{
+    VkPhysicalDeviceIDProperties id{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES };
+    VkPhysicalDeviceProperties2 properties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+    properties.pNext = &id;
+    vkGetPhysicalDeviceProperties2(static_cast<VkPhysicalDevice>(physical), &properties);
+    std::string text;
+    for (uint8_t byte : id.deviceUUID)
+    {
+        char hex[3];
+        std::snprintf(hex, sizeof hex, "%02x", byte);
+        text += hex;
+    }
+    return text;
+}
+
+void* vk::pipeline::ChooseDevice(void* instance, const std::string& id, uint32_t* familyOut)
+{
+    uint32_t count = 0;
+    vkEnumeratePhysicalDevices(static_cast<VkInstance>(instance), &count, nullptr);
+    std::vector<VkPhysicalDevice> devices(count);
+    vkEnumeratePhysicalDevices(static_cast<VkInstance>(instance), &count, devices.data());
+    // The device the game's window would draw on (presenter.cpp): the first
+    // discrete one, else the first of any kind, with a graphics queue -- or
+    // the one asked for, which the game names when it draws on another.
+    for (int pass = 0; pass < 2; pass++)
+        for (VkPhysicalDevice candidate : devices)
+        {
+            VkPhysicalDeviceProperties p{};
+            vkGetPhysicalDeviceProperties(candidate, &p);
+            if (!id.empty() ? DeviceId(candidate) != id : pass == 0 && p.deviceType != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+                continue;
+            const uint32_t graphics = GraphicsFamily(candidate);
+            if (graphics == UINT32_MAX) continue;
+            if (familyOut) *familyOut = graphics;
+            return candidate;
+        }
+    return nullptr;
 }
 
 bool vk::pipeline::Initialise(void* device, void* physical, void* queue, uint32_t queueFamily,
@@ -519,6 +590,7 @@ void vk::pipeline::Shutdown()
     g.device = VK_NULL_HANDLE;
     g.physical = VK_NULL_HANDLE;
     g.queue = VK_NULL_HANDLE;
+    g.cacheLoaded = false;
 }
 
 bool vk::pipeline::Ready() { return g.device != VK_NULL_HANDLE; }

@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <cstddef>
+#include <string>
 
 namespace gpu { struct RegisterFile; }
 
@@ -19,6 +20,14 @@ namespace vk::renderer
     bool Initialise();
     void Shutdown();
     bool Ready();
+
+    // A player's start draws only with every shader of the game compiled
+    // before it, by the launcher (shader_marker.h). Asked before Initialise,
+    // which checks the launcher's marker against the device and scale it
+    // settles on; CompiledShaders then says whether they match, and if not
+    // why, and which device the run draws on (pipeline.h's DeviceId).
+    void CheckCompiledShaders(const std::string& gameFolder);
+    bool CompiledShaders(std::string& why, std::string& device);
 
     // The name a shader goes by here: FNV-1a over its microcode dwords, as the
     // command stream loads them.

@@ -7,6 +7,10 @@
 namespace vk
 {
     bool Start();
+    // The window is made hidden, and shown from here: a player's start that
+    // finds the game's shaders not compiled for this device hands over to the
+    // launcher before anything shows (runtime/main.cpp).
+    void ShowWindow();
     // Stops the window thread but keeps the device, so what the renderer built on
     // it can be torn down first.
     void StopPresenting();

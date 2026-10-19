@@ -8,6 +8,7 @@
 // every call here is one load of a flag.
 #include "env.h"
 #include <chrono>
+#include <string>
 #include <cstdint>
 
 namespace report
@@ -30,6 +31,12 @@ namespace report
     // thread, where report::Frame is called from.
     enum Time { kExecuting, kRecorderWait, kGpuWait, kTimeCount };
     void Spent(Time time, uint64_t nanoseconds);
+    // A shader the renderer built, and whether the driver found it in the
+    // pipeline cache the launcher compiled every shader of the game into:
+    // 1 it did, 0 it compiled it, -1 it does not say. Any thread.
+    void ShaderBuilt(int fromCache);
+    // What the launcher's compile pass is to this run (shader_marker.h).
+    void ShadersCompiled(std::string state);
     struct Timed
     {
         const Time time;

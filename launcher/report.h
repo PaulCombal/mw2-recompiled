@@ -15,8 +15,9 @@
 
 namespace report
 {
-    // Starts `program`, beside the launcher, with its log kept.
-    bool Start(const char* program, std::string& error);
+    // Starts `program`, beside the launcher, with its log kept; `shadersFor`
+    // is the device its shaders were compiled for (main.cpp's Start).
+    bool Start(const char* program, const std::string& shadersFor, std::string& error);
 
     struct Made
     {

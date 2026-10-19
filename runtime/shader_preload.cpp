@@ -15,8 +15,17 @@
 // come first. The header's seventh word is the offset, from the header, of a
 // table whose first two words are where the microcode starts in the program
 // (0, 64 or 128 bytes in) and how many bytes it is. That is exactly what D3D
-// later points the command stream's IM_LOAD at: on mp_afghan all 358 shaders
-// the stream loaded were found this way first.
+// later points the command stream's IM_LOAD at.
+//
+// A vertex shader is not drawn as it is made. Its fetches name no format: the
+// title binds each one to a vertex declaration while it loads the material
+// pass (IDirect3DVertexShader9::Bind), and D3D rewrites the fetches in place
+// -- fetch constant, format, stride and offset. Two more D3D paths do the same
+// (the image pool's memory move is bound by one, and one patches a copy it
+// writes into a command buffer), all through one routine.
+// Every vertex shader the stream loads is a patched one, so a vertex shader is
+// handed over once that routine has patched it, and not as it is made: the
+// shader as made is never drawn, and compiling it was work for nothing.
 #include <ppc_recomp_shared.h>
 #include "title.h"
 #include "guest.h"
@@ -27,7 +36,7 @@
 #include <atomic>
 #include <vector>
 
-#if defined(T_D3D_InitPixelShader) && defined(T_D3D_InitVertexShader)
+#ifdef T_D3D_InitPixelShader
 namespace
 {
     uint32_t Word(uint32_t at)
@@ -37,13 +46,15 @@ namespace
 
     std::atomic<uint32_t> g_unreadable{ 0 };
 
-    void Hand(bool pixel, uint32_t object, uint32_t program)
+    // `microcode` is where the code is, when not at its place in `program`:
+    // a patched copy D3D wrote into a command buffer.
+    void Hand(bool pixel, uint32_t object, uint32_t program, uint32_t microcode = 0)
     {
         const uint32_t header = object + (pixel ? 40 : 872);
         const uint32_t magic = Word(header);
         const uint32_t table = header + Word(header + 24);
         const uint32_t offset = Word(table), bytes = Word(table + 4);
-        if ((magic & 0xFFFFFF00) != 0x102A1100 || !program || !bytes || (bytes & 3) ||
+        if ((magic & 0xFFFFFF00) != 0x102A1100 || (!program && !microcode) || !bytes || (bytes & 3) ||
             bytes > (256u << 10) || offset > 4096)
         {
             if (g_unreadable.fetch_add(1) < 4)
@@ -53,13 +64,15 @@ namespace
             return;
         }
         // The command stream hands the renderer the microcode as native dwords.
+        const bool bound = microcode != 0;
+        if (!microcode) microcode = program + offset;
         std::vector<uint32_t> code(bytes / 4);
-        for (size_t i = 0; i < code.size(); i++) code[i] = Word(program + offset + uint32_t(i) * 4);
+        for (size_t i = 0; i < code.size(); i++) code[i] = Word(microcode + uint32_t(i) * 4);
         vk::renderer::PrepareShader(pixel, code.data(), code.size());
         static const bool traced = diag::Flag("MW2_TRACE_SHADER_LOADS");
         if (traced)
-            LOGI("shaders: %s shader made at %08X, %016llX", pixel ? "pixel" : "vertex",
-                 program + offset,
+            LOGI("shaders: %s shader %s at %08X, %016llX", pixel ? "pixel" : "vertex",
+                 bound ? "bound" : "made", microcode,
                  (unsigned long long)vk::renderer::ShaderHash(code.data(), code.size()));
     }
 }
@@ -71,10 +84,14 @@ GUEST_HOOK(T_D3D_InitPixelShader)
     Hand(true, object, program);
 }
 
-GUEST_HOOK(T_D3D_InitVertexShader)
+#ifdef T_D3D_PatchVertexFetches
+// (shader, where its microcode is, declaration, stream strides, ...): the
+// microcode is the shader's own, or a copy in a command buffer.
+GUEST_HOOK(T_D3D_PatchVertexFetches)
 {
-    const uint32_t object = ctx.r3.u32, program = ctx.r4.u32;
-    GUEST_ORIG(T_D3D_InitVertexShader)(ctx, base);
-    Hand(false, object, program);
+    const uint32_t object = ctx.r3.u32, microcode = ctx.r4.u32;
+    GUEST_ORIG(T_D3D_PatchVertexFetches)(ctx, base);
+    Hand(false, object, 0, microcode);
 }
+#endif
 #endif

@@ -1,0 +1,17 @@
+// =========================================
+// MaterialPixelShader
+// =========================================
+use MaterialPixelShader;
+set block XFILE_BLOCK_TEMP;
+set string name;
+
+// GfxPixelShaderLoadDef
+use GfxPixelShaderLoadDef;
+set count cachedPart cachedPartSize;
+set count physicalPart physicalPartSize;
+set block physicalPart XFILE_BLOCK_PHYSICAL;
+set allocalign physicalPart 32;
+set allocalign cachedPart 4;
+reorder:
+    physicalPart
+    cachedPart;

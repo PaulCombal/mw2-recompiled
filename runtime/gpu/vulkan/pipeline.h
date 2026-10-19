@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <mutex>
+#include <string>
 
 // The Vulkan device the runtime draws on, the pipeline layout every translated
 // shader is built against, and the pipeline cache. The translator emits a fixed
@@ -31,6 +32,29 @@ namespace vk::pipeline
                       void** device, void** queue, void* features = nullptr);
     // Whether the physical device (a VkPhysicalDevice) offers a device extension.
     bool DeviceHasExtension(void* physical, const char* name);
+    // Its first queue family that can draw; UINT32_MAX if none.
+    uint32_t GraphicsFamily(void* physical);
+
+    // The file the pipeline cache is read from at Initialise and written back
+    // to at Shutdown (MW2_PIPELINE_CACHE overrides it). The launcher fills it
+    // with every shader of the game (launcher/precompile.cpp).
+    void SetCachePath(const char* path);
+    // Whether Initialise found a cache there the driver took.
+    bool CacheLoaded();
+
+    // A device's VkPhysicalDeviceIDProperties::deviceUUID, in hex: which of
+    // the machine's devices it is. `physical` is a VkPhysicalDevice.
+    std::string DeviceId(void* physical);
+    // The device a headless Initialise brings up from `instance` (a
+    // VkInstance): the one `id` names, or with none, the one the game's window
+    // would draw on. Its graphics queue family in `family`; null if none.
+    void* ChooseDevice(void* instance, const std::string& id, uint32_t* family);
+    // The device the next headless Initialise brings up, by DeviceId; empty
+    // for ChooseDevice's own choice.
+    void SetDevice(const std::string& id);
+    // Whether a pipeline's creation can say if it came out of the cache
+    // (VK_EXT_pipeline_creation_feedback).
+    bool CreationFeedback();
 
     const char* DeviceName();
     // Opaque, so this header stays free of the Vulkan headers: a VkInstance,

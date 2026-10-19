@@ -1,0 +1,16 @@
+// =========================================
+// MaterialVertexShader (360: not an asset)
+// =========================================
+use MaterialVertexShader;
+set string name;
+
+// GfxVertexShaderLoadDef
+use GfxVertexShaderLoadDef;
+set count cachedPart cachedPartSize;
+set count physicalPart physicalPartSize;
+set block physicalPart XFILE_BLOCK_PHYSICAL;
+set allocalign physicalPart 32;
+set allocalign cachedPart 4;
+reorder:
+    physicalPart
+    cachedPart;

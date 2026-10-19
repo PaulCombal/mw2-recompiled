@@ -38,7 +38,7 @@
 #define T_D3D_ArenaWait        820E1E70
 #define T_D3D_ReplayRecording  820E4848
 #define T_D3D_InitPixelShader  820D7268   // a pixel shader object made over a loaded program; see shader_preload.cpp
-#define T_D3D_InitVertexShader 820D7588   // the same for a vertex shader
+#define T_D3D_PatchVertexFetches 820D5220 // rewrites a vertex shader's fetches for a declaration (Bind and two more)
 
 // the job system
 #define T_Job_WaitPredicate    823F0C80
@@ -326,7 +326,7 @@
 #define T_D3D_ArenaWait        820B9800
 #define T_D3D_ReplayRecording  820C6130
 #define T_D3D_InitPixelShader  820B8B58   // a pixel shader object made over a loaded program; see shader_preload.cpp
-#define T_D3D_InitVertexShader 820B8E78   // the same for a vertex shader
+#define T_D3D_PatchVertexFetches 820B6B10 // rewrites a vertex shader's fetches for a declaration (Bind and two more)
 
 // the job system
 #define T_Job_WaitPredicate    823B7840
@@ -407,7 +407,7 @@
 #define T_D3D_ArenaWait        820E1E70
 #define T_D3D_ReplayRecording  820E4848
 #define T_D3D_InitPixelShader  820D7268
-#define T_D3D_InitVertexShader 820D7588
+#define T_D3D_PatchVertexFetches 820D5220
 #define T_Job_WaitPredicate    823EFBA0
 #define T_Com_Error            82281758
 #define T_Com_Printf           8227EC30
@@ -436,7 +436,7 @@
 #define T_D3D_ArenaWait        820B9800
 #define T_D3D_ReplayRecording  820C6130
 #define T_D3D_InitPixelShader  820B8B58
-#define T_D3D_InitVertexShader 820B8E78
+#define T_D3D_PatchVertexFetches 820B6B10
 #define T_Job_WaitPredicate    823B7840
 #define T_Com_Error            822830E8
 #define T_Com_Printf           82280900

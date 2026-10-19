@@ -333,6 +333,19 @@ namespace
         return dir;
     }
 
+    // MW2_TRACE_SHADER_LOADS: each distinct shader the stream loads, once --
+    // from memory (at its address) or from the packet itself (at 0).
+    void TraceShaderLoad(uint32_t type, const std::vector<uint32_t>& code, uint32_t va)
+    {
+        static const bool traced = diag::Flag("MW2_TRACE_SHADER_LOADS");
+        if (!traced || code.empty()) return;
+        static std::unordered_set<uint64_t> told;
+        const uint64_t hash = vk::renderer::ShaderHash(code.data(), code.size());
+        if (told.size() < 20000 && told.insert(hash ^ type).second)
+            LOGI("shader load: %s %zu dwords at %08X, %016llX", type ? "pixel" : "vertex", code.size(), va,
+                 (unsigned long long)hash);
+    }
+
     // An IM_LOAD or IM_LOAD_IMMEDIATE: `type` 0 is the vertex shader, 1 the pixel.
     void LoadShader(uint32_t type, std::vector<uint32_t>&& code)
     {
@@ -675,6 +688,7 @@ namespace
             for (uint32_t i = 2; i < count; i++) code.push_back(s.Next());
             // The packet states its length twice, and a real one agrees with itself.
             if ((startSize & 0xFFFF) != count - 2) { g.shaderLoadsRefused++; break; }
+            TraceShaderLoad(type & 1, code, 0);
             LoadShader(type, std::move(code));
             break;
         }
@@ -691,14 +705,7 @@ namespace
             if (!va || !sizeDwords || sizeDwords > (64u << 10)) break;
             std::vector<uint32_t> code(sizeDwords);
             for (uint32_t i = 0; i < sizeDwords; i++) code[i] = *GuestPtr<be32>(va + i * 4);
-            static const bool traced = diag::Flag("MW2_TRACE_SHADER_LOADS");
-            static std::unordered_set<uint32_t> told;
-            if (traced && told.size() < 2000 && told.insert(va).second)
-            {
-                LOGI("shader load: %s %u dwords at %08X, %016llX",
-                     (addressType & 3u) ? "pixel" : "vertex", sizeDwords, va,
-                     (unsigned long long)vk::renderer::ShaderHash(code.data(), code.size()));
-            }
+            TraceShaderLoad(addressType & 3u, code, va);
             LoadShader(addressType & 3u, std::move(code));
             break;
         }

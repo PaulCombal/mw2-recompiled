@@ -33,6 +33,14 @@ namespace install
     // A development run's image: a flat PE, or an XEX decrypted on the way in.
     bool LoadImageFile(const std::filesystem::path& path, std::vector<uint8_t>& image);
 
+    // Starts the launcher to compile every shader of the game for `device`
+    // (vk::pipeline::DeviceId) and then start this title, when the shaders
+    // the launcher compiled do not fit this run, for the reason `why`. False
+    // when that is no help: the launcher is not there, or it has just
+    // compiled for this device and they still do not fit -- the run goes on
+    // then, after saying so.
+    bool CompileShaders(const std::string& device, const std::string& why);
+
     // The data one executable of the title leaves for the next (the console's
     // XamLoaderSetLaunchData): the campaign and the multiplayer are two
     // programs here as there, and it crosses from one to the other in the

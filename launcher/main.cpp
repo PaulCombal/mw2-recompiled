@@ -6,9 +6,16 @@
 //     mw2-launcher --install [<disc>] [--update <package or folder>]
 //                                                   the install, in a terminal
 //     mw2-launcher --upgrade                        a newer release, in a terminal
+//     mw2-launcher --compile-shaders                every shader of the game, in a terminal
+//     mw2-launcher --play campaign|multiplayer [--device <id>]
+//                                                   the window, which compiles the shaders
+//                                                   if they need it and starts that game
 //
 // With no <disc>, --install brings the install already in game/ up to date.
+// The game starts the launcher with --play when the shaders compiled for it
+// no longer fit (runtime/install/install.h), naming the device it draws on.
 #include "disc.h"
+#include "precompile.h"
 #include "fonts.h"
 #include "profile.h"
 #include "report.h"
@@ -62,10 +69,11 @@ namespace
 #endif
 
     // An install running on its own thread, or with `work` given, a look for
-    // a newer version of the launcher or its installation.
+    // a newer version of the launcher or its installation, or the shaders
+    // brought up to date.
     struct Job
     {
-        enum class Kind { Install, CheckUpdate, InstallUpdate } kind = Kind::Install;
+        enum class Kind { Install, CheckUpdate, InstallUpdate, Compile } kind = Kind::Install;
         std::function<setup::Result(setup::Progress&, std::string&)> work;
         fs::path disc, update;
         setup::Progress progress;
@@ -73,13 +81,29 @@ namespace
         setup::Result result = setup::Result::Failed;
         std::string error;
         std::thread thread;
+        // Kind::Compile: for which device, and what to do once they are.
+        precompile::Progress compile;
+        precompile::Result compiled;
+        std::string device;
+        int then = 0;
 
         void Start()
         {
             thread = std::thread([this] {
-                result = work ? work(progress, error) : setup::Run(disc, update, progress, error);
+                if (kind == Kind::Compile)
+                {
+                    compiled = precompile::Run(device, false, compile);
+                    result = compiled.ok ? setup::Result::Done : compiled.cancelled ? setup::Result::Cancelled : setup::Result::Failed;
+                    error = compiled.error;
+                }
+                else result = work ? work(progress, error) : setup::Run(disc, update, progress, error);
                 finished = true;
             });
+        }
+        void Cancel()
+        {
+            progress.cancel = true;
+            compile.cancel = true;
         }
         ~Job() { if (thread.joinable()) thread.join(); }
     };
@@ -145,13 +169,56 @@ namespace
         return 0;
     }
 
-    // Starts a program beside the launcher and leaves it running.
-    bool Start(const char* program)
+    // Compiles every shader of the game, from a terminal.
+    int CompileInTerminal()
+    {
+        precompile::Progress progress;
+        precompile::Result result;
+        std::atomic<bool> done{ false };
+        std::thread pass([&] {
+            result = precompile::Run("", true, progress);
+            done = true;
+        });
+        uint32_t shown = ~0u;
+        while (!done)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            const uint32_t total = progress.shaders;
+            const uint32_t now = total ? 100 * progress.compiled / total : 0;
+            if (total && now != shown) std::printf("compiling shaders: %u%%\n", shown = now);
+        }
+        pass.join();
+        if (!result.ok)
+        {
+            std::fprintf(stderr, "Shaders not compiled: %s\n", result.error.c_str());
+            return 1;
+        }
+        if (result.noLibraries)
+        {
+            std::printf("%s compiles shaders only with the state of a draw, so the game compiles them as it meets"
+                        " them\n", result.device.c_str());
+            return 0;
+        }
+        std::printf("%u shaders compiled for %s in %.1f s (reading the game's files %.1f s), %u of them already in"
+                    " the cache; %u the translator cannot make, %u the driver refused; a %.0f MB cache\n",
+                    result.shaders, result.device.c_str(), result.compileSeconds, result.readSeconds,
+                    result.fromCache, result.untranslated, result.refused, double(result.cacheBytes) / 1e6);
+        for (const auto& [reason, count] : result.reasons) std::printf("  %u: %s\n", count, reason.c_str());
+        return 0;
+    }
+
+    // Starts a program beside the launcher and leaves it running. A game is
+    // told the device its shaders were compiled for (`shadersFor`), so that it
+    // does not start the launcher again for them (runtime/install/install.h).
+    bool Start(const char* program, const std::string& shadersFor = "")
     {
         std::error_code ec;
         const std::string path = Utf8(fs::absolute(program, ec));
         const char* const args[] = { path.c_str(), nullptr };
-        SDL_Process* process = spawn::Start(args);
+        SDL_Environment* environment = SDL_CreateEnvironment(true);
+        if (!shadersFor.empty()) SDL_SetEnvironmentVariable(environment, "MW2_SHADERS_COMPILED_FOR", shadersFor.c_str(), true);
+        SDL_Process* process = spawn::Start(args, environment);
+        SDL_DestroyEnvironment(environment);
         if (!process) return false;
         SDL_DestroyProcess(process);
         return true;
@@ -298,7 +365,22 @@ namespace
             focus = 0;
         }
 
-        void Do(Action action)
+        // Every shader of the game compiled for this computer, if they are not
+        // yet (launcher/precompile.h), and then `then`. `device` is the one
+        // the game said it draws on, or empty.
+        void Compile(Action then, const std::string& device = "")
+        {
+            message.clear();
+            messageIsError = false;
+            job = std::make_unique<Job>();
+            job->kind = Job::Kind::Compile;
+            job->then = int(then);
+            job->device = device;
+            job->Start();
+        }
+
+        // A game started, once its shaders are compiled for the device `shadersFor`.
+        void Launch(Action action, const std::string& shadersFor)
         {
             switch (action)
             {
@@ -306,10 +388,37 @@ namespace
             case Action::PlayMultiplayer:
             {
                 const char* program = action == Action::PlayCampaign ? kCampaign : kMultiplayer;
-                if (Start(program)) quit = true;
+                if (Start(program, shadersFor)) quit = true;
                 else { message = std::string(program) + " could not be started: " + SDL_GetError(); messageIsError = true; }
                 break;
             }
+            case Action::ReportCampaign:
+            case Action::ReportMultiplayer:
+                if (report::Start(action == Action::ReportCampaign ? kCampaign : kMultiplayer, shadersFor, message))
+                {
+                    recording = true;
+                    recordingSince = std::chrono::steady_clock::now();
+                    message.clear();
+                    focusPlaced = false;
+                }
+                else messageIsError = true;
+                messageFocus = focus;
+                break;
+            default:
+                break;
+            }
+        }
+
+        void Do(Action action)
+        {
+            // While a job runs, it is all there is to do.
+            if (job && action != Action::Cancel && action != Action::Quit) return;
+            switch (action)
+            {
+            case Action::PlayCampaign:
+            case Action::PlayMultiplayer:
+                Compile(action);
+                break;
             case Action::Install:
                 // The disc's files are there already: the update is all that is missing.
                 if (state == setup::State::NeedsUpdate) Install({}, {});
@@ -319,7 +428,7 @@ namespace
                 Ask(Action::ChooseUpdate, "Title update", "*");
                 break;
             case Action::Cancel:
-                if (job) job->progress.cancel = true;
+                if (job) job->Cancel();
                 break;
             case Action::Quit:
                 quit = true;
@@ -359,16 +468,9 @@ namespace
                 {
                     message = "The game is running. Close it first: the report is of a run started here.";
                     messageIsError = true;
+                    messageFocus = focus;
                 }
-                else if (report::Start(action == Action::ReportCampaign ? kCampaign : kMultiplayer, message))
-                {
-                    recording = true;
-                    recordingSince = std::chrono::steady_clock::now();
-                    message.clear();
-                    focusPlaced = false;
-                }
-                else messageIsError = true;
-                messageFocus = focus;
+                else Compile(action);
                 break;
             case Action::Profile:
             case Action::Report:
@@ -749,6 +851,38 @@ namespace
                 if (was && !gameRunning) ReadProfile();
             }
 
+            if (job && job->finished && job->kind == Job::Kind::Compile)
+            {
+                job->thread.join();
+                const precompile::Result result = job->compiled;
+                const Action then = Action(job->then);
+                job.reset();
+                focusPlaced = false;
+                if (result.ok)
+                {
+                    if (result.noLibraries)
+                        message = result.device + " can compile a shader only with the state of the draw it is "
+                                  "for, so the game compiles each as it first meets it, and may stutter then.";
+                    else if (!result.current)
+                        message = "Every shader of the game, " + std::to_string(result.shaders) +
+                                  ", is compiled for this computer.";
+                    messageIsError = false;
+                    if (then != Action::None) Launch(then, result.deviceId);
+                }
+                else if (result.cancelled)
+                {
+                    message = then == Action::None ? "The shaders were not compiled. The game compiles them before it is played."
+                                                   : "The shaders were not compiled, so the game was not started: it is "
+                                                     "played only with all of them compiled.";
+                    messageIsError = true;
+                }
+                else
+                {
+                    message = "The shaders could not be compiled, so the game cannot be played: " + result.error;
+                    messageIsError = true;
+                }
+            }
+
             if (job && job->finished && job->kind != Job::Kind::Install)
             {
                 job->thread.join();
@@ -788,8 +922,14 @@ namespace
                 state = setup::Detect();
                 sound::Load();
                 focusPlaced = false;
+                // Then every shader of the game, while the player is here.
+                if (result == setup::Result::Done) Compile(Action::None);
             }
         }
+
+        // A look at the compiled shaders that finds them up to date is over in
+        // a moment: the screen stays as it was meanwhile.
+        bool JobShown() const { return job && (job->kind != Job::Kind::Compile || job->compile.checked); }
 
         std::vector<Entry> Entries() const
         {
@@ -809,9 +949,6 @@ namespace
                 }
                 return entries;
             }
-            if (profileScreen) return ProfileEntries();
-            if (reportScreen) return ReportEntries();
-            if (graphicsScreen) return GraphicsEntries();
             std::vector<Entry> entries;
             auto add = [&](Action action, std::string label, bool enabled, const char* heading, std::string text) {
                 Entry entry;
@@ -823,11 +960,15 @@ namespace
                 entries.push_back(std::move(entry));
                 return &entries.back();
             };
-            if (job)
+            if (JobShown())
             {
-                add(Action::Cancel, "CANCEL", true, job->kind == Job::Kind::Install ? "INSTALLING" : "UPDATES", "");
+                add(Action::Cancel, "CANCEL", true,
+                    job->kind == Job::Kind::Install ? "INSTALLING" : job->kind == Job::Kind::Compile ? "SHADERS" : "UPDATES", "");
                 return entries;
             }
+            if (profileScreen) return ProfileEntries();
+            if (reportScreen) return ReportEntries();
+            if (graphicsScreen) return GraphicsEntries();
             const bool installed = state == setup::State::Installed;
             std::error_code ec;
             const bool campaign = fs::is_regular_file(kCampaign, ec), multiplayer = fs::is_regular_file(kMultiplayer, ec);
@@ -884,7 +1025,8 @@ namespace
         }
     };
 
-    int Window(const std::string& updated)
+    // `then` is what to do at once, `device` the one the game draws on (--play).
+    int Window(const std::string& updated, Action then, const std::string& device)
     {
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
         {
@@ -933,6 +1075,7 @@ namespace
         sound::Load();
         app.updated = updated;
         app.pendingReport = report::Pending() && !GameRunning();
+        if (then != Action::None && app.state == setup::State::Installed) app.Compile(then, device);
         while (!app.quit)
         {
             SDL_Event event;
@@ -942,7 +1085,7 @@ namespace
                 ImGui_ImplSDL3_ProcessEvent(&event);
                 if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
                 {
-                    if (app.job) app.job->progress.cancel = true;
+                    if (app.job) app.job->Cancel();
                     app.quit = true;
                 }
                 // A disc image dropped on the window installs from it; while
@@ -984,7 +1127,7 @@ namespace
             // While a name is typed the keys are its letters, and the entry stays.
             if (app.renaming || typed) { app.focus = focusBefore; chosen = -1; }
             if (app.renaming || typed) {}
-            else if (app.job && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false)) app.job->progress.cancel = true;
+            else if (app.JobShown() && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false)) app.job->Cancel();
             else if ((app.profileScreen || app.graphicsScreen || (app.reportScreen && !app.recording)) && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false))
             {
                 sound::Play(sound::Clip::Click);
@@ -998,7 +1141,26 @@ namespace
             frame.focus = app.focus;
             const Entry& current = entries[app.focus];
             frame.heading = current.heading;
-            if (app.job)
+            if (app.JobShown() && app.job->kind == Job::Kind::Compile)
+            {
+                // The game's files read, then their shaders compiled.
+                const precompile::Progress& progress = app.job->compile;
+                const uint32_t shaders = progress.shaders, compiled = progress.compiled;
+                const uint32_t files = progress.files, read = progress.filesRead;
+                frame.busy = true;
+                frame.steps = 2;
+                frame.step = shaders ? 2 : 1;
+                frame.stepTitle = shaders ? "Compiling the shaders" : "Reading the game's files";
+                frame.amount = shaders ? std::to_string(compiled) + " of " + std::to_string(shaders)
+                                       : std::to_string(read) + " of " + std::to_string(files);
+                frame.fraction = shaders ? float(compiled) / float(shaders) : files ? float(read) / float(files) : -1.0f;
+                frame.text = progress.cancel ? "Stopping..."
+                                             : progress.why + "\n\nEvery shader of the game is compiled for this computer before it is played, "
+                                               "so that none is compiled in play, where it would stutter. It is done again "
+                                               "when the game, the graphics driver, the graphics card, the resolution or "
+                                               "the game's files change.";
+            }
+            else if (app.JobShown())
             {
                 std::lock_guard lock(app.job->progress.lock);
                 const setup::Progress& progress = app.job->progress;
@@ -1119,8 +1281,18 @@ int main(int argc, char** argv)
     std::error_code ec;
     fs::path disc, update;
     const bool upgrade = arguments.size() == 1 && arguments[0] == "--upgrade";
-    bool usage = !arguments.empty() && arguments[0] != "--install" && !upgrade;
-    for (size_t i = 1; i < arguments.size() && !usage; i++)
+    const bool compile = arguments.size() == 1 && arguments[0] == "--compile-shaders";
+    // --play <title> [--device <id>]: from the game, whose shaders need compiling.
+    Action play = Action::None;
+    std::string device;
+    if (arguments.size() >= 2 && arguments[0] == "--play")
+    {
+        play = arguments[1] == "campaign" ? Action::PlayCampaign : arguments[1] == "multiplayer" ? Action::PlayMultiplayer : Action::None;
+        if (arguments.size() == 4 && arguments[2] == "--device") device = Utf8(arguments[3]);
+        else if (arguments.size() != 2) play = Action::None;
+    }
+    bool usage = !arguments.empty() && arguments[0] != "--install" && !upgrade && !compile && play == Action::None;
+    for (size_t i = 1; i < arguments.size() && !usage && play == Action::None; i++)
     {
         const std::string text = Utf8(arguments[i]);
         if (text == "--update" && i + 1 < arguments.size()) update = fs::absolute(arguments[++i], ec);
@@ -1133,16 +1305,19 @@ int main(int argc, char** argv)
     // replaced has ended.
     const std::string updated = update::Finish();
     settings::Load();
-    if (!arguments.empty())
+    if (!arguments.empty() && play == Action::None)
     {
         if (usage)
         {
             std::fprintf(stderr, "usage: %s --install [<disc image or extracted disc folder>] [--update <package or folder>]\n"
-                                 "       %s --upgrade\n", argv[0], argv[0]);
+                                 "       %s --upgrade\n"
+                                 "       %s --compile-shaders\n"
+                                 "       %s --play campaign|multiplayer [--device <id>]\n", argv[0], argv[0], argv[0], argv[0]);
             return 2;
         }
         if (upgrade) return UpgradeInTerminal();
+        if (compile) return CompileInTerminal();
         return InstallInTerminal(disc, update);
     }
-    return Window(updated);
+    return Window(updated, play, device);
 }

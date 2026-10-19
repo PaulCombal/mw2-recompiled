@@ -153,7 +153,10 @@ only that disc and that update.
 `mw2`. It is one executable: Dear ImGui (fetched, like SDL3) on SDL's own
 renderer, three fonts from `third_party/fonts/` written out as arrays at
 configure time, and XenonRecomp's patcher compiled in from its checkout with
-the LZX decoder and AES it uses.
+the LZX decoder and AES it uses. For the compile pass it also has zlib (fetched,
+v1.3.1), the zone definitions in `launcher/zone/defs/` written out as arrays
+like the fonts, and the game's own shader translator and pipeline code from
+`runtime/gpu/vulkan/`.
 
 Its icon is in `launcher/icon/`: `launcher.ico` is linked into the Windows
 program as a resource, and `launcher.bmp` is written out as an array like the
@@ -174,6 +177,9 @@ it is, the right half in the multiplayer's colours.
 | `settings.cpp` | what the player sets for the game, kept in `.env`, which the game reads as it starts |
 | `sound.cpp` | the game's two menu sounds, read out of the installed `code_post_gfx.ff` at each start and played as the entries are moved through and chosen; none without an install |
 | `profile.cpp` | the profile screen's changes to the files under `saves/` ([saves.md](saves.md#what-the-launcher-changes)) |
+| `precompile.cpp` | every shader of the game compiled before it is played ([rendering.md](rendering.md#every-shader-compiled-before-play)) |
+| `zone/` | reads a fastfile: inflates it (`fastfile.cpp`), walks its assets by the OpenAssetTools zone definitions (`defs.cpp`, `schema.cpp`, `expr.cpp`, `walker.cpp`), and lists its shaders (`shaders.cpp`), with vertex shaders bound as the title binds them (`vertex_binding.cpp`) |
+| `zone/defs/` | the zone definitions, from the map converter (`pc2xbox360mw2ools`), which takes them from OpenAssetTools; GPL v3, see its `NOTICE.md` |
 | `playerdata_layout.h` | generated: where the multiplayer's stats file keeps what `profile.cpp` changes |
 
 An install, in order: the disc's two executables are read and checked against
@@ -200,7 +206,21 @@ PROFILES, GRAPHICS and REPORT A BUG swap the list for their own (`ProfileEntries
 angle (`preview.cpp`), with the game's projection, to say what the number does before the game
 is started.
 PLAY CAMPAIGN and PLAY MULTIPLAYER start `mw2-sp` and `mw2-mp` beside the
-launcher, the names a release gives the two game executables.
+launcher, the names a release gives the two game executables. Before that,
+and before REPORT A BUG starts either, the launcher checks the compiled
+shaders, and compiles them first when they no longer fit (SHADERS, with its
+progress and CANCEL). It does the same after an install.
+
+    mw2-launcher --compile-shaders
+
+compiles them from a terminal, whether they fit or not, and prints what it
+did. `mw2-launcher --play campaign|multiplayer [--device <id>]` is how the game
+hands over when its shaders do not fit: the window, the compile, then the game.
+
+The shader code's build, `MW2_SHADER_BUILD`, is a SHA-256 that CMake takes at
+configure time of the sources that decide what a compiled shader is (the
+translator, the pipeline layout, `shader_build.*`, `launcher/precompile.*` and
+`launcher/zone/`). A change to any of them makes a player's copy compile again.
 
 ### Updating itself
 
@@ -342,6 +362,7 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `extract_shaders.py` | every shader's microcode from the fastfiles |
 | `xenos_shader.py`, `xenos_isa.py` | Xenos microcode disassembler |
 | `translate_shader.cpp`, `upload_texture.cpp` | the `translate-shader` and `upload-texture` tools: the shader translator and texture upload against a real driver, without the game (Linux) |
+| `zone_shaders.cpp` | the `zone-shaders` tool: the launcher's fastfile reader on the files given, executables first; each file's shader count and walk time, `--hashes <dir>` to compare with another reader, `--dump <dir>` for the microcode (Linux) |
 | `find_in_title.py` | finds the other executable's copy of a function by its code |
 | `analyze.py`, `callgraph.py`, `xref.py`, `strings_in.py` | questions about the guest image: indirect branches, the call graph, address references, strings |
 | `d3d_region.py`, `classify_d3d.py`, `resource_audit.py` | map the statically linked D3D9 ([d3d9-seam.md](d3d9-seam.md)) |
