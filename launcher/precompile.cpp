@@ -56,6 +56,13 @@ namespace
             return uint32_t(std::clamp(std::strtol(set, nullptr, 10), 1L, long(settings::kMaxScale)));
         return uint32_t(settings::Scale());
     }
+
+    // MW2_CUSTOM_MAPS, the same way.
+    bool AskedCustomMaps()
+    {
+        if (const char* set = std::getenv("MW2_CUSTOM_MAPS")) return *set && std::strcmp(set, "0") != 0;
+        return settings::CustomMaps();
+    }
 }
 
 #ifndef MW2_HAVE_VULKAN
@@ -100,7 +107,8 @@ namespace
         {
             target.device = vk::pipeline::DeviceId(physical);
             target.fingerprint = vk::shaders::Fingerprint(
-                physical, vk::shaders::Scale(static_cast<VkPhysicalDevice>(physical), AskedScale()), kGameFolder);
+                physical, vk::shaders::Scale(static_cast<VkPhysicalDevice>(physical), AskedScale()), kGameFolder,
+                AskedCustomMaps());
         }
         else if (error.empty()) error = "no graphics card here can draw the game";
         vkDestroyInstance(instance, nullptr);
@@ -148,7 +156,7 @@ precompile::Result precompile::Run(const std::string& asked, bool always, Progre
     // a time.
     const auto readFrom = std::chrono::steady_clock::now();
     std::vector<fs::path> files;
-    for (const fs::path& file : vk::shaders::GameFiles(kGameFolder))
+    for (const fs::path& file : vk::shaders::GameFiles(kGameFolder, AskedCustomMaps()))
         if (file.extension() == ".ff") files.push_back(file);
     progress.files = uint32_t(files.size()) + 2;
     std::map<std::pair<bool, uint64_t>, zone::Shader> all;

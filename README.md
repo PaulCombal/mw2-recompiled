@@ -64,8 +64,12 @@ everything, open the campaign's and Special Ops' missions), GRAPHICS
 (FULLSCREEN, so the game starts fullscreen; the RESOLUTION the game draws at:
 720p as on the console, 1440p or 4K, which need a faster graphics card;
 ANTIALIASING: 2x as on the console, 4x, 8x or off; the FPS LIMIT: 60 as on
-the console, or more; the FOV: 65 as on the console, up to 120) and CHECK FOR
-UPDATES, which installs a newer release over this one.
+the console, or more; the FOV: 65 as on the console, up to 120), MAPS (in beta,
+custom maps: ADD MAP takes a map made for the PC game, IW4x, and converts it; PC GAME
+points at your copy of the PC game, found on Steam by itself, for the pictures
+and sounds such maps borrow from it; a map shows in a private match under BONUS
+MAPS; some maps don't convert yet, and some that do don't play) and CHECK FOR UPDATES, which installs a
+newer release over this one.
 
 Something wrong? REPORT A BUG runs the game once with its log kept, then
 writes a report file and opens a new issue with your system's description

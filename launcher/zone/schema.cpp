@@ -34,7 +34,7 @@ namespace zone
             return out;
         }
 
-        // What is left after the first `n` words, as Python's s.split(None, n)[n].
+        // What is left after the first `n` words (runs of blanks between them).
         std::string After(std::string_view s, int n)
         {
             size_t i = 0;
@@ -501,7 +501,7 @@ namespace zone
         };
 
         // In the order the structs were made: a cycle is cut where it is met,
-        // so the order decides, as it does in pc2xbox360mw2ools.
+        // so the order decides.
         std::unordered_map<const StructInfo*, bool> memo;
         std::function<bool(const StructInfo*, std::vector<const StructInfo*>&)> leaf =
             [&](const StructInfo* info, std::vector<const StructInfo*>& stack) {

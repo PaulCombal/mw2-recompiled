@@ -11,10 +11,14 @@ it first thing (`runtime/settings.cpp`) and sets each `MW2_` switch the
 environment does not already have, so a variable given on the command line
 decides. The launcher writes its own settings there (FULLSCREEN is
 `MW2_FULLSCREEN`, RESOLUTION is `MW2_SCALE`, ANTIALIASING is `MW2_MSAA` or
-`MW2_NO_MSAA`, FPS LIMIT is `MW2_FPS_LIMIT`, FOV is `MW2_FOV`) and keeps the other lines. When the
+`MW2_NO_MSAA`, FPS LIMIT is `MW2_FPS_LIMIT`, FOV is `MW2_FOV`, CUSTOM MAPS is `MW2_CUSTOM_MAPS`) and keeps the other lines. When the
 file has no `MW2_FPS_LIMIT`, the launcher writes the screen's refresh rate as
 it opens (60 for a 60 Hz screen, which is the console's pacing). `MW2_LAUNCHER_SOUNDS=0`, written there
-by hand, keeps the launcher's own menus silent.
+by hand, keeps the launcher's own menus silent. `MW2_PC_GAME=<folder>` is the PC game's folder, whose
+pictures and sounds ADD MAP gives a converted map (MAPS → PC GAME chooses it). When `.env` has no such line,
+the launcher looks for Steam's copy once a run and writes the line when it finds one; an empty
+`MW2_PC_GAME=` says there is none. The environment's value decides over the file's
+([maps.md](maps.md#inputs)).
 
 Switches marked **R** are read by every build. The rest are diagnostic: a build
 without diagnostics (`RELEASE=1 ./build.sh`, `-DMW2_DIAGNOSTICS=OFF`) treats
@@ -31,6 +35,7 @@ them as unset whatever the environment says, and also drops the keys `F5`, `F7`,
 | `MW2_REPORT=1` | R | what a bug report needs, as the launcher's REPORT A BUG sets it: the log names the graphics driver and ends with the run's frame rate, frame time spread and what was compiled at a draw ([building.md](building.md)) |
 | `MW2_LOG_TIME=1` | | stamps every log line with the time since start |
 | `MW2_CONSOLE="30:map af_caves;45:god"` | R | queues commands into the title's console command buffer at the given wall-clock seconds; see [gameplay.md](gameplay.md) |
+| `MW2_CUSTOM_MAPS=1` | R | the multiplayer loads fastfiles nobody signed: a map converted from the PC game. Off, it refuses them as the console does, and the launcher's shader pass reads only the game's own fastfiles ([gameplay.md](gameplay.md)) |
 | `MW2_NET_LINK=0\|1` | R | whether the Ethernet link is reported up. Default down for the campaign, up for the multiplayer, which starts no match without one |
 | `MW2_NO_AUTO_SAVE_DEVICE=1` | R | leaves the save-device choice to the title's prompt instead of choosing the hard disk ([saves.md](saves.md)) |
 | `MW2_NO_AUDIO=1` | R | opens no playback device; the mixer and decoder still run ([audio.md](audio.md)) |

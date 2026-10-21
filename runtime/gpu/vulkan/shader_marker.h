@@ -20,14 +20,17 @@ namespace vk::shaders
     // Beside the cache, shaders/pipelines.bin (shader_build.h).
     inline constexpr const char* kMarkerFile = "shaders/compiled.txt";
 
-    // The files the pass reads its shaders from: every fastfile in `game`,
-    // and the two executables, which carry a few of their own.
-    std::vector<std::filesystem::path> GameFiles(const std::filesystem::path& game);
+    // The files the pass reads its shaders from: the fastfiles in `game` and
+    // the two executables, which carry a few of their own. The fastfiles are
+    // the game's own, from the disc and the update, unless `customMaps`
+    // (MW2_CUSTOM_MAPS): then every one, a custom map's included. Without it
+    // the multiplayer loads no other, and the pass does not read one either.
+    std::vector<std::filesystem::path> GameFiles(const std::filesystem::path& game, bool customMaps);
 
     // What a cache made now would be good for: a line a fact, as the marker
     // keeps them. `physical` is the VkPhysicalDevice, `scale` MW2_SCALE as the
-    // device draws it (Scale in shader_build.h).
-    std::string Fingerprint(void* physical, uint32_t scale, const std::filesystem::path& game);
+    // device draws it (Scale in shader_build.h), `customMaps` as GameFiles.
+    std::string Fingerprint(void* physical, uint32_t scale, const std::filesystem::path& game, bool customMaps);
 
     struct Marker
     {

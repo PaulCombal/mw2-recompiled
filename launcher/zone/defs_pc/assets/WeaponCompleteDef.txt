@@ -1,0 +1,87 @@
+// =========================================
+// WeaponCompleteDef
+// =========================================
+use WeaponCompleteDef;
+set block XFILE_BLOCK_TEMP;
+set string szInternalName;
+set reusable weapDef;
+set string szDisplayName;
+set reusable hideTags;
+set scriptstring hideTags;
+set count hideTags 32;
+set string szXAnims;
+set assetref szXAnims AssetXAnim;
+set reusable szXAnims;
+set count szXAnims 37;
+set string szAltWeaponName;
+set reusable aiVsAiAccuracyGraphKnots;
+set count aiVsAiAccuracyGraphKnots aiVsAiAccuracyGraphKnotCount;
+set reusable aiVsPlayerAccuracyGraphKnots;
+set count aiVsPlayerAccuracyGraphKnots aiVsPlayerAccuracyGraphKnotCount;
+
+// WeaponDef
+use WeaponDef;
+set string szOverlayName;
+set reusable gunXModel;
+set count gunXModel 16;
+set reusable szXAnimsRightHanded;
+set string szXAnimsRightHanded;
+set assetref szXAnimsRightHanded AssetXAnim;
+set count szXAnimsRightHanded 37;
+set reusable szXAnimsLeftHanded;
+set string szXAnimsLeftHanded;
+set assetref szXAnimsLeftHanded AssetXAnim;
+set count szXAnimsLeftHanded 37;
+set string szModeName;
+set reusable notetrackSoundMapKeys;
+set scriptstring notetrackSoundMapKeys;
+set count notetrackSoundMapKeys 16;
+set reusable notetrackSoundMapValues;
+set scriptstring notetrackSoundMapValues;
+set count notetrackSoundMapValues 16;
+set reusable notetrackRumbleMapKeys;
+set scriptstring notetrackRumbleMapKeys;
+set count notetrackRumbleMapKeys 16;
+set reusable notetrackRumbleMapValues;
+set scriptstring notetrackRumbleMapValues;
+set count notetrackRumbleMapValues 16;
+set reusable bounceSound;
+set count bounceSound SURF_TYPE_NUM;
+set reusable worldModel;
+set count worldModel 16;
+set string szAmmoName;
+set string szClipName;
+set string szSharedAmmoCapName;
+set reusable parallelBounce;
+set count parallelBounce SURF_TYPE_NUM;
+set reusable perpendicularBounce;
+set count perpendicularBounce SURF_TYPE_NUM;
+set string aiVsAiAccuracyGraphName;
+set string aiVsPlayerAccuracyGraphName;
+set reusable originalAiVsAiAccuracyGraphKnots;
+set count originalAiVsAiAccuracyGraphKnots WeaponCompleteDef::aiVsAiAccuracyGraphKnotCount;
+set reusable originalAiVsPlayerAccuracyGraphKnots;
+set count originalAiVsPlayerAccuracyGraphKnots WeaponCompleteDef::aiVsPlayerAccuracyGraphKnotCount;
+set string szUseHintString;
+set string dropHintString;
+set string szScript;
+set reusable locationDamageMultipliers;
+set count locationDamageMultipliers 20;
+set string fireRumble;
+set string meleeImpactRumble;
+set string turretBarrelSpinRumble;
+reorder:
+    ...
+    aiVsAiAccuracyGraphName
+    originalAiVsAiAccuracyGraphKnots
+    aiVsPlayerAccuracyGraphName
+    originalAiVsPlayerAccuracyGraphKnots;
+
+// SndAliasCustom
+use SndAliasCustom;
+set count name 1;
+set reusable name;
+set condition sound never;
+
+// snd_alias_list_name
+set string snd_alias_list_name::soundName;

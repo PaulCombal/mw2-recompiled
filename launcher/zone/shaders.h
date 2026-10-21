@@ -20,9 +20,6 @@ namespace zone
         std::vector<uint32_t> code;   // microcode dwords, as the command stream loads them
     };
 
-    // The definitions compiled into the launcher (defs/), read once.
-    const Schema& Rules();
-
     struct BindTables;
 
     // What became of the zone's vertex shaders (vertex_binding.h).

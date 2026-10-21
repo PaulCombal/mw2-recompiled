@@ -7,6 +7,7 @@
 //                                                   the install, in a terminal
 //     mw2-launcher --upgrade                        a newer release, in a terminal
 //     mw2-launcher --compile-shaders                every shader of the game, in a terminal
+//     mw2-launcher --add-map <files>                a custom map (launcher/maps.h), in a terminal
 //     mw2-launcher --play campaign|multiplayer [--device <id>]
 //                                                   the window, which compiles the shaders
 //                                                   if they need it and starts that game
@@ -24,6 +25,7 @@
 #include "setup.h"
 #include "ui.h"
 #include "update.h"
+#include "maps.h"
 #include "../runtime/install/spawn.h"
 
 #ifdef _WIN32
@@ -45,6 +47,7 @@
 #include <cstring>
 #include <functional>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -69,11 +72,11 @@ namespace
 #endif
 
     // An install running on its own thread, or with `work` given, a look for
-    // a newer version of the launcher or its installation, or the shaders
-    // brought up to date.
+    // a newer version of the launcher or its installation, a map converted
+    // from the PC game, or the shaders brought up to date.
     struct Job
     {
-        enum class Kind { Install, CheckUpdate, InstallUpdate, Compile } kind = Kind::Install;
+        enum class Kind { Install, CheckUpdate, InstallUpdate, Compile, AddMap } kind = Kind::Install;
         std::function<setup::Result(setup::Progress&, std::string&)> work;
         fs::path disc, update;
         setup::Progress progress;
@@ -90,13 +93,21 @@ namespace
         void Start()
         {
             thread = std::thread([this] {
-                if (kind == Kind::Compile)
+                try
                 {
-                    compiled = precompile::Run(device, false, compile);
-                    result = compiled.ok ? setup::Result::Done : compiled.cancelled ? setup::Result::Cancelled : setup::Result::Failed;
-                    error = compiled.error;
+                    if (kind == Kind::Compile)
+                    {
+                        compiled = precompile::Run(device, false, compile);
+                        result = compiled.ok ? setup::Result::Done : compiled.cancelled ? setup::Result::Cancelled : setup::Result::Failed;
+                        error = compiled.error;
+                    }
+                    else result = work ? work(progress, error) : setup::Run(disc, update, progress, error);
                 }
-                else result = work ? work(progress, error) : setup::Run(disc, update, progress, error);
+                catch (const std::exception& e)   // (what a step didn't foresee: the launcher stays up)
+                {
+                    result = setup::Result::Failed;
+                    error = e.what();
+                }
                 finished = true;
             });
         }
@@ -143,6 +154,32 @@ namespace
         }
         std::printf("Installed into %s.\n", Utf8(fs::absolute(setup::GameFolder())).c_str());
         return 0;
+    }
+
+    // Adds a map from a terminal: one made for the PC game is converted, its
+    // progress shown as it goes.
+    int AddMapInTerminal(const std::vector<fs::path>& files)
+    {
+        Job job;
+        job.kind = Job::Kind::AddMap;
+        job.work = [&files, game = maps::PcGame()](setup::Progress& progress, std::string& said) {
+            return maps::Add(files, said, &progress, game) ? setup::Result::Done : setup::Result::Failed;
+        };
+        job.Start();
+        std::string shown;
+        while (!job.finished)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            std::lock_guard lock(job.progress.lock);
+            if (!job.progress.steps) continue;
+            char line[240];
+            std::snprintf(line, sizeof(line), "  %d/%d  %-30s %s", job.progress.step, job.progress.steps,
+                          job.progress.title.c_str(), job.progress.detail.c_str());
+            if (line != shown) { std::printf("%s\n", line); std::fflush(stdout); shown = line; }
+        }
+        job.thread.join();
+        std::fprintf(job.result == setup::Result::Done ? stdout : stderr, "%s\n", job.error.c_str());
+        return job.result == setup::Result::Done ? 0 : 1;
     }
 
     // Looks for a newer version and installs it, from a terminal.
@@ -254,6 +291,43 @@ namespace
 #endif
     }
 
+    std::string Upper(std::string text)
+    {
+        for (char& c : text) c = char(std::toupper(static_cast<unsigned char>(c)));
+        return text;
+    }
+
+    // The pictures the pane shows, loaded once each: a file made again (a map
+    // added again) has another time and is loaded again.
+    struct Pictures
+    {
+        struct Loaded
+        {
+            fs::file_time_type time;
+            SDL_Texture* texture = nullptr;
+        };
+        std::map<std::string, Loaded> loaded;
+
+        SDL_Texture* Get(SDL_Renderer* renderer, const std::string& path)
+        {
+            if (path.empty()) return nullptr;
+            std::error_code ec;
+            const fs::file_time_type time = fs::last_write_time(FromUtf8(path), ec);
+            if (ec) return nullptr;
+            Loaded& entry = loaded[path];
+            if (entry.texture && entry.time == time) return entry.texture;
+            if (entry.texture) SDL_DestroyTexture(entry.texture);
+            entry = { time, nullptr };
+            if (SDL_Surface* surface = SDL_LoadBMP(path.c_str()))
+            {
+                entry.texture = SDL_CreateTextureFromSurface(renderer, surface);
+                SDL_DestroySurface(surface);
+            }
+            return entry.texture;
+        }
+        ~Pictures() { for (auto& [path, entry] : loaded) if (entry.texture) SDL_DestroyTexture(entry.texture); }
+    };
+
     // What an entry does.
     enum class Action
     {
@@ -263,17 +337,25 @@ namespace
         CheckUpdate, InstallUpdate,
         // The graphics screen, and the next of what each of its entries sets.
         Graphics, Fullscreen, Resolution, Antialiasing, FpsLimit, Fov,
+        // The maps screen; CUSTOM MAPS turned on asks first, on a screen of its own.
+        Maps, CustomMaps, CustomMapsOn, CustomMapsCancel, PcGame,
+        // and its maps: one shown at a time, put in or out of the game, removed after a question.
+        AddMap, NextMap, MapInGame, RemoveMap, RemoveMapYes, RemoveMapNo,
         // The bug report screen: a run of either game with its log kept.
         Report, ReportCampaign, ReportMultiplayer,
         // The question a start asks when a recorded run was never reported.
         SendPending, DiscardPending,
     };
 
+    // More than any screen has, so that a screen's list never moves while it is filled.
+    constexpr size_t kMostEntries = 32;
+
     struct Entry
     {
         ui::Entry shown;
         Action action = Action::None;
         std::string heading, text;      // the pane, while the entry is the chosen one
+        std::string picture;            // and a picture above its text, a .bmp
     };
 
     // The file dialog answers on a thread of its own choosing.
@@ -283,6 +365,7 @@ namespace
         bool answered = false, failed = false;
         Action forAction = Action::None;
         std::string path;
+        std::vector<std::string> paths;   // every file chosen, for a dialog that takes several
     };
 
     struct App
@@ -308,6 +391,27 @@ namespace
         bool gameRunning = false;       // looked up once a second while the profile screen shows
         bool reportScreen = false;
         bool graphicsScreen = false;
+        bool mapsScreen = false;
+        bool mapsWarning = false;       // CUSTOM MAPS is to be turned on: what that lets in, first
+        std::vector<maps::Map> mapList; // read when the screen opens and after each change
+        size_t mapIndex = 0;            // the one shown
+        bool mapRemoving = false;       // REMOVE asks first
+
+        void ReadMaps()
+        {
+            mapList = maps::List();
+            mapIndex = mapList.empty() ? 0 : std::min(mapIndex, mapList.size() - 1);
+        }
+
+        // Moving or deleting a map's files under a running game would pull them from under it.
+        bool MapsBusy()
+        {
+            if (!GameRunning()) return false;
+            message = "The game is running. Close it to change its maps.";
+            messageIsError = true;
+            messageFocus = focus;
+            return true;
+        }
         // What FPS LIMIT goes through: the console's 60, two rates screens
         // commonly have, and none. A screen at another rate has its own in
         // place of the common one nearest to it, and until the player chooses,
@@ -334,7 +438,7 @@ namespace
         bool focusPlaced = false;
         bool quit = false;
 
-        void Ask(Action forAction, const char* what, const char* pattern)
+        void Ask(Action forAction, const char* what, const char* pattern, bool many = false)
         {
             {
                 std::lock_guard lock(picked.lock);
@@ -350,9 +454,33 @@ namespace
                     std::lock_guard lock(p->lock);
                     p->failed = !list;
                     p->path = (list && *list) ? *list : "";
+                    p->paths.clear();
+                    for (const char* const* file = list; file && *file; file++) p->paths.push_back(*file);
                     p->answered = true;
                 },
-                &picked, window, filters, 2, nullptr, false);
+                &picked, window, filters, 2, nullptr, many);
+        }
+
+        // A folder, the same way.
+        void AskFolder(Action forAction, const fs::path& from)
+        {
+            {
+                std::lock_guard lock(picked.lock);
+                picked.answered = false;
+                picked.forAction = forAction;
+            }
+            static std::string start;
+            start = Utf8(from);
+            SDL_ShowOpenFolderDialog(
+                [](void* data, const char* const* list, int) {
+                    auto* p = static_cast<Picked*>(data);
+                    std::lock_guard lock(p->lock);
+                    p->failed = !list;
+                    p->path = (list && *list) ? *list : "";
+                    p->paths.clear();
+                    p->answered = true;
+                },
+                &picked, window, start.empty() ? nullptr : start.c_str(), false);
         }
 
         void Install(const fs::path& from, const fs::path& update)
@@ -475,12 +603,18 @@ namespace
             case Action::Profile:
             case Action::Report:
             case Action::Graphics:
+            case Action::Maps:
             case Action::Back:
                 gameRunning = action == Action::Profile && GameRunning();
                 gameChecked = std::chrono::steady_clock::now();
                 profileScreen = action == Action::Profile;
                 reportScreen = action == Action::Report;
                 graphicsScreen = action == Action::Graphics;
+                mapsScreen = action == Action::Maps;
+                mapsWarning = false;
+                mapRemoving = false;
+                mapIndex = 0;
+                if (mapsScreen) ReadMaps();
                 message.clear();
                 messageIsError = false;
                 focusPlaced = false;
@@ -502,6 +636,58 @@ namespace
                 break;
             case Action::Fullscreen:
                 settings::SetFullscreen(!settings::Fullscreen());
+                break;
+            case Action::CustomMaps:
+                // Off at once; on only past the warning.
+                if (settings::CustomMaps()) settings::SetCustomMaps(false);
+                else { mapsWarning = true; focusPlaced = false; }
+                break;
+            case Action::CustomMapsOn:
+            case Action::CustomMapsCancel:
+                if (action == Action::CustomMapsOn) settings::SetCustomMaps(true);
+                mapsWarning = false;
+                focusPlaced = false;
+                break;
+            case Action::PcGame:
+                message.clear();
+                AskFolder(Action::PcGame, maps::PcGame());
+                break;
+            case Action::AddMap:
+                if (MapsBusy()) break;
+                message.clear();
+                Ask(Action::AddMap, "Map files", "ff;arena;iwd", true);
+                break;
+            case Action::NextMap:
+                if (!mapList.empty()) mapIndex = (mapIndex + 1) % mapList.size();
+                message.clear();
+                break;
+            case Action::MapInGame:
+                if (MapsBusy() || mapIndex >= mapList.size()) break;
+                messageIsError = !maps::SetInGame(mapList[mapIndex], !mapList[mapIndex].inGame, message);
+                messageFocus = focus;
+                {
+                    // The list is the game's first: find the map again where it went.
+                    const std::string name = mapList[mapIndex].name;
+                    ReadMaps();
+                    for (size_t i = 0; i < mapList.size(); i++)
+                        if (mapList[i].name == name) mapIndex = i;
+                }
+                break;
+            case Action::RemoveMap:
+                if (MapsBusy()) break;
+                mapRemoving = true;
+                focusPlaced = false;
+                break;
+            case Action::RemoveMapYes:
+            case Action::RemoveMapNo:
+                mapRemoving = false;
+                focusPlaced = false;
+                if (action == Action::RemoveMapYes && mapIndex < mapList.size() && !MapsBusy())
+                {
+                    messageIsError = !maps::Remove(mapList[mapIndex], message);
+                    ReadMaps();
+                    messageFocus = -1;
+                }
                 break;
             case Action::Resolution:
                 settings::SetScale(settings::Scale() % settings::kMaxScale + 1);
@@ -634,6 +820,7 @@ namespace
         std::vector<Entry> ReportEntries() const
         {
             std::vector<Entry> entries;
+            entries.reserve(kMostEntries);   // add() hands out pointers into it: it must not move
             auto add = [&](Action action, const char* label, const char* heading, std::string text) {
                 Entry entry;
                 entry.shown.label = label;
@@ -688,6 +875,7 @@ namespace
         std::vector<Entry> ProfileEntries() const
         {
             std::vector<Entry> entries;
+            entries.reserve(kMostEntries);   // add() hands out pointers into it: it must not move
             auto add = [&](Action action, std::string label, bool enabled, const char* heading, std::string text) {
                 Entry entry;
                 entry.shown.label = std::move(label);
@@ -755,6 +943,7 @@ namespace
         std::vector<Entry> GraphicsEntries() const
         {
             std::vector<Entry> entries;
+            entries.reserve(kMostEntries);   // add() hands out pointers into it: it must not move
             auto add = [&](Action action, std::string label, const char* heading, std::string text) {
                 Entry entry;
                 entry.shown.label = std::move(label);
@@ -804,10 +993,142 @@ namespace
             return entries;
         }
 
-        // A file the dialog returned, or one dropped on the window.
-        void Take(Action forAction, const std::string& path)
+        // The maps screen.
+        std::vector<Entry> MapsEntries() const
         {
-            if (job || path.empty()) return;
+            std::vector<Entry> entries;
+            entries.reserve(kMostEntries);   // add() hands out pointers into it: it must not move
+            auto add = [&](Action action, std::string label, const char* heading, std::string text) {
+                Entry entry;
+                entry.shown.label = std::move(label);
+                entry.action = action;
+                entry.heading = heading;
+                entry.text = std::move(text);
+                entries.push_back(std::move(entry));
+                return &entries.back();
+            };
+            if (mapsWarning)
+            {
+                const char* const warning =
+                    "The game's own maps are signed, and the multiplayer checks each one before it loads it: a file "
+                    "somebody changed is refused. A custom map is made by somebody else, and nothing checks it.\n\n"
+                    "A map is not only pictures and sounds. It holds scripts the game runs, and data the game reads "
+                    "as it is, trusting that nothing in it is wrong. A map made to do harm, or only a broken one, can "
+                    "crash the game or change how a match plays. At worst it can take the game over, and with it "
+                    "reach whatever your account on this computer can: your files and your network.\n\n"
+                    "Only add maps from people you trust, downloaded from where they published them. The game's own "
+                    "maps stay checked, and turning custom maps off again makes the game refuse the others.";
+                add(Action::CustomMapsCancel, "GO BACK", "BEFORE CUSTOM MAPS ARE ON", warning);
+                add(Action::CustomMapsOn, "TURN ON", "BEFORE CUSTOM MAPS ARE ON", warning)->shown.ruleAbove = true;
+                return entries;
+            }
+            if (mapRemoving && mapIndex < mapList.size())
+            {
+                const maps::Map& map = mapList[mapIndex];
+                const std::string text = "The launcher's copy of it is deleted. The files you added it from stay where they are, "
+                                         "and adding them again brings it back.";
+                std::string heading = "REMOVE " + Upper(map.longname) + "?";
+                Entry* keep = add(Action::RemoveMapNo, "KEEP IT", "", text);
+                Entry* remove = add(Action::RemoveMapYes, "REMOVE", "", text);
+                for (Entry* entry : { keep, remove })
+                {
+                    entry->heading = heading;
+                    entry->picture = Utf8(map.picture);
+                }
+                remove->shown.ruleAbove = true;
+                return entries;
+            }
+            const bool on = settings::CustomMaps();
+            add(Action::CustomMaps, std::string("CUSTOM MAPS ") + (on ? "ON" : "OFF"), "CUSTOM MAPS",
+                std::string("Whether the multiplayer loads maps other people made, such as maps converted from the PC "
+                            "game: now ") + (on ? "it does." : "it loads only the game's own.") +
+                "\n\nChoose to switch it" + (on ? "." : ": a warning comes first, about what a map from somebody else can do.") +
+                "\n\nIt applies to the multiplayer from the next time it is started.");
+            {
+                const fs::path game = maps::PcGame();
+                add(Action::PcGame, std::string("PC GAME ") + (game.empty() ? "NONE" : "SET"), "PC GAME",
+                    "Maps made for the PC game often use pictures and sounds of the PC game's own maps without "
+                    "carrying them, as every PC player has them. When you have the PC game too (Call of Duty: Modern "
+                    "Warfare 2 on Steam), a map added here takes them from it; without it, plain ones stand in: "
+                    "magenta for a picture, silence for a sound.\n\n" +
+                        (!game.empty() ? "The PC game's files used: " + Utf8(game) + "."
+                         : settings::PcGame()
+                             ? std::string("None is used: MW2_PC_GAME is left empty in the .env file beside the launcher.")
+                             : std::string("No copy of the PC game was found in Steam's folders.")) +
+                        "\n\nChoose to pick the folder of another copy, the one with main in it.");
+            }
+            add(Action::AddMap, "ADD MAP", "ADD MAP",
+                "Choose one of the map's files: its others, <map>.ff, <map>_load.ff, <map>.arena and <map>.iwd, are "
+                "taken from the same folder. A map made for the PC game (IW4x) is converted for the Xbox 360, which takes a minute or "
+                "so; one converted already is added as it is. The .iwd gives its pictures, and its picture here; "
+                "what the map takes from the PC game itself comes from PC GAME. The launcher keeps a copy of the map: "
+                "the files you chose stay where they are.\n\n"
+                "The game has room for " + std::to_string(maps::kInGame) + " custom maps. A map added while it has them "
+                "waits in the maps folder beside the launcher until another is taken out.");
+            if (mapList.empty()) { add(Action::Back, "BACK", "", "")->shown.ruleAbove = true; return entries; }
+
+            // One map at a time, and what can be done with it.
+            const maps::Map& map = mapList[std::min(mapIndex, mapList.size() - 1)];
+            const size_t inGame = maps::InGame(mapList);
+            std::string about = map.description.empty() ? std::string() : map.description + "\n\n";
+            about += map.inGame ? (on ? "In the game: in a private match, GAME SETUP, the map, then BONUS MAPS."
+                                      : "In the game, once custom maps are on.")
+                                : "Not in the game: its files wait in the maps folder beside the launcher.";
+            about += "\n" + std::to_string(inGame) + " of the game's " + std::to_string(maps::kInGame) + " places are taken.";
+            const std::string heading = Upper(map.longname);
+            Entry* pick = add(Action::NextMap, heading, "", about);
+            pick->shown.tag = std::to_string(mapIndex + 1) + " OF " + std::to_string(mapList.size());
+            pick->shown.ruleAbove = true;
+            Entry* place = add(Action::MapInGame, std::string("IN THE GAME ") + (map.inGame ? "YES" : "NO"), "",
+                               about + "\n\nChoose to " + (map.inGame ? "take it out of the game. Its files are kept."
+                                                                          : inGame >= maps::kInGame ? "put it in the game: first take another out, the game has room for " + std::to_string(maps::kInGame) + "."
+                                                                                                    : "put it in the game."));
+            Entry* remove = add(Action::RemoveMap, "REMOVE", "", "Deletes the launcher's copy of the map. The files you added it from stay "
+                                                                   "where they are. A question comes first.");
+            for (Entry* entry : { pick, place, remove })
+            {
+                entry->heading = heading;
+                entry->picture = Utf8(map.picture);
+            }
+            add(Action::Back, "BACK", "", "")->shown.ruleAbove = true;
+            return entries;
+        }
+
+        // A file the dialog returned, or one dropped on the window.
+        void Take(Action forAction, const std::string& path, const std::vector<std::string>& paths = {})
+        {
+            if (job) return;
+            if (forAction == Action::AddMap)
+            {
+                std::vector<fs::path> files;
+                for (const std::string& file : paths) files.push_back(FromUtf8(file));
+                if (files.empty()) return;
+                messageFocus = focus;
+                if (maps::Converts(files))
+                {
+                    // A map made for the PC game is converted first: a minute or so.
+                    message.clear();
+                    job = std::make_unique<Job>();
+                    job->kind = Job::Kind::AddMap;
+                    // (The PC game's folder is looked up here: the job's thread doesn't touch .env.)
+                    job->work = [files, game = maps::PcGame()](setup::Progress& progress, std::string& said) {
+                        if (maps::Add(files, said, &progress, game)) return setup::Result::Done;
+                        return progress.cancel ? setup::Result::Cancelled : setup::Result::Failed;
+                    };
+                    job->Start();
+                    return;
+                }
+                messageIsError = !maps::Add(files, message);
+                ReadMaps();
+                return;
+            }
+            if (path.empty()) return;
+            if (forAction == Action::PcGame)
+            {
+                messageFocus = focus;
+                messageIsError = !maps::SetPcGame(FromUtf8(path), message);
+                return;
+            }
             if (forAction == Action::ChooseUpdate) Install(state == setup::State::NeedsUpdate ? fs::path() : disc, FromUtf8(path));
             else { disc = FromUtf8(path); Install(disc, {}); }
         }
@@ -815,6 +1136,7 @@ namespace
         void Poll()
         {
             std::string path;
+            std::vector<std::string> paths;
             Action forAction = Action::None;
             {
                 std::lock_guard lock(picked.lock);
@@ -823,16 +1145,20 @@ namespace
                     picked.answered = false;
                     forAction = picked.forAction;
                     path = picked.path;
+                    paths = picked.paths;
                     if (picked.failed)
                     {
-                        message = std::string("No file dialog could be opened (") + SDL_GetError() +
-                                  "). Drop the file on this window, or install from a terminal:\n"
-                                  "mw2-launcher --install path/to/disc.iso";
+                        message = std::string("No file dialog could be opened (") + SDL_GetError() + ")." +
+                                  (forAction == Action::AddMap ? std::string(" Copy the map's three files into the game folder beside the launcher instead.")
+                                   : forAction == Action::PcGame ? std::string(" Write MW2_PC_GAME=<the PC game's folder> in the .env file beside the launcher instead.")
+                                                               : std::string(" Drop the file on this window, or install from a terminal:\n"
+                                                                             "mw2-launcher --install path/to/disc.iso"));
                         messageIsError = true;
+                        messageFocus = focus;
                     }
                 }
             }
-            if (forAction != Action::None) Take(forAction, path);
+            if (forAction != Action::None) Take(forAction, path, paths);
 
             // Two seconds in, the game has had time to appear among the processes;
             // the title one starts from its menus is running before it ends itself.
@@ -881,6 +1207,18 @@ namespace
                     message = "The shaders could not be compiled, so the game cannot be played: " + result.error;
                     messageIsError = true;
                 }
+            }
+
+            if (job && job->finished && job->kind == Job::Kind::AddMap)
+            {
+                job->thread.join();
+                message = job->error;
+                messageIsError = job->result != setup::Result::Done;
+                job.reset();
+                ReadMaps();
+                // Back on ADD MAP, which the message is shown on.
+                focus = std::max(0, messageFocus);
+                focusPlaced = true;
             }
 
             if (job && job->finished && job->kind != Job::Kind::Install)
@@ -950,6 +1288,7 @@ namespace
                 return entries;
             }
             std::vector<Entry> entries;
+            entries.reserve(kMostEntries);   // add() hands out pointers into it: it must not move
             auto add = [&](Action action, std::string label, bool enabled, const char* heading, std::string text) {
                 Entry entry;
                 entry.shown.label = std::move(label);
@@ -963,12 +1302,17 @@ namespace
             if (JobShown())
             {
                 add(Action::Cancel, "CANCEL", true,
-                    job->kind == Job::Kind::Install ? "INSTALLING" : job->kind == Job::Kind::Compile ? "SHADERS" : "UPDATES", "");
+                    job->kind == Job::Kind::Install    ? "INSTALLING"
+                    : job->kind == Job::Kind::Compile  ? "SHADERS"
+                    : job->kind == Job::Kind::AddMap   ? "ADDING A MAP"
+                                                       : "UPDATES",
+                    "");
                 return entries;
             }
             if (profileScreen) return ProfileEntries();
             if (reportScreen) return ReportEntries();
             if (graphicsScreen) return GraphicsEntries();
+            if (mapsScreen) return MapsEntries();
             const bool installed = state == setup::State::Installed;
             std::error_code ec;
             const bool campaign = fs::is_regular_file(kCampaign, ec), multiplayer = fs::is_regular_file(kMultiplayer, ec);
@@ -1004,7 +1348,9 @@ namespace
             add(Action::Graphics, "GRAPHICS", true, "GRAPHICS", "Fullscreen or a window, the size the game draws at, its antialiasing, how many frames a second and how wide its view is.")->shown.ruleAbove = true;
             add(Action::Profile, "PROFILES", true, "PROFILES",
                 "Set the multiplayer rank and prestige, unlock everything, and open the campaign's and Special Ops' missions.");
-            add(Action::None, "MAPS", false, "MAPS", "Add and remove custom maps.\n\nNot available yet.")->shown.tag = "SOON";
+            add(Action::Maps, "MAPS", true, "MAPS",
+                "Custom maps: maps other people made, such as maps converted from the PC game, in the multiplayer. "
+                "In beta: some maps don't convert, and some that do don't play yet.")->shown.tag = "BETA";
 
             // The copy itself. A build nobody released has no version to compare.
             const bool released = *update::Current() != 0;
@@ -1070,6 +1416,7 @@ namespace
         ImGui_ImplSDLRenderer3_Init(renderer);
         const ui::Fonts fonts = ui::LoadFonts(scale);
         ui::Backdrop backdrop = ui::MakeBackdrop(renderer);
+        auto pictures = std::make_unique<Pictures>();
 
         app.state = setup::Detect();
         sound::Load();
@@ -1128,10 +1475,10 @@ namespace
             if (app.renaming || typed) { app.focus = focusBefore; chosen = -1; }
             if (app.renaming || typed) {}
             else if (app.JobShown() && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false)) app.job->Cancel();
-            else if ((app.profileScreen || app.graphicsScreen || (app.reportScreen && !app.recording)) && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false))
+            else if ((app.profileScreen || app.graphicsScreen || app.mapsScreen || (app.reportScreen && !app.recording)) && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false))
             {
                 sound::Play(sound::Clip::Click);
-                app.Do(Action::Back);
+                app.Do(app.mapsWarning ? Action::CustomMapsCancel : app.mapRemoving ? Action::RemoveMapNo : Action::Back);
                 ImGui::EndFrame();
                 continue;
             }
@@ -1174,10 +1521,13 @@ namespace
                 frame.text = progress.cancel                            ? "Stopping..."
                              : app.job->kind == Job::Kind::CheckUpdate ? "Looking for a newer version..."
                              : app.job->kind == Job::Kind::InstallUpdate ? "The launcher starts again when it is done."
-                                                                         : "Stopping and starting again later carries on where it left off.";
+                             : app.job->kind == Job::Kind::AddMap
+                                 ? "The map was made for the PC game: it is converted for the Xbox 360, with what it needs "
+                                   "from the game's own files. It takes a minute or so."
+                                 : "Stopping and starting again later carries on where it left off.";
             }
             else if (app.reportScreen ? !app.message.empty() && !app.recording && (app.messageFocus < 0 || app.focus == app.messageFocus)
-                     : app.profileScreen ? !app.message.empty() && app.focus == app.messageFocus
+                     : app.profileScreen || app.mapsScreen ? !app.message.empty() && (app.messageFocus < 0 || app.focus == app.messageFocus)
                                        : !app.message.empty() && (current.action == Action::Install || current.action == Action::ChooseUpdate ||
                                                                   current.action == Action::CheckUpdate || current.action == Action::InstallUpdate || app.messageIsError))
             {
@@ -1192,8 +1542,28 @@ namespace
             if (*update::Current()) frame.corner = std::string(update::Current()) + "   " + frame.corner;
             if (!app.updated.empty()) frame.status = "Updated to " + app.updated + ". " + frame.status;
             frame.hint = app.recording                          ? ""
-                         : app.profileScreen || app.reportScreen || app.graphicsScreen ? "ENTER OR (A) TO CHOOSE, ESC OR (B) TO GO BACK"
+                         : app.profileScreen || app.reportScreen || app.graphicsScreen || app.mapsScreen ? "ENTER OR (A) TO CHOOSE, ESC OR (B) TO GO BACK"
                                                                  : "ENTER OR (A) TO CHOOSE";
+
+            if (current.action == Action::NextMap && app.mapList.size() > 1)
+            {
+                // Left and right go through the maps, as a choice goes to the next.
+                const size_t count = app.mapList.size();
+                if (pressed({ ImGuiKey_LeftArrow, ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadLStickLeft }, true))
+                {
+                    app.mapIndex = (app.mapIndex + count - 1) % count;
+                    app.message.clear();
+                    sound::Play(sound::Clip::Over);
+                }
+                if (pressed({ ImGuiKey_RightArrow, ImGuiKey_GamepadDpadRight, ImGuiKey_GamepadLStickRight }, true))
+                {
+                    app.mapIndex = (app.mapIndex + 1) % count;
+                    app.message.clear();
+                    sound::Play(sound::Clip::Over);
+                }
+                frame.hint = "LEFT AND RIGHT FOR ANOTHER MAP, ESC OR (B) TO GO BACK";
+            }
+            frame.picture = pictures->Get(renderer, current.picture);
 
             if (current.action == Action::Fov)
             {
@@ -1243,6 +1613,7 @@ namespace
         ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();
         ui::DestroyBackdrop(backdrop);
+        pictures.reset();
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(app.window);
         SDL_Quit();
@@ -1282,6 +1653,10 @@ int main(int argc, char** argv)
     fs::path disc, update;
     const bool upgrade = arguments.size() == 1 && arguments[0] == "--upgrade";
     const bool compile = arguments.size() == 1 && arguments[0] == "--compile-shaders";
+    const bool addMap = arguments.size() >= 2 && arguments[0] == "--add-map";
+    std::vector<fs::path> mapFiles;
+    if (addMap)
+        for (size_t i = 1; i < arguments.size(); i++) mapFiles.push_back(fs::absolute(arguments[i], ec));
     // --play <title> [--device <id>]: from the game, whose shaders need compiling.
     Action play = Action::None;
     std::string device;
@@ -1291,8 +1666,8 @@ int main(int argc, char** argv)
         if (arguments.size() == 4 && arguments[2] == "--device") device = Utf8(arguments[3]);
         else if (arguments.size() != 2) play = Action::None;
     }
-    bool usage = !arguments.empty() && arguments[0] != "--install" && !upgrade && !compile && play == Action::None;
-    for (size_t i = 1; i < arguments.size() && !usage && play == Action::None; i++)
+    bool usage = !arguments.empty() && arguments[0] != "--install" && !upgrade && !compile && !addMap && play == Action::None;
+    for (size_t i = 1; i < arguments.size() && !usage && play == Action::None && !addMap; i++)
     {
         const std::string text = Utf8(arguments[i]);
         if (text == "--update" && i + 1 < arguments.size()) update = fs::absolute(arguments[++i], ec);
@@ -1312,11 +1687,13 @@ int main(int argc, char** argv)
             std::fprintf(stderr, "usage: %s --install [<disc image or extracted disc folder>] [--update <package or folder>]\n"
                                  "       %s --upgrade\n"
                                  "       %s --compile-shaders\n"
-                                 "       %s --play campaign|multiplayer [--device <id>]\n", argv[0], argv[0], argv[0], argv[0]);
+                                 "       %s --add-map <one of a map's files>...\n"
+                                 "       %s --play campaign|multiplayer [--device <id>]\n", argv[0], argv[0], argv[0], argv[0], argv[0]);
             return 2;
         }
         if (upgrade) return UpgradeInTerminal();
         if (compile) return CompileInTerminal();
+        if (addMap) return AddMapInTerminal(mapFiles);
         return InstallInTerminal(disc, update);
     }
     return Window(updated, play, device);

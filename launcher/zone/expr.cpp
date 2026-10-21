@@ -11,7 +11,7 @@ namespace zone
         bool Digit(char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; }
         bool Hex(char c) { return std::isxdigit(static_cast<unsigned char>(c)) != 0; }
 
-        // Python's floor division and modulo.
+        // Floor division and modulo (rounding down, not toward zero).
         int64_t FloorDiv(int64_t a, int64_t b)
         {
             if (!b) throw Error("division by zero in a definition");

@@ -135,7 +135,7 @@ namespace zone
         if (fresh) named.push_back(type);
         else
         {
-            // Python's dict keeps a key's first place when it is assigned again.
+            // A name defined again keeps its first place.
             std::replace(named.begin(), named.end(), at->second, type);
             at->second = type;
         }

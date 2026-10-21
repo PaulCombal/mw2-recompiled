@@ -178,6 +178,8 @@ it is, the right half in the multiplayer's colours.
 | `sound.cpp` | the game's two menu sounds, read out of the installed `code_post_gfx.ff` at each start and played as the entries are moved through and chosen; none without an install |
 | `profile.cpp` | the profile screen's changes to the files under `saves/` ([saves.md](saves.md#what-the-launcher-changes)) |
 | `precompile.cpp` | every shader of the game compiled before it is played ([rendering.md](rendering.md#every-shader-compiled-before-play)) |
+| `maps.cpp` | custom maps: added (a PC map converted, a 360 one checked, copied, a picture made from the `.iwd`), put in or out of the game, removed ([gameplay.md](gameplay.md)) |
+| `mapport/` | the map converter: a PC map's fastfiles made the 360's ([maps.md](maps.md)); GPL v3, see its `NOTICE.md` |
 | `zone/` | reads a fastfile: inflates it (`fastfile.cpp`), walks its assets by the OpenAssetTools zone definitions (`defs.cpp`, `schema.cpp`, `expr.cpp`, `walker.cpp`), and lists its shaders (`shaders.cpp`), with vertex shaders bound as the title binds them (`vertex_binding.cpp`) |
 | `zone/defs/` | the zone definitions, from the map converter (`pc2xbox360mw2ools`), which takes them from OpenAssetTools; GPL v3, see its `NOTICE.md` |
 | `playerdata_layout.h` | generated: where the multiplayer's stats file keeps what `profile.cpp` changes |
@@ -200,8 +202,22 @@ does the same from a terminal; with no disc it updates the install in place.
 
 The screen is a description (`ui::Frame`) that `main.cpp` fills each frame from
 a list of entries, each with an action and the text the pane shows for it.
-PROFILES, GRAPHICS and REPORT A BUG swap the list for their own (`ProfileEntries`, `GraphicsEntries`,
-`ReportEntries`); MAPS is an entry without an action yet. An entry with a range (FOV) sets
+PROFILES, GRAPHICS, MAPS and REPORT A BUG swap the list for their own (`ProfileEntries`, `GraphicsEntries`,
+`MapsEntries`, `ReportEntries`). MAPS holds CUSTOM MAPS (`MW2_CUSTOM_MAPS`), which turns off at once and
+on only from a screen that says first what a fastfile nobody signed can do (`mapsWarning`); PC GAME, the
+PC game's folder a conversion takes shared pictures and sounds from (`maps::PcGame`, a folder dialog); ADD MAP;
+and one custom map at a time (left and right for another), with IN THE GAME and REMOVE (`maps.h`).
+A map in the game has its files in `game/` (`<map>.ff`, `<map>_load.ff`, `<map>.arena`, and
+`<map>_preview.ff`, its picture in the game's menus, when it was converted with one), which is all
+the game looks at; one out of it
+has them in `maps/` beside the launcher, which also keeps each map's picture, made when it was
+added from the loading screen in the PC map's `.iwd` (a zip of DXT `.iwi` images). The game's
+BONUS MAPS menu has room for 8, so IN THE GAME stops there. ADD MAP takes a file from the
+system's file dialog, or `mw2-launcher --add-map <file>...` from a terminal, and the map's other
+files beside it, which share its name (`<map>.ff`, `<map>_load.ff`, `<map>.arena`, `<map>.iwd`). A PC map's fastfiles (`IW4x`, or version 276) are converted first, on the job
+thread the install uses, its progress and CANCEL on the same screen ([maps.md](maps.md)); the
+log of a conversion is kept as `maps/<map>.log`. A 360 fastfile is taken as it is, and refused
+when it is not an unsigned one of the game's own version. An entry with a range (FOV) sets
 `ui::Frame::slider`, and the pane draws a track for it; FOV's also shows a street drawn at the
 angle (`preview.cpp`), with the game's projection, to say what the number does before the game
 is started.
@@ -346,6 +362,7 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `engine.h`, `engine_log.cpp`, `predicate_waits.cpp`, `console.cpp` | hooks into the engine: print and error paths, spin waits, the console command buffer |
 | `player.cpp` | the headless walker and route recorder |
 | `field_of_view.cpp` | `MW2_FOV`: scales the view angle the title computes |
+| `unsigned_fastfiles.cpp`, `custom_map_list.cpp` | lets the multiplayer load a fastfile nobody signed, a converted map, and lists the map from its `.arena` |
 | `stutters.cpp`, `pacing_trace.cpp` | the stutter detector and the frame pacing timeline |
 | `report.cpp` | `MW2_REPORT=1`: the driver's name and a run's performance summary, for a bug report |
 | `crash.cpp`, `watchpoint.cpp`, `mmio_hook.h` | the fault handler, the write watchpoint, the hardware-register store hook |

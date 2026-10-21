@@ -17,6 +17,44 @@ Every fastfile is needed, not only the current level's: a zone whose file is
 missing makes the title report a dirty disc and fail, and the multiplayer picks
 its own zones.
 
+The multiplayer's fastfiles are signed, and it refuses one that is not with the
+same dirty-disc report. With `MW2_CUSTOM_MAPS=1` (the launcher's MAPS → CUSTOM
+MAPS), `runtime/unsigned_fastfiles.cpp` lets it load them, which is what a map
+converted from the PC game is: its two files (`<map>.ff`, `<map>_load.ff`) in
+the game root, and its menu picture (`<map>_preview.ff`). Its `<map>.arena` beside them, which the PC map comes with,
+puts it in the menus (`runtime/custom_map_list.cpp`), for every map whose two
+files are there:
+
+- **The arena table**, where the lobby looks a map's name and picture up: the
+  title reads only `mp/basemaps.arena`, and the hook parses the custom ones
+  after it with the title's own parser, as the PC game reads the loose ones.
+- **The map menus.** GAME SETUP's map choice is `settings_map` and its BONUS
+  MAPS `settings_bonus_map`, a button each written out by hand in
+  `patch_mp.ff`. The base menu is full; the bonus one gets a copy of its last
+  map button per custom map, below it, with the map in its action, its label
+  and the side panel's three variables. The copy drops the downloadable maps'
+  colour expression, which greys one the console has not bought.
+- **Their text.** The menus show a name through the `@` translation lookup,
+  which marks one it has no translation for `UNLOCALIZED(...)`. The
+  arena's longname and description translate to themselves
+  (`SEH_StringEd_GetString`), only when the game has no translation of its own.
+- **Their picture.** The side panel shows the material `preview_<map>`; a
+  stock map's is in `ui_mp.ff`, a downloadable one's in `dlc1_ui_mp.ff` or
+  `dlc2_ui_mp.ff`, which `Com_LoadUiFastFile` loads in one `DB_LoadXAssets`
+  call. A converted map comes with its own zone, `<map>_preview.ff`, and the
+  hook adds it to that call, with the menus' flags: a level's load frees it
+  with them. The loader holds 32 zones; a picture past that is left out with
+  a warning. A map without one shows `black`.
+
+The launcher's MAPS screen adds (converting a PC map first, [maps.md](maps.md)),
+removes and lists the same maps, and puts at most 8 in the game, the menu's room; a ninth there is left out with a warning in
+the log (`runtime/install/arena.h`, `launcher/maps.h`). `map <map>` at the
+console (`MW2_CONSOLE`) starts one directly.
+
+A signed file is still checked. Nothing checks an unsigned one: the loader
+takes its sizes, offsets and scripts as they come, which is why the switch is
+off by default and the launcher warns before it turns it on.
+
 ## Movies
 
 Bink is linked into the title (its own `BINK` section) and decodes on the CPU,

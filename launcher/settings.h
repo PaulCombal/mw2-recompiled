@@ -4,6 +4,9 @@
 // it starts (runtime/settings.cpp), however it is started, so a change is
 // for the next start. The file can hold any of the game's switches; the
 // launcher changes its own and keeps the rest.
+#include <optional>
+#include <string>
+
 namespace settings
 {
     void Load();
@@ -37,6 +40,17 @@ namespace settings
     int Msaa();
     void SetMsaa(int samples);
 
+    // MW2_CUSTOM_MAPS: the multiplayer loads fastfiles nobody signed, a map
+    // converted from the PC game (runtime/unsigned_fastfiles.cpp).
+    bool CustomMaps();
+    void SetCustomMaps(bool on);
+
     // MW2_LAUNCHER_SOUNDS: 0 keeps the launcher's menus silent. Written by hand.
     bool Sounds();
+
+    // MW2_PC_GAME: the PC game's folder, whose pictures and sounds a map
+    // converted from the PC takes (maps.h); nullopt when .env has no such
+    // line, empty when it says there is none.
+    std::optional<std::string> PcGame();
+    void SetPcGame(const std::string& folder);
 }

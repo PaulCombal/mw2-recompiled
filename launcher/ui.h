@@ -43,7 +43,7 @@ namespace ui
         std::string label;
         bool enabled = true;
         bool ruleAbove = false;     // a thin rule between this entry and the one before
-        std::string tag;            // a small note after a disabled entry, "SOON"
+        std::string tag;            // a small note after the label: "SOON", "3 OF 4"
     };
 
     struct Frame
@@ -61,6 +61,7 @@ namespace ui
 
         float slider = -1;          // a setting with a range: where it is on its track, 0 to 1
         float fov = 0;              // and the field of view the pane shows a picture of (preview.h)
+        SDL_Texture* picture = nullptr;   // a picture above the text, 16:9
 
         std::string status;         // one line at the bottom left
         std::string corner;         // and one at the top right

@@ -7,10 +7,27 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 #include <vector>
 
 namespace
 {
+    // `text` cut to fit `width`, ending in "..." when it doesn't (cut between
+    // whole UTF-8 characters).
+    std::string Fitted(ImFont* font, const std::string& text, float width)
+    {
+        auto wide = [&](const std::string& t) { return font->CalcTextSizeA(font->FontSize, FLT_MAX, 0, t.c_str()).x; };
+        if (wide(text) <= width) return text;
+        std::string cut = text;
+        while (!cut.empty() && wide(cut + "...") > width)
+            for (bool more = true; more && !cut.empty();)   // the last character, its continuation bytes first
+            {
+                more = (static_cast<unsigned char>(cut.back()) & 0xC0) == 0x80;
+                cut.pop_back();
+            }
+        return cut + "...";
+    }
+
     constexpr ImU32 kWhite = IM_COL32(236, 236, 232, 255);
     constexpr ImU32 kDim = IM_COL32(236, 236, 232, 96);
     constexpr ImU32 kBlack = IM_COL32(0, 0, 0, 255);
@@ -265,8 +282,12 @@ int ui::Draw(const Fonts& fonts, const Frame& frame, float scale, int& focus, fl
         }
         py += bar + S(12);
         draw->AddText(fonts.body, fonts.body->FontSize, { left, py }, kWhite, frame.amount.c_str());
-        const float detailWidth = fonts.body->CalcTextSizeA(fonts.body->FontSize, FLT_MAX, 0, frame.detail.c_str()).x;
-        draw->AddText(fonts.body, fonts.body->FontSize, { right - detailWidth, py }, IM_COL32(236, 236, 232, 170), frame.detail.c_str());
+        // What the step is doing, right-aligned in the room the amount leaves.
+        const float amountWidth = frame.amount.empty()
+            ? 0 : fonts.body->CalcTextSizeA(fonts.body->FontSize, FLT_MAX, 0, frame.amount.c_str()).x + S(24);
+        const std::string detail = Fitted(fonts.body, frame.detail, std::max(0.0f, barWidth - amountWidth));
+        const float detailWidth = fonts.body->CalcTextSizeA(fonts.body->FontSize, FLT_MAX, 0, detail.c_str()).x;
+        draw->AddText(fonts.body, fonts.body->FontSize, { right - detailWidth, py }, IM_COL32(236, 236, 232, 170), detail.c_str());
         py += fonts.body->FontSize + S(24);
     }
     if (frame.slider >= 0)
@@ -290,6 +311,12 @@ int ui::Draw(const Fonts& fonts, const Frame& frame, float scale, int& focus, fl
         std::snprintf(across, sizeof(across), "%.0f DEGREES ACROSS THE SCREEN", preview::Across(frame.fov));
         draw->AddText(fonts.small, fonts.small->FontSize, { max.x + S(14), min.y }, kAmber, across);
         py = max.y + S(12);
+    }
+    if (frame.picture)
+    {
+        const ImVec2 min{ left, py }, max{ left + S(416), py + S(234) };
+        draw->AddImage(ImTextureID(frame.picture), min, max);
+        py = max.y + S(16);
     }
     if (!frame.text.empty())
         draw->AddText(fonts.body, fonts.body->FontSize, { left, py }, frame.error ? kRed : IM_COL32(236, 236, 232, 225),

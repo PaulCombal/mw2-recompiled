@@ -7,7 +7,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <sstream>
+#include <string_view>
 #include <system_error>
 
 #ifdef MW2_HAVE_VULKAN
@@ -45,20 +47,46 @@ namespace
     }
 
     std::string Key(const std::string& line) { return line.substr(0, line.find(' ')); }
+
+    // The fastfiles of the disc and of title update 6, by name.
+    constexpr std::string_view kOwnFastfiles[] = {
+        "af_caves", "af_chase", "airport", "arcadia", "boneyard", "cliffhanger", "co_hunted", "code_post_gfx",
+        "code_post_gfx_mp", "common", "common_mp", "contingency", "dc_whitehouse", "dcburning", "dcemp",
+        "dlc1_ui_mp", "dlc2_ui_mp", "ending", "estate", "favela", "favela_escape", "gulag", "invasion",
+        "iw4_credits", "mp_afghan", "mp_afghan_load", "mp_boneyard", "mp_boneyard_load", "mp_brecourt",
+        "mp_brecourt_load", "mp_checkpoint", "mp_checkpoint_load", "mp_derail", "mp_derail_load", "mp_estate",
+        "mp_estate_load", "mp_favela", "mp_favela_load", "mp_highrise", "mp_highrise_load", "mp_invasion",
+        "mp_invasion_load", "mp_nightshift", "mp_nightshift_load", "mp_quarry", "mp_quarry_load", "mp_rundown",
+        "mp_rundown_load", "mp_rust", "mp_rust_load", "mp_subbase", "mp_subbase_load", "mp_terminal",
+        "mp_terminal_load", "mp_underpass", "mp_underpass_load", "oilrig", "patch_mp", "roadkill",
+        "so_ac130_co_hunted", "so_assault_oilrig", "so_bridge", "so_chopper_invasion", "so_crossing_so_bridge",
+        "so_defense_invasion", "so_defuse_favela_escape", "so_demo_so_bridge", "so_download_arcadia",
+        "so_escape_airport", "so_forest_contingency", "so_ghillies", "so_hidden_so_ghillies",
+        "so_intel_boneyard", "so_juggernauts_favela", "so_killspree_favela", "so_killspree_invasion",
+        "so_killspree_trainer", "so_rooftop_contingency", "so_sabotage_cliffhanger", "so_showers_gulag",
+        "so_snowrace1_cliffhanger", "so_snowrace2_cliffhanger", "so_takeover_estate", "so_takeover_oilrig",
+        "trainer", "ui", "ui_mp",
+    };
+
+    bool OwnFastfile(const fs::path& file)
+    {
+        const std::string stem = Utf8(file.stem());
+        return std::find(std::begin(kOwnFastfiles), std::end(kOwnFastfiles), stem) != std::end(kOwnFastfiles);
+    }
 }
 
-std::vector<fs::path> vk::shaders::GameFiles(const fs::path& game)
+std::vector<fs::path> vk::shaders::GameFiles(const fs::path& game, bool customMaps)
 {
     std::vector<fs::path> files;
     std::error_code ec;
     for (const auto& entry : fs::directory_iterator(game, ec))
-        if (entry.path().extension() == ".ff") files.push_back(entry.path());
+        if (entry.path().extension() == ".ff" && (customMaps || OwnFastfile(entry.path()))) files.push_back(entry.path());
     std::sort(files.begin(), files.end());
     for (const char* executable : { "default.xex", "default_mp.xex" }) files.push_back(game / executable);
     return files;
 }
 
-std::string vk::shaders::Fingerprint(void* physical, uint32_t scale, const fs::path& game)
+std::string vk::shaders::Fingerprint(void* physical, uint32_t scale, const fs::path& game, bool customMaps)
 {
     std::string text = std::string("build ") + kBuildId + "\n";
 #ifdef MW2_HAVE_VULKAN
@@ -77,7 +105,7 @@ std::string vk::shaders::Fingerprint(void* physical, uint32_t scale, const fs::p
 #endif
     text += "scale " + std::to_string(scale) + "\n";
     // A file another of the same name and size replaced has another time.
-    for (const fs::path& file : GameFiles(game))
+    for (const fs::path& file : GameFiles(game, customMaps))
     {
         std::error_code ec;
         const uintmax_t size = fs::file_size(file, ec);

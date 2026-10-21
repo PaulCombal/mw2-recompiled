@@ -407,7 +407,7 @@ a player's copy is played only with every shader of the game already in the
 pipeline cache it starts with, `shaders/pipelines.bin`. The launcher fills it
 (`launcher/precompile.cpp`, `mw2-launcher --compile-shaders` from a terminal):
 
-- **The list.** `launcher/zone/` walks every fastfile in `game/` the way the
+- **The list.** `launcher/zone/` walks the fastfiles in `game/` the way the
   game's loader streams it, using the OpenAssetTools zone definitions in
   `launcher/zone/defs/`. Every pixel shader is listed as it is loaded. Every
   vertex shader is listed as the title binds it: the pass's declaration, the
@@ -419,7 +419,10 @@ pipeline cache it starts with, `shaders/pipelines.bin`. The launcher fills it
   `vertexShader`, which `sub_821BBC08` loads alone. Those stay as made and are
   never drawn. The executables add D3D's own shaders, the ones sent with
   `IM_LOAD_IMMEDIATE` and the image pool's memory move, bound to the
-  declaration the title made for it. The list is 15,044 shaders.
+  declaration the title made for it. The list is 15,044 shaders. The
+  fastfiles are the disc's and the update's, by name, unless custom maps are
+  on (`MW2_CUSTOM_MAPS`): then every one in `game/`, as the multiplayer loads
+  them then.
 - **The build.** Each one is translated and compiled on every core as the
   game would (`vk::shaders::Build`): same translator, layout, depth format and
   scale, on the device the game's window would draw on. The pass reuses the

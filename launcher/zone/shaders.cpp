@@ -1,35 +1,17 @@
 #include "shaders.h"
+#include "rules.h"
 #include "walker.h"
 #include "vertex_binding.h"
 #include "../../runtime/gpu/vulkan/renderer.h"
 
-#include <mutex>
 #include <span>
 #include <set>
 #include <unordered_map>
-
-// defs/, as CMake embeds it (launcher_zone_defs.cpp).
-struct ZoneDefinition
-{
-    const char* name;
-    const unsigned char* data;
-    unsigned size;
-};
-extern const ZoneDefinition kZoneDefinitions[];
-extern const unsigned kZoneDefinitionCount;
 
 namespace zone
 {
     namespace
     {
-        std::string Definition(const std::string& name)
-        {
-            for (unsigned k = 0; k < kZoneDefinitionCount; k++)
-                if (name == kZoneDefinitions[k].name)
-                    return std::string(reinterpret_cast<const char*>(kZoneDefinitions[k].data), kZoneDefinitions[k].size);
-            throw Error("the launcher has no definition file " + name);
-        }
-
         uint32_t Word(const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3]; }
 
         // The microcode a shader header describes: the table its seventh word
@@ -61,24 +43,9 @@ namespace zone
         }
     }
 
-    const Schema& Rules()
-    {
-        static std::once_flag once;
-        static std::unique_ptr<Schema> schema;
-        std::call_once(once, [] {
-            // The rules include "XAssets/<asset>.txt"; they are in assets/ here.
-            schema = std::make_unique<Schema>(Definition("iw4_assets.h"), Definition("commands.txt"),
-                                              [](const std::string& name) {
-                                                  const size_t slash = name.rfind('/');
-                                                  return Definition("assets/" + name.substr(slash + 1));
-                                              });
-        });
-        return *schema;
-    }
-
     std::vector<Shader> Shaders(const std::vector<uint8_t>& zone, const BindTables& tables, BindCounts* counts)
     {
-        const Schema& s = Rules();
+        const Schema& s = XboxRules();
         auto member = [&](const char* type, const char* name) {
             const MemberInfo* m = s.infos.at(type)->Find(name);
             if (!m) throw Error(std::string("the rules have no ") + type + "::" + name);

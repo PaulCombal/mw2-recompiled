@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <string>
 
 namespace
@@ -100,8 +101,34 @@ void settings::SetMsaa(int samples)
     Save();
 }
 
+bool settings::CustomMaps()
+{
+    const auto kept = g_kept.find("MW2_CUSTOM_MAPS");
+    return kept != g_kept.end() && !kept->second.empty() && kept->second != "0";
+}
+
+void settings::SetCustomMaps(bool on)
+{
+    // Off is the game's own way: the line goes.
+    if (on) g_kept["MW2_CUSTOM_MAPS"] = "1";
+    else g_kept.erase("MW2_CUSTOM_MAPS");
+    Save();
+}
+
 bool settings::Sounds()
 {
     const auto kept = g_kept.find("MW2_LAUNCHER_SOUNDS");
     return kept == g_kept.end() || kept->second != "0";
+}
+
+std::optional<std::string> settings::PcGame()
+{
+    const auto kept = g_kept.find("MW2_PC_GAME");
+    return kept == g_kept.end() ? std::nullopt : std::optional(kept->second);
+}
+
+void settings::SetPcGame(const std::string& folder)
+{
+    g_kept["MW2_PC_GAME"] = folder;
+    Save();
 }

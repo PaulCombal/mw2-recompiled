@@ -172,7 +172,7 @@
 821AEFF8  DB_SetXAssetName
 821AFCB8  DB_LoadXFile
 821DE528  DB_LinkXAssetEntry1
-821E1C60  DB_LoadXAssets
+821E1C60  DB_LoadXAssets                # (XZoneInfo* zones, count, sync); XZoneInfo { name, allocFlags, freeFlags }
 821E25B0  DB_FindXAssetHeader
 8221B238  GScr_AddFieldsForClient
 8221B290  Scr_SetClientField
@@ -195,6 +195,7 @@
 8227F370  Com_PrintMessage
 8227F448  Com_Printf
 822804F8  Com_InitDvars
+82280C78  Com_LoadUiFastFile            # dlc2_ui_mp, dlc1_ui_mp, ui_mp in one DB_LoadXAssets, alloc flag 2
 822963C0  Scr_RegisterFunction
 8229F2C8  Scr_AddSourceBuffer
 822A36E8  Scr_ShutdownSystem

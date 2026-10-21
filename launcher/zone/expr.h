@@ -1,9 +1,9 @@
 #pragma once
 // The integer expressions of the definitions: array sizes and enum values in
 // the header, counts and conditions in the loading rules. OpenAssetTools'
-// generator wrote them as C; pc2xbox360mw2ools evaluates them as Python, and
-// these follow Python's precedence and its && / || returning an operand, so a
-// rule means here what it means there.
+// generator wrote them as C, but they are read otherwise, as the rules were
+// written to be read: `!` binds looser than a comparison and `&`, `^`, `|`
+// tighter, and && / || give one of their operands rather than 0 or 1.
 #include "defs.h"
 
 #include <functional>

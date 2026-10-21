@@ -34,6 +34,31 @@ namespace zone
         std::vector<int> mods;         // outermost first: kPointer or an array size
         int bits = -1;                 // a bitfield's width
         uint32_t offset = 0, bitpos = 0, size = 0, align = 1;
+
+        // A pointer (T* x, T (*x)[n]), and one somewhere in its modifiers
+        // (T* x[n] too).
+        bool IsPointer() const { return !mods.empty() && mods[0] == kPointer; }
+        bool HasPointer() const
+        {
+            for (int m : mods)
+                if (m == kPointer) return true;
+            return false;
+        }
+        // Its array sizes, and how many elements they make.
+        std::vector<int> Dims() const
+        {
+            std::vector<int> d;
+            for (int m : mods)
+                if (m != kPointer) d.push_back(m);
+            return d;
+        }
+        size_t Elements() const
+        {
+            size_t n = 1;
+            for (int m : mods)
+                if (m != kPointer) n *= size_t(m);
+            return n;
+        }
     };
 
     struct Type
@@ -48,6 +73,15 @@ namespace zone
         Type* parent = nullptr;
 
         bool Compound() const { return kind == Struct || kind == Union || kind == Typedef; }
+        // A typedef around a struct (GfxCellTree128 = GfxCellTree, aligned)
+        // is the struct itself.
+        const Type* Unwrapped() const
+        {
+            const Type* t = this;
+            while (t->kind == Typedef && t->members.size() == 1 && t->members[0].type->Compound() && t->members[0].mods.empty())
+                t = t->members[0].type;
+            return t;
+        }
     };
 
     class Defs

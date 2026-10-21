@@ -32,6 +32,7 @@ void vk::renderer::Idle() {}
 #include "../memory_watch.h"
 #include "../../guest_memory.h"
 #include "../../crash.h"
+#include "../../env.h"
 #include "../../log.h"
 #include "../../report.h"
 
@@ -148,7 +149,8 @@ bool vk::renderer::Initialise()
     if (g_compiled.checked)
     {
         g_compiled.device = vk::pipeline::DeviceId(g.physical);
-        const std::string fingerprint = vk::shaders::Fingerprint(g.physical, g.scale, g_compiled.gameFolder);
+        const std::string fingerprint = vk::shaders::Fingerprint(g.physical, g.scale, g_compiled.gameFolder,
+                                                                   env::Flag("MW2_CUSTOM_MAPS"));
         g_compiled.current = vk::shaders::Compiled(fingerprint, &g_compiled.why);
         const vk::shaders::Marker marker = vk::shaders::ReadMarker();
         if (g_compiled.current && marker.shaders && !vk::pipeline::CacheLoaded())
