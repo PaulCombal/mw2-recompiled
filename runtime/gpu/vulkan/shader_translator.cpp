@@ -2021,56 +2021,91 @@ namespace
         // counter, each control flow instruction a case:
         //
         //   loop { switch (pc) { case 0: ...; pc = 1; ... default: break; } }
-        const uint32_t caseCount = uint32_t(m_flow.size());
-        Id header = m_module.Allocate();
-        Id dispatch = m_module.Allocate();
-        // The switch needs a merge block of its own: a selection construct may not
-        // merge at the loop's continue target. This one exists only to branch on.
-        Id caseMerge = m_module.Allocate();
-        Id continueTarget = m_module.Allocate();
-        Id merge = m_module.Allocate();
-        // The default needs its own block for the same reason. It breaks out of
-        // the loop, which is how a shader ends.
-        Id defaultBlock = m_module.Allocate();
-        std::vector<Id> blocks(caseCount);
-        for (uint32_t i = 0; i < caseCount; i++) blocks[i] = m_module.Allocate();
-
-        Module::Emit(m_module.Code(), Op::Branch, { header });
-        Module::Emit(m_module.Code(), Op::Label, { header });
-        Module::Emit(m_module.Code(), Op::LoopMerge, { merge, continueTarget, kLoopControlNone });
-        Module::Emit(m_module.Code(), Op::Branch, { dispatch });
-
-        Module::Emit(m_module.Code(), Op::Label, { dispatch });
-        Id current = Emit(Op::Load, m_uint, { m_pc });
-        Module::Emit(m_module.Code(), Op::SelectionMerge, { caseMerge, kSelectionControlNone });
+        //
+        // Most programs have no jumps, calls or loops (nine in ten of the
+        // game's pixel shaders, every vertex shader). The counter then only
+        // ever steps through the cases in order, and the list ends at the
+        // first End (DecodeControlFlow stops there), so those are emitted
+        // straight-line instead. Drivers do not undo the loop themselves --
+        // RADV keeps the switch, and every register live across it -- so the
+        // straight-line form needs fewer registers and instructions. Each case
+        // still stores the next pc, unread.
+        bool straight = true;
+        for (const auto& cf : m_flow)
+            switch (cf.Opcode())
+            {
+            case ControlFlowOpcode::LoopStart:
+            case ControlFlowOpcode::LoopEnd:
+            case ControlFlowOpcode::CondCall:
+            case ControlFlowOpcode::Return:
+            case ControlFlowOpcode::CondJmp:
+                straight = false;
+                break;
+            default:
+                break;
+            }
+        if (straight)
         {
-            std::vector<uint32_t> operands{ current, defaultBlock };
+            for (uint32_t i = 0; i < uint32_t(m_flow.size()); i++)
+            {
+                EmitControlFlow(m_flow[i], i);
+                if (!m_result.error.empty()) return;
+            }
+        }
+        else
+        {
+            const uint32_t caseCount = uint32_t(m_flow.size());
+            Id header = m_module.Allocate();
+            Id dispatch = m_module.Allocate();
+            // The switch needs a merge block of its own: a selection construct
+            // may not merge at the loop's continue target. This one exists only
+            // to branch on.
+            Id caseMerge = m_module.Allocate();
+            Id continueTarget = m_module.Allocate();
+            Id merge = m_module.Allocate();
+            // The default needs its own block for the same reason. It breaks
+            // out of the loop, which is how a shader ends.
+            Id defaultBlock = m_module.Allocate();
+            std::vector<Id> blocks(caseCount);
+            for (uint32_t i = 0; i < caseCount; i++) blocks[i] = m_module.Allocate();
+
+            Module::Emit(m_module.Code(), Op::Branch, { header });
+            Module::Emit(m_module.Code(), Op::Label, { header });
+            Module::Emit(m_module.Code(), Op::LoopMerge, { merge, continueTarget, kLoopControlNone });
+            Module::Emit(m_module.Code(), Op::Branch, { dispatch });
+
+            Module::Emit(m_module.Code(), Op::Label, { dispatch });
+            Id current = Emit(Op::Load, m_uint, { m_pc });
+            Module::Emit(m_module.Code(), Op::SelectionMerge, { caseMerge, kSelectionControlNone });
+            {
+                std::vector<uint32_t> operands{ current, defaultBlock };
+                for (uint32_t i = 0; i < caseCount; i++)
+                {
+                    operands.push_back(i);
+                    operands.push_back(blocks[i]);
+                }
+                auto& code = m_module.Code();
+                code.push_back(Head(Op::Switch, uint32_t(operands.size()) + 1));
+                code.insert(code.end(), operands.begin(), operands.end());
+            }
+
             for (uint32_t i = 0; i < caseCount; i++)
             {
-                operands.push_back(i);
-                operands.push_back(blocks[i]);
+                Module::Emit(m_module.Code(), Op::Label, { blocks[i] });
+                EmitControlFlow(m_flow[i], i);
+                if (!m_result.error.empty()) return;
+                Module::Emit(m_module.Code(), Op::Branch, { caseMerge });
             }
-            auto& code = m_module.Code();
-            code.push_back(Head(Op::Switch, uint32_t(operands.size()) + 1));
-            code.insert(code.end(), operands.begin(), operands.end());
+
+            Module::Emit(m_module.Code(), Op::Label, { defaultBlock });
+            Module::Emit(m_module.Code(), Op::Branch, { merge });
+
+            Module::Emit(m_module.Code(), Op::Label, { caseMerge });
+            Module::Emit(m_module.Code(), Op::Branch, { continueTarget });
+            Module::Emit(m_module.Code(), Op::Label, { continueTarget });
+            Module::Emit(m_module.Code(), Op::Branch, { header });
+            Module::Emit(m_module.Code(), Op::Label, { merge });
         }
-
-        for (uint32_t i = 0; i < caseCount; i++)
-        {
-            Module::Emit(m_module.Code(), Op::Label, { blocks[i] });
-            EmitControlFlow(m_flow[i], i);
-            if (!m_result.error.empty()) return;
-            Module::Emit(m_module.Code(), Op::Branch, { caseMerge });
-        }
-
-        Module::Emit(m_module.Code(), Op::Label, { defaultBlock });
-        Module::Emit(m_module.Code(), Op::Branch, { merge });
-
-        Module::Emit(m_module.Code(), Op::Label, { caseMerge });
-        Module::Emit(m_module.Code(), Op::Branch, { continueTarget });
-        Module::Emit(m_module.Code(), Op::Label, { continueTarget });
-        Module::Emit(m_module.Code(), Op::Branch, { header });
-        Module::Emit(m_module.Code(), Op::Label, { merge });
 
         // The alpha test, folded into the same discard. The three comparison
         // results are exactly the bits of the console's compare function --
@@ -2230,7 +2265,8 @@ namespace
         }
 
         // The discard any kill asked for, now that OpKill can terminate a block
-        // without breaking the switch.
+        // without breaking the switch. A straight-line program defers it too,
+        // so a memory export after a kill behaves the same in both forms.
         if (m_haveKill && m_type == shader::Type::Pixel)
         {
             Id discard = m_module.Allocate();

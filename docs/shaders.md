@@ -148,8 +148,9 @@ push constants
 ### Control flow
 
 Xenos jumps, calls and loops move the sequencer's program counter arbitrarily.
-Rather than recover structured control flow, the module runs one loop whose body
-is a switch on the counter, one case per control-flow instruction:
+Rather than recover structured control flow, a program that has any of them
+runs one loop whose body is a switch on the counter, one case per control-flow
+instruction:
 
 ```
 loop { switch (pc) { case 0: ...; pc = 1; ... default: break out; } }
@@ -162,6 +163,15 @@ SPIR-V structured-control-flow rules require two extra blocks: the switch's
 merge block may not be the loop's continue target, and the default target may
 not be the loop's merge block, so each gets a block of its own that only
 branches.
+
+A program with no jumps, calls or loops (`cond_jmp`, `cond_call`, `return`,
+`loop_start`, `loop_end`) gets no loop and no switch: its counter can only step
+through the instructions in order up to the first `*_end`, where the decoded
+list ends, so they are emitted one after the other. That is nine in ten of the
+game's pixel shaders and every vertex shader. The driver does not remove the
+loop itself — RADV keeps the switch, and every register live across it — so
+the straight-line form compiles to fewer registers and instructions and more
+waves per SIMD, and compiles faster.
 
 Sequencer state — pc, aL, loop and call stacks, the predicate, the address a
 full vertex fetch computed for the mini fetches after it, the previous scalar
@@ -189,7 +199,8 @@ comparisons test one component against zero.
 
 Kills are deferred: the discard is recorded and performed after the sequencer
 finishes, because `OpKill` would terminate a block inside the dispatch switch.
-The difference is observable only to a shader that exports to memory after
+A straight-line program defers them too, so both forms behave alike. The
+difference is observable only to a shader that exports to memory after
 killing.
 
 ### Exports
