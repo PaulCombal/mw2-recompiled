@@ -11,15 +11,31 @@ refs.discard('PPC_CALL_INDIRECT_FUNC')
 allnames=defs|refs
 HEADER = """#pragma once
 
-// With MW2_TRACE_INDIRECT the generated code reports the guest address of any
-// indirect call whose function-table slot is empty, instead of jumping to null.
+// An indirect call finds its host function in a table with one slot per
+// halfword of the code section, at PPC_LOOKUP_FUNC. A guest address outside
+// the code section indexes past that table, into memory the guest can write,
+// and the call would jump to whatever host address the guest stored there. So
+// every indirect call is bounded to the code section first; outside it, as
+// for an address Xenia cannot resolve to a function, the process reports the
+// address and ends. Inside it, with MW2_TRACE_INDIRECT the generated code also
+// reports a slot that is empty, instead of jumping to null.
+extern "C" [[noreturn]] void MW2ReportBadIndirectCall(unsigned int guestAddress);
 #ifdef MW2_TRACE_INDIRECT
-extern "C" void MW2ReportBadIndirectCall(unsigned int guestAddress);
 #define PPC_CALL_INDIRECT_FUNC(x) \\
     do { \\
-        PPCFunc* mw2_target = PPC_LOOKUP_FUNC(base, x); \\
-        if (!mw2_target) MW2ReportBadIndirectCall((unsigned int)(x)); \\
+        const uint32_t mw2_address = uint32_t(x); \\
+        PPCFunc* mw2_target = mw2_address - uint32_t(PPC_CODE_BASE) < uint32_t(PPC_CODE_SIZE) \\
+            ? PPC_LOOKUP_FUNC(base, mw2_address) : nullptr; \\
+        if (!mw2_target) MW2ReportBadIndirectCall(mw2_address); \\
         mw2_target(ctx, base); \\
+    } while (0)
+#else
+#define PPC_CALL_INDIRECT_FUNC(x) \\
+    do { \\
+        const uint32_t mw2_address = uint32_t(x); \\
+        if (mw2_address - uint32_t(PPC_CODE_BASE) >= uint32_t(PPC_CODE_SIZE)) \\
+            MW2ReportBadIndirectCall(mw2_address); \\
+        (PPC_LOOKUP_FUNC(base, mw2_address))(ctx, base); \\
     } while (0)
 #endif
 

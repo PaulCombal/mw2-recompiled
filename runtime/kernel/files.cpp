@@ -100,6 +100,41 @@ namespace
         return std::string(reinterpret_cast<const char*>(guest::Base() + ptr), len);
     }
 
+    // A path below a device, as the object manager reads it (Xenia's
+    // canonicalize_path): "." names the folder it is in, and ".." takes back the
+    // name before it, so no path climbs above its device's root, here the game
+    // folder or a save package. A guest path can carry text from the network --
+    // the map a host picks names a fastfile -- so this is what keeps it inside.
+    // Leading and doubled separators go too.
+    std::string Canonical(const std::string& path)
+    {
+        std::vector<std::string> parts;
+        std::string component;
+        auto take = [&]
+        {
+            if (component == "..") { if (!parts.empty()) parts.pop_back(); }
+            else if (!component.empty() && component != ".") parts.push_back(component);
+            component.clear();
+        };
+        for (char c : path)
+        {
+            if (c == '\\' || c == '/') take();
+            else component += c;
+        }
+        take();
+        std::string out;
+        for (const auto& part : parts) { if (!out.empty()) out += '\\'; out += part; }
+        return out;
+    }
+
+    // A component the host would not read as one name below the folder it is
+    // joined to. On Windows a drive ("C:") replaces the whole path it is
+    // appended to; elsewhere every component without a separator is a name.
+    bool IsHostName(const std::string& component)
+    {
+        return !fs::path(component).has_root_path();
+    }
+
     // One path component at a time.
     bool ResolveInsensitive(const fs::path& root, const std::string& relative, fs::path& out)
     {
@@ -108,6 +143,7 @@ namespace
         auto step = [&](const std::string& name) -> bool
         {
             if (name.empty() || name == ".") return true;
+            if (!IsHostName(name)) return false;
             fs::path direct = current / name;
             std::error_code ec;
             if (fs::exists(direct, ec)) { current = direct; return true; }
@@ -155,8 +191,7 @@ namespace
             device = Lower(p.substr(8, slash == std::string::npos ? slash : slash - 8));
             p = (slash == std::string::npos) ? std::string() : p.substr(slash + 1);
         }
-        while (!p.empty() && (p.front() == '\\' || p.front() == '/')) p.erase(p.begin());
-        relative = p;
+        relative = Canonical(p);
     }
 
     // The mount table the content layer fills in. Everything not in it is the
@@ -175,18 +210,25 @@ namespace
 
     // Where a name that is not there yet would go. Only ever used under a mount,
     // so there is no case-insensitive match to make: this name is the one being
-    // created.
-    fs::path HostPath(const fs::path& root, const std::string& relative)
+    // created. False when a component is not a name the host can create.
+    bool HostPath(const fs::path& root, const std::string& relative, fs::path& out)
     {
-        fs::path out = root;
+        out = root;
         std::string component;
+        auto take = [&]
+        {
+            if (component.empty()) return true;
+            if (!IsHostName(component)) return false;
+            out /= component;
+            component.clear();
+            return true;
+        };
         for (char c : relative)
         {
-            if (c == '\\' || c == '/') { if (!component.empty()) out /= component; component.clear(); }
+            if (c == '\\' || c == '/') { if (!take()) return false; }
             else component += c;
         }
-        if (!component.empty()) out /= component;
-        return out;
+        return take();
     }
 
     std::mutex g_missingLock;
@@ -241,12 +283,12 @@ namespace
             // to make it: the disc cannot be written to, and a disposition that
             // only opens does not create.
             if (relative.empty() || !writable ||
-                disposition == FILE_OPEN || disposition == FILE_OVERWRITE)
+                disposition == FILE_OPEN || disposition == FILE_OVERWRITE ||
+                !HostPath(root, relative, resolved))
             {
                 NoteMissing(guestPath);
                 return X_STATUS_OBJECT_NAME_NOT_FOUND;
             }
-            resolved = HostPath(root, relative);
         }
         else if (disposition == FILE_CREATE)
         {

@@ -321,8 +321,11 @@ and a backtrace. The recompiled functions are ordinary `sub_XXXXXXXX` symbols
 stack; on Windows frames are printed as `exe+offset` for `llvm-symbolizer`. A
 `SIGTRAP` is a guest trap instruction, which IW4 uses for its asserts. A
 `SIGFPE` is an integer divide by zero whose guarding trap the recompiler drops.
-With `MW2_TRACE_INDIRECT` (on by default), an indirect call to an address with
-no recompiled function is reported instead of jumping to null.
+An indirect call to an address outside the code section is reported, and ends
+the process, instead of reading past the function table
+([security.md](security.md)). With `MW2_TRACE_INDIRECT` (on by default), so is
+one to an address inside it with no recompiled function, instead of jumping to
+null.
 
 **The write watch** tells the GPU side which pages of physical memory the
 title has written. A page the GPU reads from is made read-only in both windows;

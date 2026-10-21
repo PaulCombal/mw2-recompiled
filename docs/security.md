@@ -59,12 +59,15 @@ The sender columns:
 |---|---|---|
 | An integer divide by zero, or the one signed divide that overflows, ends the process: the recompiler emitted the host's divide, which traps, where the console's does not. Every guest divide now gives 0 in those cases, as Xenia's does | anyone who can choose a divisor | `patches/xenonrecomp-mw2.patch` (`PPCDivide` in `XenonUtils/ppc_context.h`) |
 | The Steam lobby's `connect` line goes to the console, so text after a command separator runs as console commands. Only a line of the exact shape a host advertises is accepted | lobby owner | `runtime/online/service.cpp` (`IsConnectLine`) |
+| A guest path with `..` in it reaches files above the game folder or the save package, and a map name a host picks is a guest path (it names a fastfile). Paths are read the object manager's way, as Xenia does: `..` takes back the name before it and never climbs above the device; a component the host would read as a drive is not found | host, partner | `runtime/kernel/files.cpp` (`Canonical`) |
+| An indirect call to an address outside the code section reads past the function table, into memory the guest writes, and jumps to the host address it finds there. Every indirect call is bounded to the code section; outside it the address is reported and the process ends, as for any call with no recompiled function | anyone who can corrupt a guest function pointer | `tools/genshared.py` (`PPC_CALL_INDIRECT_FUNC`) |
+| A disc image's file names are used as names in the game folder, so `..\x.ff` or a drive in a name writes outside it. A name holding a separator or a colon is skipped, and the root directory's size is compared with the image before it is read | whoever made the disc image | `launcher/disc.cpp` (`IsFileName`) |
 
 ## Which builds carry them
 
 The default build (title update 6) carries every fix. The disc-version build
 (`VERSION=tu0`, [building.md](building.md#the-disc-version)) carries the
-multiplayer joinParty fix and the two fixes outside the game code. Its address
+multiplayer joinParty fix and the fixes outside the game code. Its address
 table (`runtime/title.h`) has no entries for the other hooks, so they compile
 out.
 

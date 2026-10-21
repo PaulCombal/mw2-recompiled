@@ -136,7 +136,7 @@ The switches are in [switches.md](switches.md).
 | `MW2_VERSION` | `tu6` | which version of it: `tu6`, or `tu0` for the disc's (defines `MW2_VERSION_TU0`) |
 | `MW2_DIAGNOSTICS` | `ON` | traces, dumps, statistics, end-of-run reports, the stutter detector and pacing timeline, the flash hunt, the write watchpoint and the headless harness (walker, input script, run deadlines, watchdog); see `runtime/diagnostics.h`. `OFF` unsets every diagnostic switch whatever the environment says |
 | `MW2_LOGGING` | `ON` | `OFF` compiles out every log line, warnings included |
-| `MW2_TRACE_INDIRECT` | `ON` | the generated code checks an indirect call's target and reports a missing one instead of jumping to null |
+| `MW2_TRACE_INDIRECT` | `ON` | the generated code checks an indirect call's target and reports a missing one instead of jumping to null; a target outside the code section is reported in every build |
 | `MW2_ONLINE` | `none` | the online service: `none`, `lan`, or `steam` (Steam, then lan) |
 | `MW2_PORTABLE` | `OFF` | links libstdc++ and libgcc statically (Linux) |
 | `MW2_USE_SDL` | `ON` | SDL3 for the window, input and audio |

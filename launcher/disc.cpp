@@ -37,6 +37,15 @@ namespace
             uint8_t volume[kSector];
             if (!ReadAt(base_ + 32 * kSector, volume, kSector)) { error = "the disc image is cut short"; return false; }
             const uint32_t rootSector = Le32(volume + 0x14), rootSize = Le32(volume + 0x18);
+            // Sized from the image's own bytes: compared with the image before
+            // anything is allocated for it.
+            std::error_code ec;
+            const uint64_t imageSize = fs::file_size(path, ec);
+            if (ec || base_ + rootSector * kSector + rootSize > imageSize)
+            {
+                error = "the disc image is cut short";
+                return false;
+            }
             std::vector<uint8_t> root(rootSize);
             if (!ReadAt(base_ + rootSector * kSector, root.data(), root.size()))
             {
@@ -68,6 +77,17 @@ namespace
             return size_t(file_.gcount()) == size;
         }
 
+        // The setup copies a disc's file to the game folder under the name the
+        // image gives it, so a name has to be one file in that folder: not a
+        // path ("..\\x.ff", "/home/x.ff"), not a drive ("C:x.ff"). An
+        // XDVDFS name never holds a separator or a colon; one that does is not
+        // from a disc, and is skipped.
+        static bool IsFileName(const std::string& name)
+        {
+            return !name.empty() && name != "." && name != ".." &&
+                   name.find_first_of(std::string("/\\:\0", 4)) == std::string::npos;
+        }
+
         // A directory is a binary tree of entries at 4-byte offsets:
         // { left u16, right u16, sector u32, size u32, attributes u8, name length u8, name }.
         // Only the root's files are kept: everything the title reads is there.
@@ -87,8 +107,9 @@ namespace
                 if (right) pending.push_back(right);
                 const uint8_t attributes = e[12], length = e[13];
                 if (attributes & 0x10 || at + 14 + length > dir.size()) continue;   // a directory
-                files_.push_back({ std::string(reinterpret_cast<const char*>(e + 14), length),
-                                   Le32(e + 8), base_ + uint64_t(Le32(e + 4)) * kSector });
+                std::string name(reinterpret_cast<const char*>(e + 14), length);
+                if (!IsFileName(name)) continue;
+                files_.push_back({ std::move(name), Le32(e + 8), base_ + uint64_t(Le32(e + 4)) * kSector });
             }
         }
 

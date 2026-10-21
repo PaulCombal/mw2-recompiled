@@ -82,7 +82,7 @@ walking to it.
 
 | switch | effect |
 |---|---|
-| `MW2_TRACE_INDIRECT` | CMake option, on by default: reports an indirect call with no recompiled target instead of jumping to null |
+| `MW2_TRACE_INDIRECT` | CMake option, on by default: reports an indirect call with no recompiled target instead of jumping to null (one outside the code section is reported in every build) |
 | `MW2_ENGINE_LOG=1` | the title's own `Com_Printf` output in the log |
 | `MW2_TRACE_ERRORS=1` | the guest call stack under every `Com_Error`; one wrapper raises every error, so the message alone does not say where it came from |
 | `MW2_TRACE_CBUF=1` | every command queued to the title's console, which shows what a menu runs |

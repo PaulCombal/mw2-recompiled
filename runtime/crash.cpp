@@ -229,7 +229,7 @@ void crash::Install()
     }
 }
 
-extern "C" void MW2ReportBadIndirectCall(unsigned int guestAddress)
+extern "C" [[noreturn]] void MW2ReportBadIndirectCall(unsigned int guestAddress)
 {
     std::fprintf(stderr, "\n[E] ---- indirect call to %08X has no recompiled function ----\n", guestAddress);
     if (guestAddress == 0)
@@ -335,7 +335,7 @@ void crash::RegisterThread(const char* name)
 const char* crash::CurrentThreadName() { return t_name; }
 void crash::UnregisterThread() {}
 
-extern "C" void MW2ReportBadIndirectCall(unsigned int guestAddress)
+extern "C" [[noreturn]] void MW2ReportBadIndirectCall(unsigned int guestAddress)
 {
     std::fprintf(stderr, "\n[E] ---- indirect call to %08X has no recompiled function ----\n", guestAddress);
     platform::PrintBacktrace("indirect call backtrace");
