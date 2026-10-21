@@ -179,6 +179,14 @@ destination address, and a texture fetch of that address binds the image.
 - The image has the size of the destination surface, exactly so on the frame's
   first resolve, because fetches normalise over the image. Each rectangle lands
   at its own offset.
+- **The surface's width is its texture's.** `RB_COPY_DEST_PITCH` gives the
+  pitch, the width rounded up to 32 texels, and a fetch normalises over its
+  own width. A 960-wide scene's quarter-size blur buffers are 240 wide in
+  256-wide surfaces, and an image as wide as the pitch stretched them: the
+  aimed sight's blur doubled, the menus' blurred backdrop slid off the right.
+  The first fetch narrower than its copy is remembered
+  (`State::fetchedWidth`), and the resolves after it make the image that
+  wide. The console's sizes never differ.
 - **A resolve that lands inside a surface started this frame** goes into that
   surface's image at the matching row, without discarding it. The sun shadow
   map is one 1024x2048 surface filled by two resolves.
@@ -238,7 +246,70 @@ multiplication:
   slope is depth per pixel, and the pixels are smaller.
 
 The launcher's RESOLUTION entry keeps the scale in `.env` as
-`MW2_SCALE=<n>` ([switches.md](switches.md#the-settings-file)).
+`MW2_SCALE=<n>`, with the title's frame below
+([switches.md](switches.md#the-settings-file)).
+
+## The title's frame and the picture's shape
+
+`MW2_RENDER=<w>x<h>` (`runtime/render_size.cpp`) gives the title another frame
+than the console's 1280x720, and so another shape: 960x600 is 16:10, and at
+`MW2_SCALE=2` the window gets 1920x1200. The present images are the frame
+times the scale; the window letterboxes them as before.
+
+**Where the title takes its sizes.** Not from the video mode: `R_VideoSizes`
+writes a 1024x600 scene and a 1280x720 frame whenever the mode is high
+definition (896x576 and the mode's own size, clamped to 640x480-1280x720,
+otherwise). `R_SetVidConfig` makes the `vidConfig` of them, with the
+picture's aspect 16/9 or 4/3 by the widescreen flag alone, and the pixel aspects
+`h * aspect / w` of the scene and the frame. Everything after reads that
+`vidConfig`: D3D's back buffer and render targets, the views' projections,
+the HUD's and the menus' placement, the cinematics' letterbox. It is the PC
+game's engine, which draws at any shape. The hooks write the sizes after
+`R_VideoSizes`, and after `R_SetVidConfig` the aspect, the frame's width over
+its height, with square pixels. With the console's frame they do nothing.
+
+**The sizes EDRAM allows** (`runtime/render_size.h`). EDRAM is 2048 tiles of
+80x16 samples. The title puts a surface's depth at the top and its colour
+below it: the console's scene, 2x and 1040 wide, is colour at tile 98 and depth
+at 1073, 975 tiles each. So:
+
+- the frame, drawn at 1x, fits when its colour and depth together take 2048
+  tiles or fewer. The frames taken are 640x360 to 1280x800, a whole number of
+  16 pixels wide and 4 tall.
+- the scene, drawn at the console's 2x, is given no more tiles than the
+  console's takes, 1950: what the title keeps beside it is not known. It is the
+  frame itself when that fits, else the largest of the frame's shape that does,
+  16 pixels narrower at a time: 960x600 for a 1280x800 frame. 1024x640, 2080
+  tiles, would not fit.
+
+The title's own count of samples stays 2, the console's: `MW2_MSAA` and
+`MW2_NO_MSAA` act on the surfaces the title multisamples, and a title drawing
+at 1x would leave them none.
+
+**Pictures made for 16:9.** A cinematic is letterboxed by the title itself:
+`R_DrawCinematicLetterboxed` draws the 16:9 video whole, as wide as the frame,
+between black bars. A 2D picture over the whole frame (a loading screen, a
+menu's background, a full-screen overlay) would be stretched; it covers the
+frame instead: the hook on `R_DrawStretchPic` makes it as large as the frame
+and cuts what spills over, its sides on a 16:10 frame. It does so for a
+picture whose every texture was loaded from a file
+(`IMG_CATEGORY_LOAD_FROM_FILE`). A copy of the screen (a render target), which
+the menus blur behind them, is drawn over the frame too, and is left whole.
+
+The run's log names each material the first time it is cut ("a picture covers
+the frame (mw2_main_background)").
+
+**The menus' own width.** The menus place most things by their alignment,
+which follows the `vidConfig`, but some lay out across the screen by
+expression, taking its width in their units as `640 + 213.333 *
+dvarbool(widescreen)`: 640 at 4:3, 853.33 at 16:9. The experience bar's
+width is one. Before the evaluator (`UI_EvaluateStatement`) runs a
+statement, a constant it multiplies `dvarbool(widescreen)` by, on either
+side, is scaled by the share of the way from 4:3 to 16:9 the picture's shape
+is: 0.6 at 16:10, so the width is 768. Each constant is scaled once; one a
+zone loads again is scaled again. `widescreen` itself stays 1: the menus also
+test it (the loading screen shows its bar `when( dvarbool(widescreen) )`), and
+a test makes a whole number of what it is given.
 
 ## Multisampling
 

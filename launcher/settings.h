@@ -15,10 +15,32 @@ namespace settings
     bool Fullscreen();
     void SetFullscreen(bool on);
 
-    // MW2_SCALE: how many times the console's 1280x720 the game draws at.
+    // MW2_SCALE: how many times the title's frame the game draws at.
     constexpr int kMaxScale = 3;
     int Scale();
-    void SetScale(int scale);
+
+    // The picture's shape and the size the game draws at (ASPECT RATIO and
+    // RESOLUTION), each resolution the title's frame times a scale: MW2_RENDER,
+    // the frame (runtime/render_size.h), unset for the console's 1280x720, and
+    // MW2_SCALE. Each shape has the same rows, and changing the shape keeps the row.
+    struct Resolution
+    {
+        const char* name;            // 1920x1200
+        unsigned width, height;      // the title's frame
+        int scale;
+    };
+    enum class Ratio { Wide, Wider };   // 16:9, the console's, and 16:10
+    constexpr int kResolutions = 4;
+    constexpr Resolution kResolutionTable[2][kResolutions] = {
+        { { "1280x720", 1280, 720, 1 }, { "1920x1080", 960, 540, 2 }, { "2560x1440", 1280, 720, 2 }, { "3840x2160", 1280, 720, 3 } },
+        { { "1280x800", 1280, 800, 1 }, { "1920x1200", 960, 600, 2 }, { "2560x1600", 1280, 800, 2 }, { "3840x2400", 1280, 800, 3 } },
+    };
+    // The kept ones; a frame and scale written by hand that are no row are
+    // shown as the row of their shape with their scale, or the first.
+    Ratio AspectRatio();
+    int ResolutionRow();
+    const Resolution& CurrentResolution();
+    void SetResolution(Ratio ratio, int row);
 
     // MW2_FPS_LIMIT: how many frames a second the game draws at most; 60 is
     // the console's own pacing and 0 no limit. HasFpsLimit is false until one

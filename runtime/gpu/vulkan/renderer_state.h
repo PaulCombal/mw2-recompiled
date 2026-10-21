@@ -390,10 +390,18 @@ namespace vk::renderer::detail
         // The frame each image last held, which the window must have taken
         // before the image is drawn over.
         uint64_t presentSerial[kPresentImages]{};
-        // The present images' size: the title's frame times the scale.
-        uint32_t presentWidth = 1280, presentHeight = 720;
+        // The present images' size: the title's frame times the scale (Initialise).
+        uint32_t presentWidth = 0, presentHeight = 0;
 
         std::unordered_map<uint32_t, ResolveRing> resolvedTo;
+        // The width a fetch gives the texture at a resolve destination, where
+        // it is narrower than the surface's pitch: the pitch is the width
+        // rounded up to 32 texels, and a fetch normalises its coordinates
+        // over its own width. A copy made as wide as the pitch stretches what
+        // it holds -- a 960-wide scene's quarter-size buffers are 240 wide in
+        // 256-wide surfaces. A copy is made this wide from the resolve after
+        // the first fetch.
+        std::unordered_map<uint32_t, uint32_t> fetchedWidth;
         uint64_t resolveEpoch = 0;     // moves on at every resolve: resolvedTo may have changed
 
         // The binding each texture slot got from the last draw that bound it,

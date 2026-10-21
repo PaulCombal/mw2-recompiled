@@ -289,8 +289,11 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
     const gpu::CopyDestPitch destPitch{ r[gpu::RB_COPY_DEST_PITCH] };
     const uint32_t destX = uint32_t(rect.offset.x);
     const uint32_t destY = uint32_t(rect.offset.y);
-    const uint32_t surfaceWidth = destPitch.Pitch() ? std::min(destPitch.Pitch(), 4096u)
-                                                    : destX + rect.extent.width;
+    uint32_t surfaceWidth = destPitch.Pitch() ? std::min(destPitch.Pitch(), 4096u)
+                                              : destX + rect.extent.width;
+    if (auto fetched = g.fetchedWidth.find(destination);
+        fetched != g.fetchedWidth.end() && fetched->second > destX && fetched->second < surfaceWidth)
+        surfaceWidth = fetched->second;
     const uint32_t surfaceHeight = destPitch.Height() ? std::min(destPitch.Height(), 4096u)
                                                       : destY + rect.extent.height;
     const auto room = [](uint32_t size, uint32_t at) { return size > at ? size - at : 0u; };

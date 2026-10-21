@@ -18,8 +18,8 @@
 set -u
 TITLE="${TITLE:-sp}"
 case "$TITLE" in
-    sp) BUILD=build;    MAP_DEFAULT=trainer ;;
-    mp) BUILD=build-mp; MAP_DEFAULT=mp_afghan; export MW2_NET_LINK=1 ;;
+    sp) BUILD=build;    IMAGE=mw2/default.pe;    MAP_DEFAULT=trainer ;;
+    mp) BUILD=build-mp; IMAGE=mw2/default_mp.pe; MAP_DEFAULT=mp_afghan; export MW2_NET_LINK=1 ;;
     *)  echo "TITLE must be sp or mp, not '$TITLE'" >&2; exit 1 ;;
 esac
 MAP="${1:-$MAP_DEFAULT}"
@@ -49,7 +49,9 @@ echo "=============================================================="
 # The run's log goes to the terminal and to run.log beside the captures: the
 # lines that explain a capture (resolves that moved, sizes that did not match)
 # print during the run and at its end, and the terminal scrolls them away.
-"$RD/bin/renderdoccmd" capture -w -d "$ROOT" -c "$MW2_RENDERDOC_OUT" "$ROOT/$BUILD/mw2" 2>&1 \
+# The image and the game folder are named: without them the executable starts
+# as a player's copy would, from its own folder, and opens the launcher.
+"$RD/bin/renderdoccmd" capture -w -d "$ROOT" -c "$MW2_RENDERDOC_OUT" "$ROOT/$BUILD/mw2" "$IMAGE" mw2/game 2>&1 \
     | tee "$OUT/run.log"
 echo
 echo "log: $OUT/run.log"

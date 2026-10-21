@@ -305,10 +305,10 @@ int ui::Draw(const Fonts& fonts, const Frame& frame, float scale, int& focus, fl
     }
     if (frame.fov > 0)
     {
-        const ImVec2 min{ left, py }, max{ left + S(416), py + S(234) };
-        preview::Draw(draw, min, max, frame.fov);
+        const ImVec2 min{ left, py }, max{ left + S(416), py + S(416) / frame.aspect };
+        preview::Draw(draw, min, max, frame.fov, frame.aspect);
         char across[48];
-        std::snprintf(across, sizeof(across), "%.0f DEGREES ACROSS THE SCREEN", preview::Across(frame.fov));
+        std::snprintf(across, sizeof(across), "%.0f DEGREES ACROSS THE SCREEN", preview::Across(frame.fov, frame.aspect));
         draw->AddText(fonts.small, fonts.small->FontSize, { max.x + S(14), min.y }, kAmber, across);
         py = max.y + S(12);
     }

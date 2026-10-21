@@ -362,6 +362,7 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `engine.h`, `engine_log.cpp`, `predicate_waits.cpp`, `console.cpp` | hooks into the engine: print and error paths, spin waits, the console command buffer |
 | `player.cpp` | the headless walker and route recorder |
 | `field_of_view.cpp` | `MW2_FOV`: scales the view angle the title computes |
+| `render_size.cpp`, `render_size.h` | `MW2_RENDER`: the title's frame and scene sizes, the picture's shape, and 16:9 pictures covering another shape |
 | `unsigned_fastfiles.cpp`, `custom_map_list.cpp` | lets the multiplayer load a fastfile nobody signed, a converted map, and lists the map from its `.arena` |
 | `stutters.cpp`, `pacing_trace.cpp` | the stutter detector and the frame pacing timeline |
 | `report.cpp` | `MW2_REPORT=1`: the driver's name and a run's performance summary, for a bug report |

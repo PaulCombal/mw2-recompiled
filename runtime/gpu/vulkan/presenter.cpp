@@ -8,6 +8,7 @@
 #include "../../stutters.h"
 #include "../../signin.h"
 #include "../../online/service.h"
+#include "../../render_size.h"
 
 #if !defined(MW2_HAVE_VULKAN) || !defined(MW2_USE_SDL)
 // Without a loader or a window system there is nothing to present to; the rest
@@ -895,8 +896,10 @@ namespace
         // borderless at the desktop's resolution, which SDL gives a window
         // asked for fullscreen without a mode of its own. F8 toggles it.
         g.fullscreen = env::Flag("MW2_FULLSCREEN");
-        // Hidden until ShowWindow.
-        g.window = SDL_CreateWindow("Modern Warfare 2", kWidth, kHeight,
+        // Hidden until ShowWindow. As tall as the console's frame, and as wide
+        // as the title's frame is for that (render_size.h).
+        const render::Size frame = render::Frame();
+        g.window = SDL_CreateWindow("Modern Warfare 2", int(kHeight * frame.width / frame.height), kHeight,
                                     SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN |
                                     (g.fullscreen ? SDL_WINDOW_FULLSCREEN : 0));
         if (!g.window) { LOGW("vulkan: no window (%s)", SDL_GetError()); return false; }

@@ -52,6 +52,19 @@
 // the view's angle, and the zoom the distance culls take from it (field_of_view.cpp)
 #define T_CG_ViewFov           8215B9A8
 #define T_CG_CullZoom          8215BC28
+// the sizes the title draws at, and the picture's shape (render_size.cpp).
+// R_VideoSizes(config) fills { bool wide, hiDef; float refresh; scene w, h;
+// frame w, h; samples } from the video mode, the sizes its own: 1024x600 and
+// 1280x720 in high definition. R_SetVidConfig(config) makes the vidConfig of
+// it: scene w, h, frame w, h, ..., +28 the picture's aspect (16/9 when wide,
+// else 4/3), +32 and +36 a scene's and a frame's pixel's (h * aspect / w).
+// R_DrawStretchPic(x, y, w, h, s0, t0, s1, t1, colour, material) queues a 2D
+// picture.
+#define T_R_VideoSizes         823C3DD0
+#define T_R_SetVidConfig       823C35C8
+#define T_R_DrawStretchPic     823C6DB0
+#define T_UI_EvaluateStatement 822D72F0   // a menu expression's value (localClientNum, statement)
+#define T_DATA_VidConfig          0x83B3A928u
 // network hardening against the known IW4 vulnerabilities.
 // PartyHost_HandleJoinPartyRequest is the "joinParty" OOB handler whose
 // subparty count is unbounded -- CVE-2019-20893 (joinparty_overflow.cpp) --
@@ -360,6 +373,12 @@
 #define T_Image_FlushMove      823A52F8
 #define T_CG_ViewFov           8210FCD8
 #define T_CG_CullZoom          8210FF80
+// the sizes the title draws at, and the picture's shape (render_size.cpp)
+#define T_R_VideoSizes         8238E5D0
+#define T_R_SetVidConfig       8238DDC8
+#define T_R_DrawStretchPic     823915B0
+#define T_UI_EvaluateStatement 822BF4B8
+#define T_DATA_VidConfig          0x83C911A8u
 // network hardening -- the campaign (co-op / Spec Ops) is network-exposed too.
 // UI_ReplaceDirective is instruction-identical to the multiplayer's and has the
 // same unbounded directive-name buffer (ui_directive_overflow.cpp). The

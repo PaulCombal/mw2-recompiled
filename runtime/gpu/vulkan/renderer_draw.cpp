@@ -122,6 +122,19 @@ namespace vk::renderer::detail
                                             : &found->second.copies[found->second.newest];
             if (newest && newest->view)
             {
+                // The texture is as wide as the fetch says; the copy was made
+                // as wide as the surface's pitch until a fetch said otherwise
+                // (State::fetchedWidth).
+                if (!newest->depth && fetch.Width() < newest->width)
+                {
+                    uint32_t& learned = g.fetchedWidth[fetch.BaseAddress()];
+                    if (learned != fetch.Width())
+                    {
+                        learned = fetch.Width();
+                        LOGI("renderer: the texture at %08X is %u wide in a %u-wide surface; its copies are "
+                             "made %u wide from the next resolve", fetch.BaseAddress(), learned, newest->width, learned);
+                    }
+                }
                 // The key names the copy, not just the guest address: the texture
                 // cache keys descriptor sets on ids and drops them all when the
                 // view behind an id changes, and with a copy per frame slot that

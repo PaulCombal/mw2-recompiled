@@ -223,6 +223,8 @@ as the title's own `cg_fov` is: the angle across a 4:3 picture, 65 by default.
 The title makes the 16:9 picture as tall as the 4:3 one and wider (the angle's
 tangent times 0.75 is the half height, and that times the picture's shape the
 half width), so 65 is 81 degrees across the screen, 90 is 106 and 120 is 133.
+A 16:10 picture (`MW2_RENDER`, [rendering.md](rendering.md#the-titles-frame-and-the-pictures-shape))
+is as tall again and narrower: 65 is 75 degrees across it.
 
 Neither of the title's two settings can carry the player's choice, because its
 scripts write both. `cg_fov` is set to 65 at every multiplayer spawn

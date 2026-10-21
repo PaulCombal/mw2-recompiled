@@ -1,11 +1,14 @@
 #include "settings.h"
+#include "../runtime/render_size.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace
 {
@@ -51,9 +54,57 @@ int settings::Scale()
     return std::clamp(kept == g_kept.end() ? 1 : std::atoi(kept->second.c_str()), 1, kMaxScale);
 }
 
-void settings::SetScale(int scale)
+namespace
 {
-    g_kept["MW2_SCALE"] = std::to_string(std::clamp(scale, 1, kMaxScale));
+    // Every row is a frame the game takes.
+    constexpr bool RowsValid()
+    {
+        for (const auto& rows : settings::kResolutionTable)
+            for (const auto& row : rows)
+                if (!render::FrameValid({ row.width, row.height })) return false;
+        return true;
+    }
+    static_assert(RowsValid());
+
+    // MW2_RENDER's frame, the console's when there is none or it is no size.
+    std::pair<unsigned, unsigned> KeptFrame()
+    {
+        const auto kept = g_kept.find("MW2_RENDER");
+        unsigned width = 0, height = 0;
+        if (kept == g_kept.end() || std::sscanf(kept->second.c_str(), "%ux%u", &width, &height) != 2 || !height)
+            return { 1280, 720 };
+        return { width, height };
+    }
+}
+
+settings::Ratio settings::AspectRatio()
+{
+    const auto [width, height] = KeptFrame();
+    return width * 10 == height * 16 ? Ratio::Wider : Ratio::Wide;
+}
+
+int settings::ResolutionRow()
+{
+    const auto [width, height] = KeptFrame();
+    const auto& rows = kResolutionTable[int(AspectRatio())];
+    for (int row = 0; row < kResolutions; row++)
+        if (rows[row].width == width && rows[row].height == height && rows[row].scale == Scale()) return row;
+    for (int row = 0; row < kResolutions; row++)
+        if (rows[row].scale == Scale()) return row;
+    return 0;
+}
+
+const settings::Resolution& settings::CurrentResolution()
+{
+    return kResolutionTable[int(AspectRatio())][ResolutionRow()];
+}
+
+void settings::SetResolution(Ratio ratio, int row)
+{
+    const Resolution& chosen = kResolutionTable[int(ratio)][std::clamp(row, 0, kResolutions - 1)];
+    if (chosen.width == 1280 && chosen.height == 720) g_kept.erase("MW2_RENDER");
+    else g_kept["MW2_RENDER"] = std::to_string(chosen.width) + "x" + std::to_string(chosen.height);
+    g_kept["MW2_SCALE"] = std::to_string(chosen.scale);
     Save();
 }
 

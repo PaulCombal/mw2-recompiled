@@ -60,7 +60,8 @@ namespace ui
         float fraction = -1;        // of the step, or below zero when it has no amount
 
         float slider = -1;          // a setting with a range: where it is on its track, 0 to 1
-        float fov = 0;              // and the field of view the pane shows a picture of (preview.h)
+        float fov = 0;              // and the field of view the pane shows a picture of (preview.h),
+        float aspect = 16.0f / 9.0f;    // at the game picture's shape
         SDL_Texture* picture = nullptr;   // a picture above the text, 16:9
 
         std::string status;         // one line at the bottom left

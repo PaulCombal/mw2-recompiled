@@ -35,6 +35,7 @@ void vk::renderer::Idle() {}
 #include "../../env.h"
 #include "../../log.h"
 #include "../../report.h"
+#include "../../render_size.h"
 
 #include <algorithm>
 
@@ -127,14 +128,16 @@ bool vk::renderer::Initialise()
 
     // MW2_SCALE=2 or 3 draws everything that many times wider and taller. A
     // surface is at most 4096 of the title's pixels either way, and the scale
-    // is lowered until that fits an image of the device's.
+    // is lowered until that fits an image of the device's. The frame is the
+    // title's (render_size.h).
     {
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(g.physical, &properties);
         const uint32_t asked = uint32_t(std::clamp<uint64_t>(env::Number("MW2_SCALE", 1), 1, 3));
         g.scale = vk::shaders::Scale(g.physical, asked);
-        g.presentWidth *= g.scale;
-        g.presentHeight *= g.scale;
+        const render::Size frame = render::Frame();
+        g.presentWidth = frame.width * g.scale;
+        g.presentHeight = frame.height * g.scale;
         if (g.scale != asked)
             LOGW("renderer: MW2_SCALE=%u is more than the device's %u-pixel images hold",
                  asked, properties.limits.maxImageDimension2D);
@@ -411,6 +414,7 @@ void vk::renderer::Shutdown()
             if (resolved.memory) vkFreeMemory(g.device, resolved.memory, nullptr);
         }
     g.resolvedTo.clear();
+    g.fetchedWidth.clear();
     g.resolveEpoch++;
     if (g.readBack) vkDestroyBuffer(g.device, g.readBack, nullptr);
     if (g.readBackMemory) vkFreeMemory(g.device, g.readBackMemory, nullptr);

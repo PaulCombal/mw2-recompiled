@@ -9,7 +9,6 @@
 namespace
 {
     constexpr float kRadians = 0.01745329f;
-    constexpr float kAspect = 16.0f / 9.0f;
     constexpr float kEye = 60;      // the game's units, an inch each: where a standing player's eyes are
     constexpr float kNear = 6;
 
@@ -125,12 +124,12 @@ namespace
     }
 }
 
-float preview::Across(float fov)
+float preview::Across(float fov, float aspect)
 {
-    return 2 * std::atan(std::tan(fov * 0.5f * kRadians) * 0.75f * kAspect) / kRadians;
+    return 2 * std::atan(std::tan(fov * 0.5f * kRadians) * 0.75f * aspect) / kRadians;
 }
 
-void preview::Draw(ImDrawList* draw, const ImVec2& min, const ImVec2& max, float fov)
+void preview::Draw(ImDrawList* draw, const ImVec2& min, const ImVec2& max, float fov, float aspect)
 {
     static const std::vector<Face> street = Street();
     static float shown = fov;
@@ -139,7 +138,7 @@ void preview::Draw(ImDrawList* draw, const ImVec2& min, const ImVec2& max, float
 
     // The game's own: the angle's tangent is the 4:3 picture's half width,
     // three quarters of it the half height, and the width follows the shape.
-    const float tanY = std::tan(shown * 0.5f * kRadians) * 0.75f, tanX = tanY * kAspect;
+    const float tanY = std::tan(shown * 0.5f * kRadians) * 0.75f, tanX = tanY * aspect;
     const ImVec2 middle{ (min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f };
     const float halfWidth = (max.x - min.x) * 0.5f, halfHeight = (max.y - min.y) * 0.5f;
     auto onPicture = [&](const Seen& s) {

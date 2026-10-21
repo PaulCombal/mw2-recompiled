@@ -336,7 +336,7 @@ namespace
         Profile, Back, NextPlayer, Rename, PlayAs, MaxRank, Prestige, UnlockEverything, UnlockMissions, AllStars,
         CheckUpdate, InstallUpdate,
         // The graphics screen, and the next of what each of its entries sets.
-        Graphics, Fullscreen, Resolution, Antialiasing, FpsLimit, Fov,
+        Graphics, Fullscreen, AspectRatio, Resolution, Antialiasing, FpsLimit, Fov,
         // The maps screen; CUSTOM MAPS turned on asks first, on a screen of its own.
         Maps, CustomMaps, CustomMapsOn, CustomMapsCancel, PcGame,
         // and its maps: one shown at a time, put in or out of the game, removed after a question.
@@ -689,8 +689,13 @@ namespace
                     messageFocus = -1;
                 }
                 break;
+            case Action::AspectRatio:
+                settings::SetResolution(settings::AspectRatio() == settings::Ratio::Wide ? settings::Ratio::Wider
+                                                                                         : settings::Ratio::Wide,
+                                        settings::ResolutionRow());
+                break;
             case Action::Resolution:
-                settings::SetScale(settings::Scale() % settings::kMaxScale + 1);
+                settings::SetResolution(settings::AspectRatio(), (settings::ResolutionRow() + 1) % settings::kResolutions);
                 break;
             case Action::Antialiasing:
             {
@@ -958,13 +963,23 @@ namespace
                 std::string("Whether the game starts fullscreen: now ") + (fullscreen ? "it does, at the screen's own resolution." : "it starts in a window.") +
                 "\n\nChoose to switch it. While playing, F8 switches between the two."
                 "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
-            static const char* const kSizes[] = { "720P", "1440P", "4K" };
-            const int scale = settings::Scale();
-            add(Action::Resolution, std::string("RESOLUTION ") + kSizes[scale - 1], "RESOLUTION",
-                std::string("The size the game draws at, whatever the window's: now ") + std::to_string(1280 * scale) + "x" +
-                std::to_string(720 * scale) + (scale == 1 ? ", the console's own." : ".") +
-                "\n\nChoose to go to the next: 720p, 1440p, 4K. A larger one is sharper and needs a faster graphics card: "
-                "1440p draws four times the pixels and 4K nine times."
+            const bool wider = settings::AspectRatio() == settings::Ratio::Wider;
+            add(Action::AspectRatio, std::string("ASPECT RATIO ") + (wider ? "16:10" : "16:9"), "ASPECT RATIO",
+                std::string("The shape of the game's picture: now ") + (wider ? "16:10." : "16:9, the console's own.") +
+                "\n\nChoose to switch between 16:9 and 16:10. A screen or window of another shape shows black bars. "
+                "The menus and the HUD follow the shape. On 16:10, the videos show whole between thin black bars, "
+                "and the full-screen pictures fill the screen, a little of their sides cut."
+                "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
+            const settings::Resolution& resolution = settings::CurrentResolution();
+            const auto& rows = settings::kResolutionTable[int(settings::AspectRatio())];
+            std::string sizes;
+            for (int row = 0; row < settings::kResolutions; row++)
+                sizes += std::string(row ? ", " : "") + rows[row].name;
+            add(Action::Resolution, std::string("RESOLUTION ") + resolution.name, "RESOLUTION",
+                std::string("The size the game draws at, whatever the window's: now ") + resolution.name +
+                (resolution.width == 1280 && resolution.height == 720 && resolution.scale == 1 ? ", the console's own." : ".") +
+                "\n\nChoose to go to the next: " + sizes + ". A larger one is sharper and needs a faster graphics card. "
+                "The best is the screen's own: a smaller one is enlarged to fit it, a larger one made smaller."
                 "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
             const int msaa = settings::Msaa();
             add(Action::Antialiasing, "ANTIALIASING " + (msaa ? std::to_string(msaa) + "X" : std::string("OFF")), "ANTIALIASING",
@@ -1570,6 +1585,7 @@ namespace
                 const int range = settings::kWidestFov - settings::kConsoleFov;
                 frame.slider = float(settings::Fov() - settings::kConsoleFov) / float(range);
                 frame.fov = float(settings::Fov());
+                frame.aspect = settings::AspectRatio() == settings::Ratio::Wider ? 16.0f / 10.0f : 16.0f / 9.0f;
                 frame.hint = "LEFT AND RIGHT TO CHANGE, ESC OR (B) TO GO BACK";
             }
 
