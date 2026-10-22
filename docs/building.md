@@ -198,7 +198,8 @@ Its icon is in `launcher/icon/`: `launcher.ico` is linked into the Windows
 program as a resource, and `launcher.bmp` is written out as an array like the
 fonts and given to the window on both systems. `tools/launcher_icon.py` makes
 the two from the campaign's icon in the PC game's `iw4sp.exe`: the left half as
-it is, the right half in the multiplayer's colours.
+it is, the right half in the multiplayer's colours. `tools/readme_art.py` draws the
+README's banner, tiles and headings into `docs/images/readme/`.
 
 | file | what |
 |---|---|
@@ -382,7 +383,7 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `pgo/` | the recorded profiles the build is optimised with ([Optimisation](#optimisation)) |
 | `launcher/` | the launcher: install, and starting the game ([The launcher](#the-launcher)) |
 | `third_party/ffmpeg-xenia/` | builds the XMA frame decoder from Xenia's FFmpeg branch, fetched at configure time |
-| `third_party/fonts/` | the launcher's fonts (Barlow, SIL Open Font License) |
+| `third_party/fonts/` | the launcher's fonts (Barlow), and Michroma for the README's titles; SIL Open Font License |
 | `docs/` | this documentation |
 
 ### The runtime
