@@ -8,6 +8,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <functional>
 #include <iterator>
 
 namespace fs = std::filesystem;
@@ -97,7 +98,18 @@ namespace
         }
     };
 
-    bool Change(const profile::Player& player, std::string& error, void (*change)(Stats&, int), int value = 0)
+    // The rank an amount of experience is: each starts at its own.
+    int Level(uint32_t experience)
+    {
+        int level = 1;
+        for (size_t rank = 0; rank < std::size(playerdata::kRankExperience); rank++)
+            if (experience >= playerdata::kRankExperience[rank]) level = int(rank) + 1;
+        return level;
+    }
+
+    // A change made to every stats file of a player; a file it leaves as it
+    // was is not written.
+    bool Change(const profile::Player& player, std::string& error, const std::function<void(Stats&)>& change)
     {
         std::vector<fs::path> files{ player.file };
         for (const profile::Player::Other& other : player.also) files.push_back(other.file);
@@ -105,8 +117,9 @@ namespace
         {
             Stats stats;
             if (!stats.Load(file)) { error = "Cannot read " + install::Utf8(file) + "."; return false; }
-            change(stats, value);
-            if (!stats.Save(file, error)) return false;
+            const std::vector<uint8_t> before = stats.file;
+            change(stats);
+            if (stats.file != before && !stats.Save(file, error)) return false;
         }
         return true;
     }
@@ -363,9 +376,7 @@ std::vector<profile::Player> profile::Players()
         Player player;
         player.file = file;
         player.offline = offline;
-        const uint32_t experience = stats.Get32(playerdata::kExperience);
-        for (size_t rank = 0; rank < std::size(playerdata::kRankExperience); rank++)
-            if (experience >= playerdata::kRankExperience[rank]) player.level = int(rank) + 1;
+        player.level = Level(stats.Get32(playerdata::kExperience));
         player.prestige = int(stats.Get32(playerdata::kPrestige));
         player.played = Day(file);
         found.push_back({ std::move(player), fs::last_write_time(file, ec) });
@@ -418,22 +429,25 @@ std::vector<profile::Player> profile::Players()
     return players;
 }
 
+int profile::MaxLevel() { return int(std::size(playerdata::kRankExperience)); }
 int profile::MaxPrestige() { return playerdata::kMaxPrestige; }
 
-bool profile::MaxRank(const Player& player, std::string& error)
+bool profile::SetRank(const Player& player, int level, int prestige, std::string& error)
 {
-    return Change(player, error, [](Stats& stats, int) { stats.Put32(playerdata::kExperience, playerdata::kMaxExperience); });
-}
-
-bool profile::SetPrestige(const Player& player, int prestige, std::string& error)
-{
-    return Change(player, error, [](Stats& stats, int value) { stats.Put32(playerdata::kPrestige, uint32_t(value)); },
-                  std::clamp(prestige, 0, playerdata::kMaxPrestige));
+    return Change(player, error, [&](Stats& stats) {
+        // A file at the rank already keeps its experience, however far into it.
+        if (level > 0 && Level(stats.Get32(playerdata::kExperience)) != level)
+        {
+            const int rank = std::clamp(level, 1, MaxLevel());
+            stats.Put32(playerdata::kExperience, rank == MaxLevel() ? playerdata::kMaxExperience : playerdata::kRankExperience[rank - 1]);
+        }
+        if (prestige >= 0) stats.Put32(playerdata::kPrestige, uint32_t(std::clamp(prestige, 0, playerdata::kMaxPrestige)));
+    });
 }
 
 bool profile::UnlockEverything(const Player& player, std::string& error)
 {
-    return Change(player, error, [](Stats& stats, int) {
+    return Change(player, error, [](Stats& stats) {
         for (const playerdata::Challenge& challenge : playerdata::kChallenges)
         {
             stats.Buffer()[playerdata::kChallengeState + challenge.index] = uint8_t(challenge.tiers + 1);

@@ -141,9 +141,14 @@ all three from a running multiplayer's memory and writes
 
 | entry | change |
 |---|---|
-| MAX RANK | `experience` to the last rank's end |
-| PRESTIGE | `prestige`, one more each time, 0 after 10 |
+| RANK | `experience` to the start of the rank chosen, 1 to 70, or to the end of 70's; a file at that rank already keeps its own |
+| PRESTIGE | `prestige` to the one chosen, 0 to 10 |
 | UNLOCK EVERYTHING | each challenge's `challengeState` to one past its last tier and its `challengeProgress` to that tier's target; every bit of `titleUnlocked`, `iconUnlocked` and `killstreakUnlocked` |
+
+RANK and PRESTIGE move with left and right, and are written as the screen is
+left, by BACK or by the window closing; a file already holding what was chosen
+is not written, nor copied to its backup. With the game running nothing is
+written, since it writes its own copy as it ends.
 
 The title's own console commands are the check on a change: `dumpPlayerData`
 prints the whole buffer by name as the title reads it, `setPlayerData` and

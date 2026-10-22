@@ -203,6 +203,7 @@ it is, the right half in the multiplayer's colours.
 | file | what |
 |---|---|
 | `main.cpp` | the window's loop, what each entry does, the file dialog and dropped files, and the terminal mode |
+| `single.cpp` | one window a copy: a second start brings the first up in front and ends |
 | `ui.cpp` | the one screen, drawn by hand: a computed backdrop whose smoke drifts, the column of entries, the pane, the wordmark |
 | `setup.cpp` | the install: checks the disc, gets the update, patches the executables, copies the files |
 | `disc.cpp` | reads a disc image (XDVDFS) or an extracted folder |
@@ -291,6 +292,11 @@ have one, and it reads a `.zip`), and swaps each file in: the one it replaces
 is moved to `update/old/` first, and moved back if a later one fails. A
 running program can be moved but not deleted, the launcher included, so
 `update/` is removed by the next start, which the launcher makes itself.
+That start is told so (`MW2_LAUNCHER_TAKES_OVER`), and waits up to five
+seconds for the old one to end: a copy has one launcher window, and any other
+start of the window brings the one open to the front and ends (`single.cpp`;
+an abstract socket named after the folder on Linux, a named mutex and event
+on Windows). `--play` runs whatever else is open.
 `game/` and `saves/` are not touched; a release built from another version of
 the game shows UPDATE GAME as any install of another version does.
 

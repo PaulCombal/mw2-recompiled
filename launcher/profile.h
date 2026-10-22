@@ -48,10 +48,15 @@ namespace profile
     // Puts a profile at the first controller, from the game's next start.
     bool PlayAs(const Player& player, std::string& error);
 
-    bool MaxRank(const Player& player, std::string& error);
-    bool SetPrestige(const Player& player, int prestige, std::string& error);
+    // The rank, 1 to MaxLevel(), and the prestige, 0 to MaxPrestige(), put
+    // in each of the player's stats files; a level of 0 or a prestige of -1
+    // leaves that one as each file has it. A file at the rank keeps its
+    // experience, and a file that holds both already is not written. Rank 70
+    // is the end of its experience bar.
+    bool SetRank(const Player& player, int level, int prestige, std::string& error);
     // Every challenge done, and every title, emblem and killstreak unlocked.
     bool UnlockEverything(const Player& player, std::string& error);
+    int MaxLevel();
     int MaxPrestige();
 
     // The campaign's progress, as the profile has it.

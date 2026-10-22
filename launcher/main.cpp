@@ -26,6 +26,7 @@
 #include "ui.h"
 #include "update.h"
 #include "maps.h"
+#include "single.h"
 #include "../runtime/install/spawn.h"
 
 #ifdef _WIN32
@@ -44,6 +45,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <iterator>
@@ -244,6 +246,10 @@ namespace
         return 0;
     }
 
+    // The launcher an update starts is told so: the old one is still there
+    // for a moment, and holds the window (single.h).
+    constexpr const char* kTakeOver = "MW2_LAUNCHER_TAKES_OVER";
+
     // Starts a program beside the launcher and leaves it running. A game is
     // told the device its shaders were compiled for (`shadersFor`), so that it
     // does not start the launcher again for them (runtime/install/install.h).
@@ -254,6 +260,7 @@ namespace
         const char* const args[] = { path.c_str(), nullptr };
         SDL_Environment* environment = SDL_CreateEnvironment(true);
         if (!shadersFor.empty()) SDL_SetEnvironmentVariable(environment, "MW2_SHADERS_COMPILED_FOR", shadersFor.c_str(), true);
+        if (!std::strcmp(program, kLauncher)) SDL_SetEnvironmentVariable(environment, kTakeOver, "1", true);
         SDL_Process* process = spawn::Start(args, environment);
         SDL_DestroyEnvironment(environment);
         if (!process) return false;
@@ -333,7 +340,7 @@ namespace
     {
         None, PlayCampaign, PlayMultiplayer, Install, ChooseUpdate, Cancel, Quit,
         // The profile screen and what it does.
-        Profile, Back, NextPlayer, Rename, PlayAs, MaxRank, Prestige, UnlockEverything, UnlockMissions, AllStars,
+        Profile, Back, NextPlayer, Rename, PlayAs, Rank, Prestige, UnlockEverything, UnlockMissions, AllStars,
         CheckUpdate, InstallUpdate,
         // The graphics screen, and the next of what each of its entries sets.
         Graphics, Fullscreen, AspectRatio, Resolution, Antialiasing, FpsLimit, Fov,
@@ -385,6 +392,12 @@ namespace
         bool renaming = false;          // the keyboard types a profile's new name
         std::string newName;
         profile::Campaign campaign;
+        // RANK and PRESTIGE as moved on the screen, by the player's stats
+        // file (Player::file); 0 and -1 are not moved. They are written as the
+        // screen is left -- BACK, or the window closed -- and only where they
+        // differ from the file.
+        struct Moved { int level = 0, prestige = -1; };
+        std::map<fs::path, Moved> moved;
         update::Release release;        // the newer version a look found, if `newer`
         bool newer = false;
         std::string updated;            // the version this start is the first of
@@ -605,6 +618,8 @@ namespace
             case Action::Graphics:
             case Action::Maps:
             case Action::Back:
+            {
+                const bool leavingProfile = profileScreen;
                 gameRunning = action == Action::Profile && GameRunning();
                 gameChecked = std::chrono::steady_clock::now();
                 profileScreen = action == Action::Profile;
@@ -619,8 +634,10 @@ namespace
                 messageIsError = false;
                 focusPlaced = false;
                 player = 0;
+                if (leavingProfile) KeepMoved();
                 ReadProfile();
                 break;
+            }
             case Action::SendPending:
                 pendingReport = false;
                 reportScreen = true;
@@ -725,9 +742,11 @@ namespace
                 message.clear();
                 SDL_StartTextInput(window);
                 break;
-            case Action::PlayAs:
-            case Action::MaxRank:
+            case Action::Rank:
             case Action::Prestige:
+                // Left and right move them (Window()).
+                break;
+            case Action::PlayAs:
             case Action::UnlockEverything:
             case Action::UnlockMissions:
             case Action::AllStars:
@@ -772,6 +791,55 @@ namespace
             campaign = profile::ReadCampaign();
         }
 
+        // The rank and prestige the player's rows show: as moved, or as the file has them.
+        int ShownLevel(const profile::Player& p) const
+        {
+            const auto it = moved.find(p.file);
+            return it != moved.end() && it->second.level ? it->second.level : p.level;
+        }
+        int ShownPrestige(const profile::Player& p) const
+        {
+            const auto it = moved.find(p.file);
+            return it != moved.end() && it->second.prestige >= 0 ? it->second.prestige : p.prestige;
+        }
+
+        // What was moved, written: a profile whose rank and prestige are
+        // where they were is left untouched.
+        void KeepMoved()
+        {
+            if (moved.empty()) return;
+            std::map<fs::path, Moved> keep;
+            keep.swap(moved);
+            ReadProfile();
+            std::vector<std::pair<const profile::Player*, Moved>> changes;
+            for (const auto& [file, to] : keep)
+                for (const profile::Player& p : players)
+                    if (p.file == file)
+                    {
+                        const Moved change{ to.level && to.level != p.level ? to.level : 0,
+                                            to.prestige >= 0 && to.prestige != p.prestige ? to.prestige : -1 };
+                        if (change.level || change.prestige >= 0) changes.push_back({ &p, change });
+                    }
+            if (changes.empty()) return;
+            // The game writes the profile it has in memory as it ends, over the change.
+            if (GameRunning())
+            {
+                message = "The game is running, so the rank and prestige were not changed. Close it first.";
+                messageIsError = true;
+                messageFocus = -1;
+                return;
+            }
+            for (const auto& [p, change] : changes)
+            {
+                std::string error;
+                if (profile::SetRank(*p, change.level, change.prestige, error)) continue;
+                message = error;
+                messageIsError = true;
+                messageFocus = -1;
+            }
+            ReadProfile();
+        }
+
         // One change to the profile, and what to say about it.
         void Edit(Action action)
         {
@@ -788,17 +856,6 @@ namespace
                 done = who && profile::PlayAs(*who, error);
                 message = who ? who->name + " plays at the first controller from the game's next start." : "";
                 break;
-            case Action::MaxRank:
-                done = who && profile::MaxRank(*who, error);
-                message = "The rank is now 70.";
-                break;
-            case Action::Prestige:
-            {
-                const int prestige = who ? (who->prestige + 1) % (profile::MaxPrestige() + 1) : 0;
-                done = who && profile::SetPrestige(*who, prestige, error);
-                message = "The prestige is now " + std::to_string(prestige) + ".";
-                break;
-            }
             case Action::UnlockEverything:
                 done = who && profile::UnlockEverything(*who, error);
                 message = "Every challenge is done, and every title, emblem and killstreak unlocked.";
@@ -895,12 +952,14 @@ namespace
             // until its first match has ended.
             const bool any = !players.empty() && !players[player].file.empty() && !gameRunning;
             std::string who = "No multiplayer profile yet: play the multiplayer once first.";
-            int prestige = 0;
-            bool named = false;
+            int level = 1, prestige = 0;
+            bool named = false, movedHere = false;
             if (!players.empty())
             {
                 const profile::Player& p = players[player];
-                prestige = p.prestige;
+                level = ShownLevel(p);
+                prestige = ShownPrestige(p);
+                movedHere = level != p.level || prestige != p.prestige;
                 named = p.id != 0;
                 auto rank = [](bool offline, int level, int prestige, const std::string& played) {
                     return std::string(offline ? "Offline" : "Online") + ": rank " + std::to_string(level) + ", prestige " +
@@ -927,9 +986,15 @@ namespace
                 who + "\n\n" + (isFirst ? "This profile plays at the first controller: the campaign's and the multiplayer's player. Choose another profile here to play as that one."
                                         : named ? "Puts this profile at the first controller, from the game's next start."
                                                 : "Only a profile can be put at the first controller.") + close);
-            add(Action::MaxRank, "MAX RANK", any, "MULTIPLAYER RANK", who + "\n\nSets the rank to 70, online and offline, which unlocks every weapon, perk and equipment." + close);
+            // Moved, they are written as the screen is left.
+            const std::string kept = movedHere ? "\n\nThe change is kept when you go BACK." : "";
+            add(Action::Rank, "RANK " + std::to_string(level), any, "MULTIPLAYER RANK",
+                who + "\n\nLeft and right change it, from 1 to " + std::to_string(profile::MaxLevel()) +
+                    ", online and offline. A rank unlocks the weapons, perks and equipment of its level and those below; "
+                    "a lower one locks those above it again. " + std::to_string(profile::MaxLevel()) + " unlocks all of them. "
+                    "The attachments and camouflages are the challenges', and stay." + kept + close);
             add(Action::Prestige, "PRESTIGE " + std::to_string(prestige), any, "PRESTIGE",
-                who + "\n\nEach choice is one prestige more; after " + std::to_string(profile::MaxPrestige()) + " it is 0 again. The rank stays." + close);
+                who + "\n\nLeft and right change it, from 0 to " + std::to_string(profile::MaxPrestige()) + ". The rank stays." + kept + close);
             add(Action::UnlockEverything, "UNLOCK EVERYTHING", any, "CHALLENGES AND UNLOCKS",
                 who + "\n\nMarks every challenge as done, which gives every attachment and camouflage, and unlocks every title, emblem and killstreak." + close);
 
@@ -1458,6 +1523,17 @@ namespace
                     app.Take(app.needsUpdateFile ? Action::ChooseUpdate : Action::Install, event.drop.data);
             }
             app.Poll();
+            // Another start of the launcher asked for this one (single.h).
+            if (single::Woken())
+            {
+                // A window minimized on X11 is a hidden one to SDL, which restores only what it shows.
+                if (SDL_GetWindowFlags(app.window) & SDL_WINDOW_MINIMIZED)
+                {
+                    SDL_ShowWindow(app.window);
+                    SDL_RestoreWindow(app.window);
+                }
+                SDL_RaiseWindow(app.window);
+            }
             // The key that ended the typing is not also a choice.
             const bool typed = wasRenaming && !app.renaming;
 
@@ -1588,6 +1664,17 @@ namespace
                 frame.aspect = settings::AspectRatio() == settings::Ratio::Wider ? 16.0f / 10.0f : 16.0f / 9.0f;
                 frame.hint = "LEFT AND RIGHT TO CHANGE, ESC OR (B) TO GO BACK";
             }
+            // RANK and PRESTIGE: the same, over what the player's stats can hold.
+            const bool rankRow = current.action == Action::Rank || current.action == Action::Prestige;
+            const int rankLow = current.action == Action::Rank ? 1 : 0;
+            const int rankHigh = current.action == Action::Rank ? profile::MaxLevel() : profile::MaxPrestige();
+            if (rankRow)
+            {
+                const profile::Player& p = app.players[app.player];
+                const int value = current.action == Action::Rank ? app.ShownLevel(p) : app.ShownPrestige(p);
+                frame.slider = float(value - rankLow) / float(rankHigh - rankLow);
+                frame.hint = "LEFT AND RIGHT TO CHANGE, ESC OR (B) TO GO BACK";
+            }
 
             float slid = -1;
             const int pointed = ui::Draw(fonts, frame, scale, app.focus, slid);
@@ -1603,6 +1690,24 @@ namespace
                 if (fov != settings::Fov())
                 {
                     settings::SetFov(fov);
+                    sound::Play(sound::Clip::Over);
+                }
+            }
+            if (rankRow)
+            {
+                const profile::Player& p = app.players[app.player];
+                const bool rank = current.action == Action::Rank;
+                const int was = rank ? app.ShownLevel(p) : app.ShownPrestige(p);
+                int value = was;
+                if (pressed({ ImGuiKey_LeftArrow, ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadLStickLeft }, true)) value--;
+                if (pressed({ ImGuiKey_RightArrow, ImGuiKey_GamepadDpadRight, ImGuiKey_GamepadLStickRight }, true)) value++;
+                if (slid >= 0) value = rankLow + int(std::lround(slid * float(rankHigh - rankLow)));
+                value = std::clamp(value, rankLow, rankHigh);
+                if (value != was)
+                {
+                    App::Moved& to = app.moved[p.file];
+                    (rank ? to.level : to.prestige) = value;
+                    app.message.clear();
                     sound::Play(sound::Clip::Over);
                 }
             }
@@ -1623,6 +1728,7 @@ namespace
             ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
             SDL_RenderPresent(renderer);
         }
+        app.KeepMoved();    // the window closed on the profile screen
         app.job.reset();    // waits for a job that was told to stop
 
         ImGui_ImplSDLRenderer3_Shutdown();
@@ -1711,6 +1817,16 @@ int main(int argc, char** argv)
         if (compile) return CompileInTerminal();
         if (addMap) return AddMapInTerminal(mapFiles);
         return InstallInTerminal(disc, update);
+    }
+    // One window a copy (single.h): a second start brings the first up and
+    // ends. The one an update started waits for the old one to end; one the
+    // game started for its shaders does that work whatever else is open.
+    const bool takeOver = std::getenv(kTakeOver) != nullptr;
+    SDL_unsetenv_unsafe(kTakeOver);     // not for what this one starts
+    if (!single::Claim(takeOver) && play == Action::None && !takeOver)
+    {
+        single::Wake();
+        return 0;
     }
     return Window(updated, play, device);
 }
