@@ -32,7 +32,10 @@ length twice (header count and the `size` field); a packet whose two lengths
 disagree is a misparse of the command stream and is refused, because its
 payload is command buffer rather than microcode.
 
-A shader is identified by a hash of its microcode. With diagnostics compiled in
+A shader is identified by a hash of its microcode. An `IM_LOAD`'s microcode and
+hash are kept by address, length and stage while the memory watch
+(`gpu/memory_watch.h`) says nothing has written their pages, so a frame's
+thousands of loads of a few hundred shaders read and hash each one once. With diagnostics compiled in
 (the default; `-DMW2_DIAGNOSTICS=OFF` removes them, see
 [building.md](building.md)), `MW2_DUMP_SHADERS=<dir>` writes each distinct
 program as
@@ -112,24 +115,37 @@ Every translated shader is built against one fixed interface
 shader and nothing is reflected at bind time.
 
 ```
-set 0  dynamic uniform blocks, windows of the register file copied per draw
-  binding 0  vec4 [256]    vertex float constants, from SQ_VS_CONST's base
-  binding 1  uvec4[96]     vertex fetch constants (two dwords each, padded)
-  binding 2  uvec4[2]      256 boolean constants, packed bits
-  binding 3  uvec4[8]      32 loop constants
-  binding 4  vec4 [256]    pixel float constants, from SQ_PS_CONST's base
+set 0  nothing
 set 1  binding N  combined image sampler per texture fetch slot (32)
 set 2  binding 0  uint[]   the frame arena, as dwords
+       binding 1  vec4[]   the same, as vec4
 push constants
   pixel  (offset 0, 16 B)   alpha function, alpha reference, colour scale, gamma-target flag
   vertex (offset 16, 16 B)  float2 scale, float2 offset: window to clip space
   both   (offset 32, 4 B)   a bit per texture slot bound to a resolve's copy;
                             only in shaders built under MW2_SCALE
+  both   (offset 36, 20 B)  where each constant block is in the arena, in dwords:
+                            0  the vertex constant table
+                            1  vertex fetch constants (96 pairs of dwords, each padded to four)
+                            2  256 boolean constants, packed bits (8 dwords)
+                            3  32 loop constants
+                            4  pixel float constants, 256 vec4 from SQ_PS_CONST's base
 ```
 
+- Every constant is in the frame arena, copied there from the register file,
+  and found by the offset the draw pushes for its block. Pushing five words
+  costs the driver little; binding five dynamic uniform blocks at every draw,
+  as the runtime did before, cost a descriptor upload each time, and nearly
+  every draw moves one of them.
 - The hardware constant file holds 512 vec4; `SQ_VS_CONST` and `SQ_PS_CONST`
   give each stage a window into it (D3D9 gives vertex the low half, pixel the
-  high half). The stages therefore read separate bindings.
+  high half).
+- A pixel program reads its window as one run of 256 vec4. A vertex program
+  reads through the constant table: a uvec4 whose x is the window's base, then
+  for each of the file's 32 blocks of 16 vec4 the vec4 index of its copy in
+  the arena. Constant `i` is `arena[table[4 + (base + i) / 16] + (base + i) % 16]`.
+  A draw changes a block or so of the ten or so a vertex program reads (its
+  world matrix), and the table lets it copy only the blocks that changed.
 - The translator records the highest float constant a program reads
   (`Translation::constantsRead`) so the renderer copies only that much, unless
   the program addresses constants through a0/aL (`addressedConstants`), where

@@ -5,6 +5,7 @@
 #include "internal.h"
 #include "../pacing_trace.h"
 #include "gpu.h"
+#include "memory_watch.h"
 #include "registers.h"
 #include "../counter.h"
 #include "../diagnostics.h"
@@ -23,6 +24,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -125,9 +127,17 @@ namespace
         uint64_t binSelect = 0xFFFFFFFFull, binMask = 0xFFFFFFFFull;
 
         // The shaders the last IM_LOADs set: a draw uses whichever is loaded,
-        // as it uses whatever registers are set.
-        std::vector<uint32_t> shader[2];
+        // as it uses whatever registers are set. The microcode is an entry of
+        // `loads`, or for IM_LOAD_IMMEDIATE, `immediate`.
+        const std::vector<uint32_t>* shader[2]{};
         uint64_t shaderHash[2]{};
+        std::vector<uint32_t> immediate[2];
+        // An IM_LOAD's microcode and its hash, by stage, address and length,
+        // for as long as the memory watch says nothing has written its pages:
+        // a frame loads thousands, a few hundred distinct ones, each of which
+        // was read, byte-swapped and hashed at every load.
+        struct Loaded { uint64_t stamp = 0, hash = 0; std::vector<uint32_t> code; };
+        std::unordered_map<uint64_t, Loaded> loads;
         std::unordered_set<uint64_t> shadersSeen;
 
         uint64_t swapsParsed = 0;         // PM4_XE_SWAP packets met
@@ -212,6 +222,17 @@ namespace
             return *GuestPtr<be32>(base + i * 4);
         }
         void Skip(uint32_t n) { for (uint32_t i = 0; i < n && remaining; i++) Next(); }
+        // The next `n` dwords, as Next would give them, into `out`.
+        void Take(uint32_t* out, uint32_t n)
+        {
+            const be32* words = GuestPtr<be32>(base);
+            if (!wrapMask)
+                for (uint32_t i = 0; i < n; i++) out[i] = words[index + i];
+            else
+                for (uint32_t i = 0; i < n; i++) out[i] = words[(index + i) & wrapMask];
+            index += n;
+            remaining -= std::min(remaining, n);
+        }
         uint32_t AddressOf(uint32_t at) const
         {
             return base + (wrapMask ? (at & wrapMask) : at) * 4;
@@ -275,6 +296,27 @@ namespace
                 std::memcpy(g.displayLut, g.displayLutPending, sizeof g.displayLut);
                 g.displayLutReady.store(true, std::memory_order_release);
             }
+        }
+    }
+
+    // A run of `count` registers from `first`, read from `s`. Above the
+    // ordinary registers' start nothing has a side effect -- every constant
+    // window is there -- so a run there goes into the file a block at a time.
+    void WriteRegisters(uint32_t first, uint32_t count, Source& s)
+    {
+        if (first < gpu::kConstantBaseRegisters || first + count > gpu::kRegisterCount)
+        {
+            for (uint32_t i = 0; i < count; i++) WriteRegister(first + i, s.Next());
+            return;
+        }
+        uint32_t values[256];
+        while (count)
+        {
+            const uint32_t n = std::min<uint32_t>(count, 256);
+            s.Take(values, n);
+            g.registers.WriteRun(first, values, n);
+            first += n;
+            count -= n;
         }
     }
 
@@ -346,14 +388,15 @@ namespace
                  (unsigned long long)hash);
     }
 
-    // An IM_LOAD or IM_LOAD_IMMEDIATE: `type` 0 is the vertex shader, 1 the pixel.
-    void LoadShader(uint32_t type, std::vector<uint32_t>&& code)
+    // An IM_LOAD or IM_LOAD_IMMEDIATE: `type` 0 is the vertex shader, 1 the
+    // pixel. `code` stays where it is until the next load of that kind.
+    void LoadShader(uint32_t type, const std::vector<uint32_t>& code, uint64_t hash)
     {
         if (code.empty()) return;
         type &= 1;
-        const uint64_t hash = vk::renderer::ShaderHash(code.data(), code.size());
         g.shaderHash[type] = hash;
-        if constexpr (!diag::kOn) { g.shader[type] = std::move(code); return; }
+        g.shader[type] = &code;
+        if constexpr (!diag::kOn) return;
         if (g.shadersSeen.insert(hash).second && ShaderDumpDirectory())
         {
             char path[512];
@@ -369,7 +412,6 @@ namespace
                 std::fclose(f);
             }
         }
-        g.shader[type] = std::move(code);
     }
 
     // MW2_TRACE_DRAWS=<n> describes n draw packets in full, after
@@ -433,11 +475,11 @@ namespace
                 call.index32 = draw.Index32();
                 // Physical, as every address the GPU is handed is.
                 call.indexAddress = indexed ? kernel::FromPhysical(dmaBase) : 0;
-                call.vertexCode = g.shader[0].data();
-                call.vertexWords = g.shader[0].size();
+                call.vertexCode = g.shader[0] ? g.shader[0]->data() : nullptr;
+                call.vertexWords = g.shader[0] ? g.shader[0]->size() : 0;
                 call.vertexHash = g.shaderHash[0];
-                call.pixelCode = g.shader[1].data();
-                call.pixelWords = g.shader[1].size();
+                call.pixelCode = g.shader[1] ? g.shader[1]->data() : nullptr;
+                call.pixelWords = g.shader[1] ? g.shader[1]->size() : 0;
                 call.pixelHash = g.shaderHash[1];
                 vk::renderer::Draw(g.registers, call);
             }
@@ -689,7 +731,9 @@ namespace
             // The packet states its length twice, and a real one agrees with itself.
             if ((startSize & 0xFFFF) != count - 2) { g.shaderLoadsRefused++; break; }
             TraceShaderLoad(type & 1, code, 0);
-            LoadShader(type, std::move(code));
+            std::vector<uint32_t>& kept = g.immediate[type & 1];
+            kept = std::move(code);
+            LoadShader(type, kept, vk::renderer::ShaderHash(kept.data(), kept.size()));
             break;
         }
 
@@ -703,10 +747,21 @@ namespace
             const uint32_t va = kernel::FromPhysical(addressType & ~3u);
             const uint32_t sizeDwords = startSize & 0xFFFF;
             if (!va || !sizeDwords || sizeDwords > (64u << 10)) break;
-            std::vector<uint32_t> code(sizeDwords);
-            for (uint32_t i = 0; i < sizeDwords; i++) code[i] = *GuestPtr<be32>(va + i * 4);
-            TraceShaderLoad(addressType & 3u, code, va);
-            LoadShader(addressType & 3u, std::move(code));
+            const uint32_t physical = addressType & ~3u;
+            State::Loaded& loaded = g.loads[uint64_t(physical) << 17 | uint64_t(sizeDwords) << 1 | (addressType & 1)];
+            const bool watched = va == guest::kPhysicalBase + physical && gpu::watch::Enabled();
+            if (!(loaded.stamp && gpu::watch::Unwritten(physical, sizeDwords * 4, loaded.stamp)))
+            {
+                // Watched from before it is read, so a write while it is read counts.
+                loaded.stamp = watched ? gpu::watch::Track(physical, sizeDwords * 4,
+                                                           vk::renderer::CompletedSubmission, g.swapsParsed)
+                                       : 0;
+                loaded.code.resize(sizeDwords);
+                for (uint32_t i = 0; i < sizeDwords; i++) loaded.code[i] = *GuestPtr<be32>(va + i * 4);
+                loaded.hash = vk::renderer::ShaderHash(loaded.code.data(), sizeDwords);
+                TraceShaderLoad(addressType & 3u, loaded.code, va);
+            }
+            LoadShader(addressType & 3u, loaded.code, loaded.hash);
             break;
         }
 
@@ -732,8 +787,7 @@ namespace
             const uint32_t index = offsetType & 0x7FF;
             const uint32_t kind  = (offsetType >> 16) & 0xFF;
             if (kind >= 5) break;
-            for (uint32_t i = 1; i < count; i++)
-                WriteRegister(kConstantWindows[kind] + index + (i - 1), s.Next());
+            WriteRegisters(kConstantWindows[kind] + index, count - 1, s);
             break;
         }
 
@@ -750,8 +804,17 @@ namespace
             const uint32_t kind  = (offsetType >> 16) & 0xFF;
             const uint32_t va = kernel::FromPhysical(address);
             if (kind >= 5 || !va || !sizeDwords) break;
-            for (uint32_t i = 0; i < sizeDwords; i++)
-                WriteRegister(kConstantWindows[kind] + index + i, *GuestPtr<be32>(va + i * 4));
+            const uint32_t first = kConstantWindows[kind] + index;
+            if (first + sizeDwords > gpu::kRegisterCount)
+            {
+                for (uint32_t i = 0; i < sizeDwords; i++)
+                    WriteRegister(first + i, *GuestPtr<be32>(va + i * 4));
+                break;
+            }
+            uint32_t values[0x1000];
+            const be32* words = GuestPtr<be32>(va);
+            for (uint32_t i = 0; i < sizeDwords; i++) values[i] = words[i];
+            g.registers.WriteRun(first, values, sizeDwords);
             break;
         }
 
@@ -760,7 +823,7 @@ namespace
             // The offset is already an absolute register.
             if (count < 1) break;
             const uint32_t index = s.Next() & 0xFFFF;
-            for (uint32_t i = 1; i < count; i++) WriteRegister(index + (i - 1), s.Next());
+            WriteRegisters(index, count - 1, s);
             break;
         }
 
@@ -858,8 +921,9 @@ namespace
                 // is fed.
                 const uint32_t base = header & 0x7FFF;
                 const bool one = (header & 0x8000) != 0;
-                for (uint32_t i = 0; i < payload; i++)
-                    WriteRegister(one ? base : base + i, s.Next());
+                if (!one) WriteRegisters(base, payload, s);
+                else
+                    for (uint32_t i = 0; i < payload; i++) WriteRegister(base, s.Next());
                 break;
             }
             case 1:

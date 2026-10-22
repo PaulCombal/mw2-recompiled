@@ -338,17 +338,6 @@ namespace
     {
         const VkShaderStageFlags both = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
-        // The constant blocks, dynamic because every draw takes its own snapshot
-        // of the register file into the arena and points at it by offset.
-        VkDescriptorSetLayoutBinding constants[bindings::kConstantBlocks]{};
-        for (uint32_t i = 0; i < bindings::kConstantBlocks; i++)
-        {
-            constants[i].binding = i;
-            constants[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-            constants[i].descriptorCount = 1;
-            constants[i].stageFlags = both;
-        }
-
         // The layout declares every texture slot, so every shader -- each
         // declaring only the slots it samples -- is compatible with it.
         VkDescriptorSetLayoutBinding textures[kTextureSlots]{};
@@ -360,17 +349,20 @@ namespace
             textures[i].stageFlags = both;
         }
 
-        VkDescriptorSetLayoutBinding memory{};
-        memory.binding = bindings::kArenaBinding;
-        memory.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        memory.descriptorCount = 1;
-        memory.stageFlags = both;
+        VkDescriptorSetLayoutBinding memory[2]{};
+        for (uint32_t i = 0; i < 2; i++)
+        {
+            memory[i].binding = i ? bindings::kArenaFloats : bindings::kArenaBinding;
+            memory[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            memory[i].descriptorCount = 1;
+            memory[i].stageFlags = both;
+        }
 
         struct Set { const VkDescriptorSetLayoutBinding* bindings; uint32_t count; };
         Set sets[3];
-        sets[bindings::kConstantSet] = { constants, bindings::kConstantBlocks };
+        sets[bindings::kConstantSet] = { nullptr, 0 };    // the constants are in the arena
         sets[bindings::kTextureSet] = { textures, kTextureSlots };
-        sets[bindings::kArenaSet] = { &memory, 1 };
+        sets[bindings::kArenaSet] = { memory, 2 };
         for (uint32_t i = 0; i < 3; i++)
         {
             VkDescriptorSetLayoutCreateInfo info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
@@ -385,8 +377,9 @@ namespace
         }
 
         // Register state, not shader state, so not part of a pipeline key.
-        // A stage has one range, so each runs on to the scaled slots both read.
-        constexpr uint32_t kEnd = bindings::kScaledPushOffset + bindings::kScaledPushBytes;
+        // A stage has one range, so each runs on to the scaled slots and the
+        // constant offsets both read.
+        constexpr uint32_t kEnd = bindings::kConstantPushOffset + bindings::kConstantPushBytes;
         VkPushConstantRange ranges[2]{};
         ranges[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         ranges[0].offset = bindings::kPixelPushOffset;

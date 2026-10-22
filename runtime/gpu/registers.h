@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <algorithm>
 #include <cstring>
 
 // The Xenos register file.
@@ -360,6 +361,28 @@ namespace gpu
             if (values[index] == value && !fetch) return;
             values[index] = value;
             stamps[index >> kStampShift] = ++writes;
+        }
+
+        // `count` registers from `first`, as Write would take them one by one,
+        // a stamp block at a time: one compare and one stamp for a block, where
+        // a draw's SET_CONSTANT sends hundreds of dwords most of which are what
+        // they were.
+        void WriteRun(uint32_t first, const uint32_t* source, uint32_t count)
+        {
+            while (count)
+            {
+                const uint32_t block = first >> kStampShift;
+                const uint32_t n = std::min(count, ((block + 1) << kStampShift) - first);
+                const bool fetch = first + n > kConstantBaseFetch && first < kConstantBaseFetch + 32 * 6;
+                if (fetch || std::memcmp(&values[first], source, n * 4))
+                {
+                    std::memcpy(&values[first], source, n * 4);
+                    stamps[block] = ++writes;
+                }
+                first += n;
+                source += n;
+                count -= n;
+            }
         }
 
         // Zero for a window nothing has ever written, which is its own answer.

@@ -39,21 +39,18 @@ namespace vk::renderer::detail
         return at;
     }
 
-    // The file holds 512 vec4 and a stage sees 256 from wherever its base says --
-    // for a pixel shader usually 256, so uploading the low half twice would hand
-    // it the vertex shader's constants.
-    // `needed` is how many of the 256 the shader reads. The uniform block is
-    // still declared as all 256 and the descriptor range is still 4 KB, so what
-    // sits above the copy is whatever the arena held -- which the shader never
-    // reads. That is why each slot keeps 4 KB of headroom.
-    uint32_t WriteConstantWindow(const gpu::RegisterFile& r, uint32_t windowRegister,
-                                 uint32_t slot, uint32_t needed)
+    // The file holds 512 vec4 and a pixel program sees 256 from wherever
+    // SQ_PS_CONST's base says -- usually 256, so uploading the low half would
+    // hand it the vertex program's constants. `needed` is how many of the 256
+    // the program reads; what sits above the copy is whatever the arena held,
+    // which it never reads.
+    uint32_t WritePixelConstants(const gpu::RegisterFile& r, uint32_t needed)
     {
-        const gpu::ConstantWindow window{ r[windowRegister] };
+        const gpu::ConstantWindow window{ r[gpu::SQ_PS_CONST] };
         const uint32_t base = std::min(window.Base(), 256u);
         const uint32_t first = gpu::kConstantBaseAlu + base * 4;
 
-        State::Cached& cache = g.constantWindows[slot];
+        State::Cached& cache = g.pixelWindow;
         // The cached copy covers `cache.count` of them; it serves this draw if
         // it reaches far enough and none of what it holds has been written
         // since. Stamping only the copied range, rather than all 256, means a
@@ -70,6 +67,44 @@ namespace vk::renderer::detail
         if (at == UINT32_MAX) return at;
         std::memcpy(g.arenaMapped + at, &r.values[first], bytes);
         cache = { r.StampOf(first, needed * 4), base, at, true, needed };
+        return at;
+    }
+
+    // A vertex program's constants: each block of 16 its window reaches that
+    // has been written since its last copy into this slot is copied again, and
+    // the table it reads them through is written when one has moved or the
+    // window has. A draw changes a block or so -- its world matrix -- of the
+    // ten it reads, so most of the window is not copied again.
+    uint32_t WriteConstantTable(const gpu::RegisterFile& r, uint32_t needed)
+    {
+        static_assert(gpu::kConstantBaseAlu % (1u << gpu::kStampShift) == 0 && (1u << gpu::kStampShift) == 64,
+                      "a block of 16 constants is one stamp block");
+        const uint32_t base = std::min(gpu::ConstantWindow{ r[gpu::SQ_VS_CONST] }.Base(), 256u);
+        State::Cached& table = g.constantTable;
+        bool moved = !table.valid || table.base != base;
+        if (needed)
+            for (uint32_t b = base / 16; b <= (base + needed - 1) / 16; b++)
+            {
+                const uint32_t first = gpu::kConstantBaseAlu + b * 64;
+                const uint64_t stamp = r.stamps[first >> gpu::kStampShift];
+                State::ConstantBlock& block = g.constantBlocks[b];
+                if (block.valid && block.stamp == stamp)
+                {
+                    g.arenaReused[kArenaConstants] += 256;
+                    continue;
+                }
+                const uint32_t at = CopyIntoArena(&r.values[first], 256, kArenaConstants);
+                if (at == UINT32_MAX) return at;
+                block = { stamp, at / 16, true };
+                moved = true;
+            }
+        if (!moved) return table.at;
+        uint32_t words[bindings::kConstantTableWords] = { base };
+        for (uint32_t b = 0; b < bindings::kConstantFileBlocks; b++)
+            words[4 + b] = g.constantBlocks[b].valid ? g.constantBlocks[b].at : 0;
+        const uint32_t at = CopyIntoArena(words, sizeof words, kArenaConstants);
+        if (at == UINT32_MAX) return at;
+        table = { 0, base, at, true, 0 };
         return at;
     }
 
@@ -122,11 +157,9 @@ namespace vk::renderer::detail
         const uint32_t (&subs)[3] = program.vertexFetchSubs;
         ConstantOffsets out{ 0, 0, 0, 0, 0, false };
 
-        out.vertexFloats = WriteConstantWindow(r, gpu::SQ_VS_CONST, 0,
-                                               ConstantsNeeded(program));
+        out.vertexFloats = WriteConstantTable(r, ConstantsNeeded(program));
         if (out.vertexFloats == UINT32_MAX) return out;
-        out.pixelFloats = WriteConstantWindow(r, gpu::SQ_PS_CONST, 1,
-                                              ConstantsNeeded(pixelProgram));
+        out.pixelFloats = WritePixelConstants(r, ConstantsNeeded(pixelProgram));
         if (out.pixelFloats == UINT32_MAX) return out;
         if (g.drawRecord)
             NoteConstantWindows(r, ConstantsNeeded(program), ConstantsNeeded(pixelProgram));

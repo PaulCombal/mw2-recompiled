@@ -122,17 +122,26 @@ of the ring consumer's time on Team Player.
 
 | Set | Contents |
 |---|---|
-| 0 | dynamic uniform blocks: vertex floats, fetch constants, booleans, loops, pixel floats |
+| 0 | nothing |
 | 1 | textures |
-| 2 | the arena as dwords, bound once per command buffer |
+| 2 | the arena as dwords and as vec4, bound once per command buffer |
+
+A draw pushes where each of its five constant blocks is in the arena
+([shaders.md](shaders.md#the-module-interface)).
 
 - **Float constants.** Each stage reads 256 from its `SQ_VS_CONST` /
-  `SQ_PS_CONST` base. The runtime copies only as many as the shader reads (all
-  of them under relative addressing), and reuses the copy while the register
-  file's write stamp over that range is unchanged. D3D sends a draw's constants
-  whole, so a write of the value a register already holds does not stamp it.
-  Fetch constants are stamped by every write: the vertex data they name is
-  copied with them, and the title rewrites some buffers in place.
+  `SQ_PS_CONST` base. A pixel program's window is copied as far as the shader
+  reads (all of it under relative addressing), and reused while the register
+  file's write stamp over that range is unchanged. A vertex program's is
+  copied a block of 16 at a time: a block whose stamp has not moved since its
+  last copy into this frame's arena is not copied again, and the draw gets a
+  table of where the blocks are. With four players in split screen that halved
+  the constants copied a frame, 25 MB to 13 MB. D3D sends a draw's constants
+  whole, so a write of the value a register already holds does not stamp it,
+  and a run of them is compared and stamped a block of 64 registers at a time
+  (`RegisterFile::WriteRun`). Fetch constants are stamped by every write: the
+  vertex data they name is copied with them, and the title rewrites some
+  buffers in place.
 - **Vertex data is relocated, not mapped.** Each vertex fetch's reachable
   window (lowest to highest index times the stride, plus the fetch tail,
   clipped to the declared size) is copied. Its address in the uploaded fetch

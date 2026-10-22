@@ -193,8 +193,8 @@ namespace vk::renderer::detail
         VkCullModeFlags cullMode = 0;
         VkFrontFace frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         DepthTests depthTests{};
-        VkDescriptorSet constantSet = VK_NULL_HANDLE, textureSet = VK_NULL_HANDLE;
-        uint32_t dynamic[bindings::kConstantBlocks]{};
+        VkDescriptorSet textureSet = VK_NULL_HANDLE;
+        uint32_t offsets[bindings::kConstantBlocks]{};
         VkBuffer indexBuffer = VK_NULL_HANDLE;
         VkIndexType indexType = VK_INDEX_TYPE_UINT16;
         uint32_t count = 0, firstIndex = 0;
@@ -246,9 +246,8 @@ namespace vk::renderer::detail
                 }
             }
             if (set & kConstants)
-                vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
-                                        bindings::kConstantSet, 1, &constantSet,
-                                        bindings::kConstantBlocks, dynamic);
+                vkCmdPushConstants(command, layout, kBoth, bindings::kConstantPushOffset,
+                                   sizeof offsets, offsets);
             if (set & kTextures)
                 vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
                                         bindings::kTextureSet, 1, &textureSet, 0, nullptr);
@@ -468,7 +467,8 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
              (unsigned long long)call.vertexHash, (unsigned long long)call.pixelHash,
              call.primitive, call.indexCount, call.indexed ? "" : "auto ",
              lowestVertex, highestVertex);
-        const float* c = reinterpret_cast<const float*>(g.arenaMapped + constants.vertexFloats);
+        const uint32_t window = std::min(gpu::ConstantWindow{ r[gpu::SQ_VS_CONST] }.Base(), 256u);
+        const float* c = reinterpret_cast<const float*>(&r.values[gpu::kConstantBaseAlu + window * 4]);
         for (uint32_t row = 0; row < 8; row++)
             LOGK("verts:   c%-2u %9.4f %9.4f %9.4f %9.4f", row,
                  c[row * 4], c[row * 4 + 1], c[row * 4 + 2], c[row * 4 + 3]);
@@ -728,17 +728,16 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
         }
     }
 
-    // In binding order, which is the order the dynamic offsets are read in.
-    const uint32_t dynamic[bindings::kConstantBlocks] = {
-        constants.vertexFloats, constants.fetch, constants.booleans, constants.loops,
-        constants.pixelFloats };
-    if (!bound.dynamicValid || std::memcmp(bound.dynamic, dynamic, sizeof dynamic))
+    // In dwords, in the order bindings.h numbers the blocks.
+    const uint32_t offsets[bindings::kConstantBlocks] = {
+        constants.vertexFloats / 4, constants.fetch / 4, constants.booleans / 4, constants.loops / 4,
+        constants.pixelFloats / 4 };
+    if (!bound.offsetsValid || std::memcmp(bound.offsets, offsets, sizeof offsets))
     {
         op.set |= DrawOp::kConstants;
-        op.constantSet = g.constantSet;
-        std::memcpy(op.dynamic, dynamic, sizeof dynamic);
-        std::memcpy(bound.dynamic, dynamic, sizeof dynamic);
-        bound.dynamicValid = true;
+        std::memcpy(op.offsets, offsets, sizeof offsets);
+        std::memcpy(bound.offsets, offsets, sizeof offsets);
+        bound.offsetsValid = true;
     }
 
     if (bound.textureSet != textureSet)

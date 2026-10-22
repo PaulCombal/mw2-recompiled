@@ -264,13 +264,8 @@ bool vk::renderer::Initialise()
     // A slot's share has to hold everything one submission copies -- a frame's
     // is about 50 MB here against the 512 MB asked for, so three shares fit with
     // room to spare. An overflow is reported rather than silently wrapping.
-    // A constant window is copied at the length its shader reads, but its
-    // descriptor range is the full 256 vec4 either way, and Vulkan requires the
-    // offset plus that range to stay inside the buffer. So every slot stops
-    // 4 KB short of where its share ends.
-    constexpr uint32_t kWindowHeadroom = bindings::kBlockBytes[bindings::kVertexFloats];
     const uint32_t share = (g.arenaBytes / kFrameSlots) & ~(g.uniformAlignment - 1);
-    g.arenaSlotBytes = share - kWindowHeadroom;
+    g.arenaSlotBytes = share;
     for (uint32_t i = 0; i < kFrameSlots; i++) g.slots[i].arenaBase = i * share;
     g.command = g.slots[g.slot].buffers[0];
     g.arenaBase = g.slots[g.slot].arenaBase;
@@ -294,53 +289,35 @@ bool vk::renderer::Initialise()
         return false;
     }
 
-    VkDescriptorPoolSize sizes[2]{};
-    sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-    sizes[0].descriptorCount = bindings::kConstantBlocks;
-    sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    sizes[1].descriptorCount = 1;
+    VkDescriptorPoolSize size{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 };
     VkDescriptorPoolCreateInfo descriptors{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-    descriptors.maxSets = 2;
-    descriptors.poolSizeCount = 2;
-    descriptors.pPoolSizes = sizes;
+    descriptors.maxSets = 1;
+    descriptors.poolSizeCount = 1;
+    descriptors.pPoolSizes = &size;
     if (vkCreateDescriptorPool(g.device, &descriptors, nullptr, &g.descriptors) != VK_SUCCESS)
         return false;
 
-    VkDescriptorSetLayout constantLayout =
-        static_cast<VkDescriptorSetLayout>(vk::pipeline::SetLayout(bindings::kConstantSet));
     VkDescriptorSetLayout memoryLayout =
         static_cast<VkDescriptorSetLayout>(vk::pipeline::SetLayout(bindings::kArenaSet));
     VkDescriptorSetAllocateInfo allocateSet{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
     allocateSet.descriptorPool = g.descriptors;
     allocateSet.descriptorSetCount = 1;
-    allocateSet.pSetLayouts = &constantLayout;
-    if (vkAllocateDescriptorSets(g.device, &allocateSet, &g.constantSet) != VK_SUCCESS) return false;
     allocateSet.pSetLayouts = &memoryLayout;
     if (vkAllocateDescriptorSets(g.device, &allocateSet, &g.memorySet) != VK_SUCCESS) return false;
 
-    // Dynamic views into the arena; their ranges are the block sizes, and
-    // every draw supplies its own offsets.
-    constexpr uint32_t kBlocks = bindings::kConstantBlocks;
-    VkDescriptorBufferInfo buffers[kBlocks + 1]{};
-    VkWriteDescriptorSet writes[kBlocks + 1]{};
-    for (uint32_t i = 0; i < kBlocks; i++)
+    // The whole arena, as dwords and as vec4.
+    VkDescriptorBufferInfo buffer{ g.arena, 0, VK_WHOLE_SIZE };
+    VkWriteDescriptorSet writes[2]{};
+    for (uint32_t i = 0; i < 2; i++)
     {
-        buffers[i] = { g.arena, 0, bindings::kBlockBytes[i] };
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = g.constantSet;
-        writes[i].dstBinding = i;
+        writes[i].dstSet = g.memorySet;
+        writes[i].dstBinding = i ? bindings::kArenaFloats : bindings::kArenaBinding;
         writes[i].descriptorCount = 1;
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        writes[i].pBufferInfo = &buffers[i];
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[i].pBufferInfo = &buffer;
     }
-    buffers[kBlocks] = { g.arena, 0, VK_WHOLE_SIZE };
-    writes[kBlocks].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[kBlocks].dstSet = g.memorySet;
-    writes[kBlocks].dstBinding = bindings::kArenaBinding;
-    writes[kBlocks].descriptorCount = 1;
-    writes[kBlocks].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[kBlocks].pBufferInfo = &buffers[kBlocks];
-    vkUpdateDescriptorSets(g.device, kBlocks + 1, writes, 0, nullptr);
+    vkUpdateDescriptorSets(g.device, 2, writes, 0, nullptr);
 
     for (uint32_t i = 0; i < kPresentImages; i++)
     {

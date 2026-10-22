@@ -55,7 +55,9 @@ namespace vk::renderer::detail
         Record([=](VkCommandBuffer) { vkResetCommandPool(device, pool, 0); });
         BeginSegmentBuffer();
         g.arenaUsed = 0;
-        g.constantWindows[0].valid = g.constantWindows[1].valid = false;
+        g.pixelWindow.valid = false;
+        for (State::ConstantBlock& block : g.constantBlocks) block.valid = false;
+        g.constantTable.valid = false;
         g.fetchBlock.valid = g.booleans.valid = g.loops.valid = false;
         g.recording = true;
         return true;

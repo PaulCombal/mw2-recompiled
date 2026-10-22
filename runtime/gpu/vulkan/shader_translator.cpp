@@ -56,10 +56,10 @@ namespace
         Id TextureFetchWord(uint32_t slot, uint32_t word);
         Id SignedField(Id word, uint32_t offset, uint32_t count);
         Id CubeDirection(Id sc, Id tc, Id face);
-        void DeclareVertexFetchInterface();
-        void DeclareFetchConstants();
-        void DeclareBoolConstants();
-        void DeclareLoopConstants();
+        Id ConstantBlock(uint32_t block);
+        Id FetchConstantWord(uint32_t pair, uint32_t word);
+        Id ArenaWord(Id dword);
+        Id ArenaFloat4(Id vec4);
         Id BoolConstant(uint32_t index);
         Id LoopConstant(Id index);
         Id JumpTaken(const ControlFlow& cf);
@@ -87,6 +87,7 @@ namespace
         Id TempIndex(uint32_t reg, bool relative);
         Id LoadConstant(uint32_t index);
         Id LoadConstantRelative(uint32_t index, bool useA0);
+        Id VertexConstant(Id window);
         Id Swizzle(Id value, uint32_t swizzle, const Alu& op);
         Id SplatComponent(Id value, uint32_t component);
         void StoreMasked(Id pointer, Id value, uint32_t mask);
@@ -121,13 +122,14 @@ namespace
         // One array rather than one variable per register: a destination can be
         // addressed relative to aL, which needs a computed index.
         Id m_temps = 0;
-        Id m_constantsBuffer = 0;
+
         // { uint function, float reference } -- the alpha test, which Vulkan
         // has no fixed-function form of.
         Id m_alphaTest = 0;
         Id m_ndc = 0;
         Id m_pushBlock = 0;          // whichever of the two this stage has
         uint32_t m_scaledMember = 0; // and where the scaled slots are in it
+        uint32_t m_offsetsMember = 0; // and the constant blocks' offsets
         Id m_position = 0;
         Id m_vertexIndex = 0;         // the index the sequencer puts in r0.x
         Id m_interpolators[kInterpolatorCount]{};
@@ -139,9 +141,7 @@ namespace
         // A slot is only ever sampled at one dimensionality within one program.
         FetchDimension m_textureDimensions[32]{};
         Id m_arena = 0;               // the frame arena, as dwords
-        Id m_fetchConstants = 0;      // the vertex fetch constant file
-        Id m_boolConstants = 0;       // the 256 boolean constants, as 8 dwords
-        Id m_loopConstants = 0;       // the 32 loop constants, one dword each
+        Id m_arenaFloats = 0;         // and as vec4
 
         // Sequencer state, in function variables because the dispatch loop reads
         // and writes it across blocks.
@@ -355,6 +355,8 @@ namespace
         // Only a shader built for larger targets has the member, so one built
         // for the title's own sizes is what it always was.
         if (m_scale > 1) operands.push_back(m_uint);
+        m_offsetsMember = uint32_t(operands.size()) - 1;
+        for (uint32_t i = 0; i < bindings::kConstantBlocks; i++) operands.push_back(m_uint);
         auto& declarations = m_module.Declarations();
         declarations.push_back(Head(Op::TypeStruct, uint32_t(operands.size()) + 1));
         declarations.insert(declarations.end(), operands.begin(), operands.end());
@@ -370,6 +372,10 @@ namespace
                          { block, m_scaledMember, uint32_t(Decoration::Offset),
                            bindings::kScaledPushOffset });
         }
+        for (uint32_t i = 0; i < bindings::kConstantBlocks; i++)
+            Module::Emit(m_module.Decorations(), Op::MemberDecorate,
+                         { block, m_offsetsMember + i, uint32_t(Decoration::Offset),
+                           bindings::kConstantPushOffset + 4 * i });
         Id pointer = m_module.Pointer(StorageClass::PushConstant, block);
         Id variable = m_module.Allocate();
         Module::Emit(m_module.Declarations(), Op::Variable,
@@ -412,13 +418,12 @@ namespace
         const Id pointerInputFloat4 = m_module.Pointer(StorageClass::Input, m_float4);
         const Id pointerOutputFloat4 = m_module.Pointer(StorageClass::Output, m_float4);
 
-        // One block of 256 vec4 per stage, not shared: SQ_VS_CONST and SQ_PS_CONST
-        // give each a window into the hardware's 512-entry file, and the backend
-        // points each binding at the window its register names.
-        m_constantsBuffer = DeclareArrayBlock(
-            m_float4, bindings::kFloatConstants, 16, bindings::kConstantSet,
-            m_type == shader::Type::Pixel ? bindings::kPixelFloats : bindings::kVertexFloats,
-            "constants");
+        // Every constant is read from the frame arena, at the offset the draw
+        // pushed for its block (bindings.h).
+        m_arena = DeclareArrayBlock(m_uint, 0, 4, bindings::kArenaSet, bindings::kArenaBinding,
+                                    "arena");
+        m_arenaFloats = DeclareArrayBlock(m_float4, 0, 16, bindings::kArenaSet,
+                                          bindings::kArenaFloats, "arena_floats");
 
         // Xenos can be told to skip the viewport transform, and then a vertex
         // program emits window coordinates itself -- D3D9's XYZRHW, a
@@ -481,15 +486,6 @@ namespace
             // Before SPIR-V 1.4 the entry point's interface lists only Input and
             // Output variables.
         }
-
-        if (m_result.vertexFetchMask) DeclareVertexFetchInterface();
-        if (m_result.vertexFetchMask || m_result.textureMask) DeclareFetchConstants();
-
-        // cond_exec tests a boolean constant.
-        for (const ControlFlow& cf : m_flow)
-            if (cf.Opcode() == ControlFlowOpcode::CondExec ||
-                cf.Opcode() == ControlFlowOpcode::CondExecEnd)
-            { DeclareBoolConstants(); break; }
 
         for (uint32_t i = 0; i < kInterpolatorCount; i++)
         {
@@ -586,11 +582,11 @@ namespace
         // So the renderer can copy the window this program reads rather than
         // all 256 of them.
         m_result.constantsRead = std::max(m_result.constantsRead, at32 + 1);
-        Id pointer = m_module.Pointer(StorageClass::Uniform, m_float4);
-        Id zero = m_module.ConstantS(0);
-        Id at = m_module.ConstantS(int32_t(at32));
-        Id chain = Emit(Op::AccessChain, pointer, { m_constantsBuffer, zero, at });
-        return Emit(Op::Load, m_float4, { chain });
+        if (m_type == shader::Type::Vertex) return VertexConstant(m_module.ConstantU(at32));
+        return ArenaFloat4(Emit(Op::IAdd, m_uint,
+                                { Emit(Op::ShiftRightLogical, m_uint,
+                                       { ConstantBlock(bindings::kPixelFloats), m_module.ConstantU(2) }),
+                                  m_module.ConstantU(at32) }));
     }
 
     // The index is computed at run time, so it is wrapped into range rather
@@ -605,10 +601,48 @@ namespace
         Id wrapped = Emit(Op::UMod, m_uint,
                           { Emit(Op::Bitcast, m_uint, { at }),
                             m_module.ConstantU(kFloatConstantCount) });
-        Id pointer = m_module.Pointer(StorageClass::Uniform, m_float4);
-        Id chain = Emit(Op::AccessChain, pointer,
-                        { m_constantsBuffer, m_module.ConstantS(0), wrapped });
-        return Emit(Op::Load, m_float4, { chain });
+        if (m_type == shader::Type::Vertex) return VertexConstant(wrapped);
+        return ArenaFloat4(Emit(Op::IAdd, m_uint,
+                                { Emit(Op::ShiftRightLogical, m_uint,
+                                       { ConstantBlock(bindings::kPixelFloats), m_module.ConstantU(2) }),
+                                  wrapped }));
+    }
+
+    // Where constant block `block` (bindings.h) is in the arena, in dwords, as
+    // the draw pushed it.
+    Id Translator::ConstantBlock(uint32_t block)
+    {
+        return Emit(Op::Load, m_uint,
+                    { Emit(Op::AccessChain, m_module.Pointer(StorageClass::PushConstant, m_uint),
+                           { m_pushBlock, m_module.ConstantU(m_offsetsMember + block) }) });
+    }
+
+    Id Translator::ArenaWord(Id dword)
+    {
+        return Emit(Op::Load, m_uint,
+                    { Emit(Op::AccessChain, m_module.Pointer(StorageClass::Uniform, m_uint),
+                           { m_arena, m_module.ConstantS(0), dword }) });
+    }
+
+    Id Translator::ArenaFloat4(Id vec4)
+    {
+        return Emit(Op::Load, m_float4,
+                    { Emit(Op::AccessChain, m_module.Pointer(StorageClass::Uniform, m_float4),
+                           { m_arenaFloats, m_module.ConstantS(0), vec4 }) });
+    }
+
+    // Constant `window` (0-255) of a vertex program: the file's entry base +
+    // window, found through the table at the block it falls in.
+    Id Translator::VertexConstant(Id window)
+    {
+        const Id table = ConstantBlock(bindings::kVertexFloats);
+        const Id base = ArenaWord(table);
+        const Id entry = Emit(Op::IAdd, m_uint, { base, window });
+        const Id block = Emit(Op::ShiftRightLogical, m_uint, { entry, m_module.ConstantU(4) });
+        const Id copy = ArenaWord(Emit(Op::IAdd, m_uint,
+                                       { table, Emit(Op::IAdd, m_uint, { m_module.ConstantU(4), block }) }));
+        return ArenaFloat4(Emit(Op::IAdd, m_uint,
+                                { copy, Emit(Op::BitwiseAnd, m_uint, { entry, m_module.ConstantU(15) }) }));
     }
 
     Id Translator::Swizzle(Id value, uint32_t swizzle, const Alu& op)
@@ -1090,28 +1124,14 @@ namespace
         m_condition = outer;
     }
 
-    // The 256 boolean constants in the hardware's packed shape, so the block is
-    // a straight copy of the registers.
-    void Translator::DeclareBoolConstants()
-    {
-        if (m_boolConstants) return;
-        m_boolConstants = DeclareArrayBlock(m_module.Vector(m_uint, 4), 2, 16,
-                                            bindings::kConstantSet, bindings::kBoolConstants,
-                                            "bool_constants");
-    }
-
-    // Bit index%32 of dword index/32, which the block layout splits into
-    // vector index/4 and component index%4.
+    // The 256 boolean constants in the hardware's packed shape, 8 dwords, so
+    // the block is a straight copy of the registers: bit index%32 of dword
+    // index/32.
     Id Translator::BoolConstant(uint32_t index)
     {
-        DeclareBoolConstants();
         index &= 0xFF;
-        const uint32_t dword = index / 32;
-        Id pointer = m_module.Pointer(StorageClass::Uniform, m_uint);
-        Id address = Emit(Op::AccessChain, pointer,
-                          { m_boolConstants, m_module.ConstantU(0),
-                            m_module.ConstantU(dword / 4), m_module.ConstantU(dword % 4) });
-        Id word = Emit(Op::Load, m_uint, { address });
+        Id word = ArenaWord(Emit(Op::IAdd, m_uint,
+                                 { ConstantBlock(bindings::kBoolConstants), m_module.ConstantU(index / 32) }));
         Id shifted = Emit(Op::ShiftRightLogical, m_uint,
                           { word, m_module.ConstantU(index % 32) });
         Id masked = Emit(Op::BitwiseAnd, m_uint, { shifted, m_module.ConstantU(1) });
@@ -1120,25 +1140,9 @@ namespace
 
     // The 32 loop constants, one dword each, packing the iteration count, the
     // aL start value and the aL step.
-    void Translator::DeclareLoopConstants()
-    {
-        if (m_loopConstants) return;
-        m_loopConstants = DeclareArrayBlock(m_module.Vector(m_uint, 4), 8, 16,
-                                            bindings::kConstantSet, bindings::kLoopConstants,
-                                            "loop_constants");
-    }
-
-    // The block is 8 vec4s, so the index splits into a vector and a component.
     Id Translator::LoopConstant(Id index)
     {
-        DeclareLoopConstants();
-        Id four = m_module.ConstantU(4);
-        Id vector = Emit(Op::UDiv, m_uint, { index, four });
-        Id component = Emit(Op::UMod, m_uint, { index, four });
-        Id pointer = m_module.Pointer(StorageClass::Uniform, m_uint);
-        Id chain = Emit(Op::AccessChain, pointer,
-                        { m_loopConstants, m_module.ConstantU(0), vector, component });
-        return Emit(Op::Load, m_uint, { chain });
+        return ArenaWord(Emit(Op::IAdd, m_uint, { ConstantBlock(bindings::kLoopConstants), index }));
     }
 
     Id Translator::ArrayElement(Id array, Id index)
@@ -1166,25 +1170,17 @@ namespace
         return cf.JumpCondition() ? wanted : Emit(Op::LogicalNot, m_bool, { wanted });
     }
 
-    // Vertex fetch reads a buffer the title described in a fetch constant, at an
-    // address the shader computes itself. None of that is fixed-function, so
-    // there is no vertex input state: the program reads the frame arena, where
-    // the renderer has copied what the draw reaches and pointed the fetch
+    // Dword `word` (0 or 1) of fetch constant pair `pair`: the fetch window is
+    // 96 pairs of dwords, each padded to four. Vertex fetches read their
+    // address and endianness from it, texture fetches their LOD bias and
+    // exponent adjust. A vertex fetch reads a buffer the title described in a
+    // fetch constant, at an address the shader computes itself: the renderer
+    // has copied what the draw reaches into the arena and pointed the fetch
     // constants at the copies.
-    void Translator::DeclareVertexFetchInterface()
+    Id Translator::FetchConstantWord(uint32_t pair, uint32_t word)
     {
-        m_arena = DeclareArrayBlock(m_uint, 0, 4, bindings::kArenaSet, bindings::kArenaBinding,
-                                    "arena");
-    }
-
-    // The fetch constant window as 96 pairs of dwords, each padded to a vec4 so
-    // the default packing rules suffice: vertex fetches read their address and
-    // endianness from it, texture fetches their LOD bias and exponent adjust.
-    void Translator::DeclareFetchConstants()
-    {
-        m_fetchConstants = DeclareArrayBlock(m_module.Vector(m_uint, 4), bindings::kFetchSlots, 16,
-                                             bindings::kConstantSet, bindings::kFetchConstants,
-                                             "fetch_constants");
+        return ArenaWord(Emit(Op::IAdd, m_uint,
+                              { ConstantBlock(bindings::kFetchConstants), m_module.ConstantU(pair * 4 + word) }));
     }
 
     // The console stores everything big-endian, and the fetch constant says how:
@@ -1373,12 +1369,7 @@ namespace
             const uint32_t constant = op.VertexFetchSlot();
             if (constant >= bindings::kFetchSlots) { Fail("vertex fetch constant", constant); return; }
 
-            Id pointer = m_module.Pointer(StorageClass::Uniform, m_uint);
-            Id zero = m_module.ConstantS(0);
-            Id chain = Emit(Op::AccessChain, pointer,
-                            { m_fetchConstants, zero,
-                              m_module.ConstantS(int32_t(constant)), zero });
-            Id word0 = Emit(Op::Load, m_uint, { chain });
+            Id word0 = FetchConstantWord(constant, 0);
             // dword 0 is the address in dwords, with a two-bit type below it.
             Id base = Emit(Op::ShiftRightLogical, m_uint, { word0, m_module.ConstantU(2) });
 
@@ -1386,14 +1377,10 @@ namespace
             // not always stored 8-in-32: a mesh with 16-bit positions is 8-in-16,
             // and swapping it as if it were whole dwords exchanges the halves of
             // every pair, which stretches triangles across the level.
-            Id chain1 = Emit(Op::AccessChain, pointer,
-                             { m_fetchConstants, zero,
-                               m_module.ConstantS(int32_t(constant)),
-                               m_module.ConstantS(1) });
             Module::Emit(m_module.Code(), Op::Store,
                          { m_lastFetchEndian,
                            Emit(Op::BitwiseAnd, m_uint,
-                                { Emit(Op::Load, m_uint, { chain1 }), m_module.ConstantU(3) }) });
+                                { FetchConstantWord(constant, 1), m_module.ConstantU(3) }) });
 
             // The vertex index arrives as a float, which is how the sequencer hands
             // it over.
@@ -1476,12 +1463,7 @@ namespace
     // vector, so dword `word` of the six is pair 3 * slot + word / 2.
     Id Translator::TextureFetchWord(uint32_t slot, uint32_t word)
     {
-        Id pointer = m_module.Pointer(StorageClass::Uniform, m_uint);
-        Id chain = Emit(Op::AccessChain, pointer,
-                        { m_fetchConstants, m_module.ConstantS(0),
-                          m_module.ConstantS(int32_t(slot * 3 + word / 2)),
-                          m_module.ConstantS(int32_t(word & 1)) });
-        return Emit(Op::Load, m_uint, { chain });
+        return FetchConstantWord(slot * 3 + word / 2, word & 1);
     }
 
     // A signed bit field of a fetch constant dword, as a float.
@@ -1841,7 +1823,6 @@ namespace
         {
             // Reset the iterator unless this is a repeat, then skip the whole loop if
             // it has already run its count.
-            DeclareLoopConstants();
             Id depth = Emit(Op::Load, m_uint, { m_loopDepth });
             Id id = m_module.ConstantU(cf.LoopId());
             SetArrayElement(m_loopIds, depth, id);
@@ -1864,7 +1845,6 @@ namespace
         {
             // Go round again unless the count is exhausted or a predicated break
             // fires.
-            DeclareLoopConstants();
             Id depth = Emit(Op::Load, m_uint, { m_loopDepth });
             Id inner = Emit(Op::ISub, m_uint, { depth, m_module.ConstantU(1) });
             Id id = ArrayElement(m_loopIds, inner);

@@ -293,7 +293,13 @@ namespace vk::renderer::detail
             // handed it.
             uint32_t count = 0;
         };
-        Cached constantWindows[2];        // one per stage
+        Cached pixelWindow;               // the pixel program's constants
+        // The vertex program's constants (bindings.h): where in this slot's
+        // arena each block of 16 was copied, at which register stamp, and the
+        // table that points at them.
+        struct ConstantBlock { uint64_t stamp = 0; uint32_t at = 0; bool valid = false; };
+        ConstantBlock constantBlocks[bindings::kConstantFileBlocks];
+        Cached constantTable;
         Cached fetchBlock, booleans, loops;
         uint32_t fetchSubs[3]{};          // what fetchBlock was assembled for
 
@@ -318,12 +324,11 @@ namespace vk::renderer::detail
         bool guestQueryOpen = false;    // one is open in the current render pass
 
         VkDescriptorPool descriptors = VK_NULL_HANDLE;
-        VkDescriptorSet constantSet = VK_NULL_HANDLE;   // set 0, five dynamic blocks
-        VkDescriptorSet memorySet = VK_NULL_HANDLE;     // set 2, the arena as dwords
+        VkDescriptorSet memorySet = VK_NULL_HANDLE;     // set 2, the arena
 
         std::map<TargetKey, Target> targets;
         std::unordered_map<PipelineKey, VkPipeline, WordsHash> pipelines;
-        std::map<uint64_t, Shader> shaders;
+        std::unordered_map<uint64_t, Shader> shaders;
         // The last usable shader of each type ShaderFor answered with: draws
         // come in runs with the same pair, and an entry stays where it is
         // until the map is cleared.
@@ -346,8 +351,8 @@ namespace vk::renderer::detail
         {
             VkPipeline pipeline = VK_NULL_HANDLE;
             VkDescriptorSet textureSet = VK_NULL_HANDLE;
-            uint32_t dynamic[bindings::kConstantBlocks]{};
-            bool dynamicValid = false;
+            uint32_t offsets[bindings::kConstantBlocks]{};    // the constant blocks', pushed
+            bool offsetsValid = false;
             VkViewport viewport{};
             VkRect2D scissor{};
             bool viewportValid = false, scissorValid = false;
