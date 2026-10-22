@@ -317,8 +317,8 @@ on Windows. A fault is offered in turn to:
 What is left is a real fault. The report gives the guest address, what region
 it is in (null page, function table slot, image, past the top of the space),
 and a backtrace. The recompiled functions are ordinary `sub_XXXXXXXX` symbols
-(linked with `-rdynamic` on Linux), so the host backtrace is the guest call
-stack; on Windows frames are printed as `exe+offset` for `llvm-symbolizer`. A
+(exported on Linux, and only they: `runtime/exports.list`), so the host
+backtrace is the guest call stack; runtime frames print as `mw2-sp(+offset)`; on Windows frames are printed as `exe+offset` for `llvm-symbolizer`. A
 `SIGTRAP` is a guest trap instruction, which IW4 uses for its asserts. A
 `SIGFPE` is an integer divide by zero whose guarding trap the recompiler drops.
 An indirect call to an address outside the code section is reported, and ends

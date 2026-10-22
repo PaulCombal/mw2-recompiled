@@ -1,0 +1,9 @@
+/* The symbols the Linux executable exports: the recompiled functions alone, so
+   a backtrace names the guest call stack (crash.cpp). Everything else stays
+   inside: an exported global of a library linked in -- SDL's g_object_ref
+   function pointer, libstdc++'s __cxa_* -- would be bound in place of the
+   system library's own by any library loaded later, GTK under GNOME's
+   Wayland session among them. */
+{
+    sub_*;
+};

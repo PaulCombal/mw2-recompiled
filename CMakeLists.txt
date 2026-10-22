@@ -198,9 +198,12 @@ if(WIN32)
         target_link_options(mw2 PRIVATE -mwindows)
     endif()
 else()
-    # -rdynamic so backtrace_symbols can resolve the sub_XXXXXXXX guest functions.
-    set_target_properties(mw2 PROPERTIES ENABLE_EXPORTS ON)
-    target_link_options(mw2 PRIVATE -rdynamic)
+    # The sub_XXXXXXXX guest functions exported so backtrace_symbols can name
+    # them, and nothing else (runtime/exports.list).
+    target_link_options(mw2 PRIVATE
+        -Wl,--dynamic-list=${CMAKE_CURRENT_SOURCE_DIR}/runtime/exports.list)
+    set_property(TARGET mw2 APPEND PROPERTY LINK_DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/exports.list)
     if(MW2_PORTABLE)
         target_link_options(mw2 PRIVATE -static-libstdc++ -static-libgcc)
     endif()
