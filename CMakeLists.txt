@@ -46,6 +46,54 @@ elseif(NOT MW2_VERSION STREQUAL "tu6")
     message(FATAL_ERROR "MW2_VERSION must be tu6 or tu0, not '${MW2_VERSION}'")
 endif()
 
+# ---- how the code is optimised ---------------------------------------------
+# Every target below, the libraries fetched included, is compiled for ThinLTO,
+# optimised across files at the link, and with the profile in pgo/: the counts
+# of a recorded play (tools/pgo_record.sh) that tell the compiler which
+# branches are taken and which calls are hot. Together they take ~13% off the
+# CPU time of the thread that limits the frame rate (docs/building.md).
+# MW2_PGO_TRAINING builds the counting executable the profile is recorded with.
+option(MW2_LTO "Optimise across files at the link (ThinLTO)" ON)
+option(MW2_PGO "Optimise with the recorded profile in pgo/, when there is one" ON)
+option(MW2_PGO_TRAINING "Build the executable that records a profile (tools/pgo_record.sh)" OFF)
+if(MW2_PGO_TRAINING)
+    add_compile_options(-fprofile-instr-generate)
+    add_link_options(-fprofile-instr-generate)
+else()
+    if(MW2_LTO)
+        add_compile_options(-flto=thin)
+        add_link_options(-flto=thin "-Wl,--thinlto-cache-dir=${CMAKE_BINARY_DIR}/lto-cache")
+        if(NOT WIN32)
+            # The system linker reads no LLVM bitcode; llvm-mingw's already is lld.
+            add_link_options(-fuse-ld=lld)
+        endif()
+        # Static libraries of bitcode need LLVM's archiver to be indexed; CMake
+        # takes it with clang.
+        if(NOT CMAKE_AR MATCHES "llvm-ar")
+            message(FATAL_ERROR "ThinLTO needs llvm-ar, not ${CMAKE_AR}: build with clang (build.sh), or -DMW2_LTO=OFF")
+        endif()
+    endif()
+    # The profile of this executable, unpacked into the build folder under a
+    # name its hash makes, so that a new one rebuilds everything with it. The
+    # disc's version (tu0) is other code, and has none.
+    set(MW2_PGO_ARCHIVE "${CMAKE_SOURCE_DIR}/pgo/${MW2_TITLE}.tar.xz")
+    if(MW2_PGO AND MW2_VERSION STREQUAL "tu6" AND EXISTS "${MW2_PGO_ARCHIVE}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MW2_PGO_ARCHIVE}")
+        file(SHA256 "${MW2_PGO_ARCHIVE}" hash)
+        string(SUBSTRING "${hash}" 0 16 hash)
+        set(profile_dir "${CMAKE_BINARY_DIR}/pgo-${hash}")
+        if(NOT EXISTS "${profile_dir}/${MW2_TITLE}.profdata")
+            file(ARCHIVE_EXTRACT INPUT "${MW2_PGO_ARCHIVE}" DESTINATION "${profile_dir}")
+        endif()
+        # A function changed since the recording is compiled without its counts.
+        add_compile_options("-fprofile-instr-use=${profile_dir}/${MW2_TITLE}.profdata"
+                            -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date)
+        message(STATUS "Profile: ${MW2_PGO_ARCHIVE}")
+    else()
+        message(STATUS "Profile: none")
+    endif()
+endif()
+
 # ---- recompiled guest code -------------------------------------------------
 file(GLOB PPC_SOURCES CONFIGURE_DEPENDS "${MW2_PPC_DIR}/ppc_recomp.*.cpp")
 list(APPEND PPC_SOURCES "${MW2_PPC_DIR}/ppc_func_mapping.cpp")
@@ -145,7 +193,14 @@ add_executable(mw2 ${RUNTIME_SOURCES}
 target_link_libraries(mw2 PRIVATE ppc_recomp)
 target_compile_options(mw2 PRIVATE -march=${MW2_X86_LEVEL})
 # The one file that must run on any x86-64 processor: it checks for the others.
-set_source_files_properties("${CMAKE_SOURCE_DIR}/runtime/cpu_level.cpp" PROPERTIES COMPILE_OPTIONS "-march=x86-64")
+# Compiled to machine code at once, so the link-time optimiser cannot mix it
+# with code of the higher level.
+set_source_files_properties("${CMAKE_SOURCE_DIR}/runtime/cpu_level.cpp" PROPERTIES COMPILE_OPTIONS "-march=x86-64;-fno-lto")
+if(MW2_PGO_TRAINING)
+    # The runtime leaves with _exit, which writes no profile: this writes it first.
+    target_sources(mw2 PRIVATE "${CMAKE_SOURCE_DIR}/runtime/pgo/training.cpp")
+    target_link_options(mw2 PRIVATE -Wl,--wrap=_exit)
+endif()
 target_compile_definitions(mw2 PRIVATE ${MW2_ONLINE_DEFINITIONS})
 if(MW2_DIAGNOSTICS)
     target_compile_definitions(mw2 PRIVATE MW2_DIAGNOSTICS=1)

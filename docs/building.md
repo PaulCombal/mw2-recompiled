@@ -11,7 +11,8 @@ Everything under version control is hand-written or a patch.
 
 ## Requirements
 
-- `cmake`, `ninja-build`, `clang-18`, `lld-18`, `python3`, `git`.
+- `cmake`, `ninja-build`, `clang-18`, `lld-18`, `python3`, `git`; `llvm-18`
+  (`llvm-profdata-18`) to record a profile.
 - The Vulkan headers and loader (`libvulkan-dev`). Without them the runtime
   builds with no window.
 - SDL3 and Dear ImGui are fetched; SDL3 is linked statically; on Linux it needs the usual
@@ -141,11 +142,46 @@ The switches are in [switches.md](switches.md).
 | `MW2_PORTABLE` | `OFF` | links libstdc++ and libgcc statically (Linux) |
 | `MW2_USE_SDL` | `ON` | SDL3 for the window, input and audio |
 | `MW2_X86_LEVEL` | `x86-64-v2` | the `-march` the game is compiled for. Below SSSE3 every big-endian vector load, store and permute of the recompiled code becomes sixteen byte moves; `runtime/cpu_level.cpp`, compiled for the baseline, tells a player whose processor lacks the level |
+| `MW2_LTO` | `ON` | ThinLTO: every target, the fetched libraries included, optimised across files at the link, with `lld` ([Optimisation](#optimisation)) |
+| `MW2_PGO` | `ON` | compiles with the recorded profile in `pgo/<title>.tar.xz` when there is one (`tu6` only) |
+| `MW2_PGO_TRAINING` | `OFF` | builds the executable with counters that a profile is recorded with (`tools/pgo_record.sh`); no LTO, no profile |
 
 CMake reads the SHA-256 of the executables in `mw2/` and `mw2/tu0/` and of the
 update's fastfiles in `mw2/update/` at configure time: a game executable runs
 only the title executable it was recompiled from, and the launcher installs
 only that disc and that update.
+
+### Optimisation
+
+The thread that turns the title's GPU commands into Vulkan calls limits the
+frame rate, and its time is CPU time: copies, texture checks, driver calls.
+Two compiler techniques take ~13% off it together, measured on the campaign's
+flights and, with a profile from the campaign alone, ~9.5% on a multiplayer
+route it never ran.
+
+- **ThinLTO** (`MW2_LTO`). Every file is compiled to LLVM bitcode, and the
+  link optimises across them: a runtime function inlined into another file's
+  draw loop, code nothing calls dropped. A relink reuses the work of the
+  files that did not change (`lto-cache/` in the build folder).
+- **Profile-guided optimisation** (`MW2_PGO`). A build with counters plays a
+  few routes and counts how often each branch went which way and each function
+  was called; the real build reads those counts, lays the hot paths out
+  straight, inlines the hot calls and moves the cold code aside.
+  `pgo/sp.tar.xz` and `pgo/mp.tar.xz` are the counts, one per executable
+  (the two share the runtime, not the game code).
+
+`tools/pgo_record.sh` records the two profiles: it builds each title with
+counters into `out/pgo-sp/` and `out/pgo-mp/`, flies Team Player and S.S.D.D.
+in the campaign and walks Terminal and Karachi in the multiplayer, uncapped,
+and writes the archives. It needs the game's data, a GPU and about 15 minutes,
+so it runs on a developer's machine and not in the release workflow, which
+builds with what is committed. Record again after large changes to the
+runtime: each function's counts carry a hash of its shape, and a function
+that changed since is compiled without them. An old profile helps less; it
+cannot make the game wrong.
+
+`runtime/cpu_level.cpp` is compiled to machine code at once (`-fno-lto`), so
+that none of the higher level's code is mixed into the check that runs before it.
 
 ## The launcher
 
@@ -336,7 +372,8 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `ppc/`, `ppc_mp/` | generated C++ and its generated glue (gitignored) |
 | `runtime/` | the host runtime |
 | `tools/` | generators, reverse-engineering scripts, capture helpers |
-| `tools/routes/` | recorded walks across `mp_afghan` for `MW2_WALK_PATH` |
+| `tools/routes/` | recorded walks and flights for `MW2_WALK_PATH` and `MW2_FLY_PATH` |
+| `pgo/` | the recorded profiles the build is optimised with ([Optimisation](#optimisation)) |
 | `launcher/` | the launcher: install, and starting the game ([The launcher](#the-launcher)) |
 | `third_party/ffmpeg-xenia/` | builds the XMA frame decoder from Xenia's FFmpeg branch, fetched at configure time |
 | `third_party/fonts/` | the launcher's fonts (Barlow, SIL Open Font License) |
@@ -386,6 +423,7 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `d3d_region.py`, `classify_d3d.py`, `resource_audit.py` | map the statically linked D3D9 ([d3d9-seam.md](d3d9-seam.md)) |
 | `capture_by_hand.sh`, `capture_xenia.sh` | RenderDoc captures from this runtime or from Xenia |
 | `rd_run.sh` | runs a RenderDoc analysis script and closes RenderDoc afterwards; the only way to run one |
+| `pgo_record.sh` | records the profiles in `pgo/` ([Optimisation](#optimisation)) |
 | `rd_thumbs.sh` | the picture from every `.rdc` as a PNG, plus a contact sheet |
 | `flash_hunt.sh`, `flash_hunt_report.py`, `flash_draws.py` | the flash hunt: mark flashes in play, then compare the marked frame's draws with its neighbours' |
 
