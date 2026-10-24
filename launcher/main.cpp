@@ -707,12 +707,11 @@ namespace
                 }
                 break;
             case Action::AspectRatio:
-                settings::SetResolution(settings::AspectRatio() == settings::Ratio::Wide ? settings::Ratio::Wider
-                                                                                         : settings::Ratio::Wide,
-                                        settings::ResolutionRow());
+                settings::NextAspectRatio();
                 break;
             case Action::Resolution:
-                settings::SetResolution(settings::AspectRatio(), (settings::ResolutionRow() + 1) % settings::kResolutions);
+                settings::SetResolution(settings::AspectRatio(),
+                                        (settings::ResolutionRow() + 1) % int(settings::Resolutions(settings::AspectRatio()).size()));
                 break;
             case Action::Antialiasing:
             {
@@ -1028,18 +1027,18 @@ namespace
                 std::string("Whether the game starts fullscreen: now ") + (fullscreen ? "it does, at the screen's own resolution." : "it starts in a window.") +
                 "\n\nChoose to switch it. While playing, F8 switches between the two."
                 "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
-            const bool wider = settings::AspectRatio() == settings::Ratio::Wider;
-            add(Action::AspectRatio, std::string("ASPECT RATIO ") + (wider ? "16:10" : "16:9"), "ASPECT RATIO",
-                std::string("The shape of the game's picture: now ") + (wider ? "16:10." : "16:9, the console's own.") +
-                "\n\nChoose to switch between 16:9 and 16:10. A screen or window of another shape shows black bars. "
-                "The menus and the HUD follow the shape. On 16:10, the videos show whole between thin black bars, "
-                "and the full-screen pictures fill the screen, a little of their sides cut."
+            const settings::Ratio ratio = settings::AspectRatio();
+            add(Action::AspectRatio, std::string("ASPECT RATIO ") + settings::RatioName(ratio), "ASPECT RATIO",
+                std::string("The shape of the game's picture: now ") + settings::RatioName(ratio) +
+                (ratio == settings::Ratio::Wide ? ", the console's own." : ".") +
+                "\n\nChoose to go to the next: 16:9, 16:10, 4:3. A screen or window of another shape shows black bars. "
+                "The menus and the HUD follow the shape; 4:3 is the console's on a 4:3 TV. On 16:10 and 4:3, the videos "
+                "show whole between black bars, and the full-screen pictures fill the screen, their sides cut."
                 "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
             const settings::Resolution& resolution = settings::CurrentResolution();
-            const auto& rows = settings::kResolutionTable[int(settings::AspectRatio())];
             std::string sizes;
-            for (int row = 0; row < settings::kResolutions; row++)
-                sizes += std::string(row ? ", " : "") + rows[row].name;
+            for (const settings::Resolution& row : settings::Resolutions(ratio))
+                sizes += std::string(sizes.empty() ? "" : ", ") + row.name;
             add(Action::Resolution, std::string("RESOLUTION ") + resolution.name, "RESOLUTION",
                 std::string("The size the game draws at, whatever the window's: now ") + resolution.name +
                 (resolution.width == 1280 && resolution.height == 720 && resolution.scale == 1 ? ", the console's own." : ".") +
@@ -1661,7 +1660,7 @@ namespace
                 const int range = settings::kWidestFov - settings::kConsoleFov;
                 frame.slider = float(settings::Fov() - settings::kConsoleFov) / float(range);
                 frame.fov = float(settings::Fov());
-                frame.aspect = settings::AspectRatio() == settings::Ratio::Wider ? 16.0f / 10.0f : 16.0f / 9.0f;
+                frame.aspect = settings::Aspect(settings::AspectRatio());
                 frame.hint = "LEFT AND RIGHT TO CHANGE, ESC OR (B) TO GO BACK";
             }
             // RANK and PRESTIGE: the same, over what the player's stats can hold.

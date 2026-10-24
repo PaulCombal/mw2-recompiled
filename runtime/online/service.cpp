@@ -3,6 +3,16 @@
 #include "../console.h"
 #include "../kernel/kernel.h"
 
+bool online::EnterServiceNamespace(int& exitCode)
+{
+#ifdef MW2_ONLINE_STEAM
+    return EnterSteamNamespace(exitCode);
+#else
+    (void)exitCode;
+    return true;
+#endif
+}
+
 namespace
 {
     // The backends this build has, in the order they are tried (MW2_ONLINE).

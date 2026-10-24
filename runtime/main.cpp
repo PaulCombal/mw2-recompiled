@@ -187,6 +187,16 @@ int main(int argc, char** argv)
     LOGI("--- MW2 recompilation runtime (%s) ---", MW2_TITLE_NAME);
     if (!kept.empty()) LOGI("settings: %s", kept.c_str());
 
+    // Before any thread exists: a Flatpak's Steam is reached from its own
+    // process namespace, which a process of more than one thread cannot join.
+    // The parent that waited for the game ends as it did, and runs nothing of
+    // the game's on the way out.
+    if (int exitCode = 0; !online::EnterServiceNamespace(exitCode))
+    {
+        std::fflush(nullptr);
+        _exit(exitCode);
+    }
+
     // A player starts the executable with no arguments (runtime/install/); a
     // development run names the image, a flat PE or the XEX, and the game folder.
     install::Launch launch;

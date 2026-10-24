@@ -59,8 +59,8 @@ namespace
     // Every row is a frame the game takes.
     constexpr bool RowsValid()
     {
-        for (const auto& rows : settings::kResolutionTable)
-            for (const auto& row : rows)
+        for (int ratio = 0; ratio < settings::kRatios; ratio++)
+            for (const auto& row : settings::Resolutions(settings::Ratio(ratio)))
                 if (!render::FrameValid({ row.width, row.height })) return false;
         return true;
     }
@@ -77,31 +77,59 @@ namespace
     }
 }
 
+const char* settings::RatioName(Ratio ratio)
+{
+    return ratio == Ratio::Wider ? "16:10" : ratio == Ratio::Standard ? "4:3" : "16:9";
+}
+
+float settings::Aspect(Ratio ratio)
+{
+    return ratio == Ratio::Wider ? 16.0f / 10.0f : ratio == Ratio::Standard ? 4.0f / 3.0f : 16.0f / 9.0f;
+}
+
 settings::Ratio settings::AspectRatio()
 {
     const auto [width, height] = KeptFrame();
-    return width * 10 == height * 16 ? Ratio::Wider : Ratio::Wide;
+    if (width * 10 == height * 16) return Ratio::Wider;
+    if (width * 3 == height * 4) return Ratio::Standard;
+    return Ratio::Wide;
 }
 
 int settings::ResolutionRow()
 {
     const auto [width, height] = KeptFrame();
-    const auto& rows = kResolutionTable[int(AspectRatio())];
-    for (int row = 0; row < kResolutions; row++)
-        if (rows[row].width == width && rows[row].height == height && rows[row].scale == Scale()) return row;
-    for (int row = 0; row < kResolutions; row++)
-        if (rows[row].scale == Scale()) return row;
+    const auto rows = Resolutions(AspectRatio());
+    for (size_t row = 0; row < rows.size(); row++)
+        if (rows[row].width == width && rows[row].height == height && rows[row].scale == Scale()) return int(row);
+    for (size_t row = 0; row < rows.size(); row++)
+        if (rows[row].scale == Scale()) return int(row);
     return 0;
 }
 
 const settings::Resolution& settings::CurrentResolution()
 {
-    return kResolutionTable[int(AspectRatio())][ResolutionRow()];
+    return Resolutions(AspectRatio())[ResolutionRow()];
+}
+
+void settings::NextAspectRatio()
+{
+    const Resolution& kept = CurrentResolution();
+    const unsigned height = kept.height * unsigned(kept.scale);
+    const Ratio next = Ratio((int(AspectRatio()) + 1) % kRatios);
+    const auto rows = Resolutions(next);
+    int nearest = 0;
+    for (size_t row = 1; row < rows.size(); row++)
+    {
+        auto off = [&](size_t at) { return std::abs(int(rows[at].height) * rows[at].scale - int(height)); };
+        if (off(row) < off(nearest)) nearest = int(row);
+    }
+    SetResolution(next, nearest);
 }
 
 void settings::SetResolution(Ratio ratio, int row)
 {
-    const Resolution& chosen = kResolutionTable[int(ratio)][std::clamp(row, 0, kResolutions - 1)];
+    const auto rows = Resolutions(ratio);
+    const Resolution& chosen = rows[std::clamp(row, 0, int(rows.size()) - 1)];
     if (chosen.width == 1280 && chosen.height == 720) g_kept.erase("MW2_RENDER");
     else g_kept["MW2_RENDER"] = std::to_string(chosen.width) + "x" + std::to_string(chosen.height);
     g_kept["MW2_SCALE"] = std::to_string(chosen.scale);

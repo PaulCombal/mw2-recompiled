@@ -185,11 +185,27 @@ lobby's "Invite friends" invites every player seen; a copy started with
 ### Steam
 
 `runtime/online/steam.cpp` talks to the Steam client the player already runs.
-It loads the client library from the install -- the usual location, the snap,
-the Flatpak, or `MW2_STEAMCLIENT` on Linux; `steamclient64.dll` from the
-registry's `SteamPath` on Windows -- and calls its versioned interfaces through
-their vtables, as `libsteam_api` does. Nothing of Valve's is built in or
-shipped; the Steamworks SDK is a reference for slots and structures only.
+It loads the client library from the install -- on Linux `MW2_STEAMCLIENT`,
+else the install the running `steam` process has its `steamclient.so` mapped
+from, else the first of the usual location, the snap and the Flatpak;
+`steamclient64.dll` from the registry's `SteamPath` on Windows -- and calls its
+versioned interfaces through their vtables, as `libsteam_api` does. Nothing of
+Valve's is built in or shipped; the Steamworks SDK is a reference for slots and
+structures only. Another install's library than the running Steam's connects
+halfway, then fails its first calls (`IClientUtils::GetSteamRealm returned
+failure code 12`) and crashes.
+
+**The Flatpak's Steam** runs in a process namespace of its own and tells its
+clients apart by process id: a client outside it has its connection dropped. So
+when the running Steam is in another process namespace, the game joins it
+first thing in `main`, before any thread exists
+(`online::EnterServiceNamespace`): `setns` through a pidfd into its user and
+process namespaces together (the user namespace is the player's own, so no
+privilege is needed), or one after the other on kernels that refuse both at
+once. A process namespace takes in only children made after joining, so the
+game forks: the child goes on as the game, and the parent waits, hands it
+SIGTERM and SIGHUP, and exits with its status. The mount and network
+namespaces stay the host's.
 
 The game runs as Spacewar, app 480 (`MW2_STEAM_APPID`). The app id is put in the
 environment before the library loads, because the client reads it at load time

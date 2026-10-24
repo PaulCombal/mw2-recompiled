@@ -277,6 +277,13 @@ game's engine, which draws at any shape. The hooks write the sizes after
 `R_VideoSizes`, and after `R_SetVidConfig` the aspect, the frame's width over
 its height, with square pixels. With the console's frame they do nothing.
 
+**A 4:3 frame.** The video mode (`runtime/kernel/video.cpp`) says the TV is
+widescreen only for a frame wider than 4:3, so a 4:3 frame is the console on a
+4:3 TV: `R_SetVidConfig`'s aspect is already 4/3, `dvarbool(widescreen)` is 0
+and the menus take their own 4:3 layout, 640 of their units across. The
+launcher's 4:3 rows are 640x480, 800x600 and 1024x768 at 1x, and 1280x960 to
+2880x2160 scaled.
+
 **The sizes EDRAM allows** (`runtime/render_size.h`). EDRAM is 2048 tiles of
 80x16 samples. The title puts a surface's depth at the top and its colour
 below it: the console's scene, 2x and 1040 wide, is colour at tile 98 and depth
@@ -300,7 +307,7 @@ at 1x would leave them none.
 between black bars. A 2D picture over the whole frame (a loading screen, a
 menu's background, a full-screen overlay) would be stretched; it covers the
 frame instead: the hook on `R_DrawStretchPic` makes it as large as the frame
-and cuts what spills over, its sides on a 16:10 frame. It does so for a
+and cuts what spills over, its sides on a 16:10 or 4:3 frame. It does so for a
 picture whose every texture was loaded from a file
 (`IMG_CATEGORY_LOAD_FROM_FILE`). A copy of the screen (a render target), which
 the menus blur behind them, is drawn over the frame too, and is left whole.

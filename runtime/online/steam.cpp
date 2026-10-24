@@ -35,15 +35,25 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <vector>
 
 #include "../platform.h"
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
+#include <cerrno>
+#include <csignal>
+#include <fcntl.h>
+#include <sched.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -201,9 +211,51 @@ namespace
     using FreeLastCallbackFn = void (*)(HSteamPipe);
     using GetCallResultFn = bool (*)(HSteamPipe, SteamAPICall, void*, int, int, bool*);
 
-    // Where the player's Steam keeps its client library: the usual install, the
-    // snap and the Flatpak, or MW2_STEAMCLIENT. On Windows, the folder the
-    // registry says Steam is installed in.
+#ifndef _WIN32
+    // The Steam clients running: processes named steam, each with the install
+    // it runs from, two folders above the steamclient.so it has mapped. A
+    // client of another install than the running one's half connects, then
+    // crashes in its first call.
+    struct Running
+    {
+        int pid;
+        std::filesystem::path root;
+    };
+
+    std::vector<Running> RunningSteams()
+    {
+        std::vector<Running> found;
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator("/proc", ec))
+        {
+            const std::string name = entry.path().filename().string();
+            if (name.empty() || name.find_first_not_of("0123456789") != std::string::npos) continue;
+            std::ifstream comm(entry.path() / "comm");
+            std::string command;
+            if (!std::getline(comm, command) || command != "steam") continue;
+            std::ifstream maps(entry.path() / "maps");
+            for (std::string line; std::getline(maps, line);)
+            {
+                const size_t slash = line.find('/');
+                if (slash == std::string::npos) continue;
+                std::string mapped = line.substr(slash);
+                constexpr std::string_view kDeleted = " (deleted)";
+                if (mapped.ends_with(kDeleted)) mapped.resize(mapped.size() - kDeleted.size());
+                const std::filesystem::path library(mapped);
+                if (library.filename() != "steamclient.so") continue;
+                const auto root = std::filesystem::canonical(library.parent_path().parent_path(), ec);
+                if (!ec) found.push_back({ std::stoi(name), root });
+                break;
+            }
+        }
+        return found;
+    }
+#endif
+
+    // Where the player's Steam keeps its client library: MW2_STEAMCLIENT, else
+    // the install the running Steam runs from, else the first of the usual
+    // install, the snap and the Flatpak. On Windows, the folder the registry
+    // says Steam is installed in.
     std::string FindClient()
     {
         if (const char* path = env::Text("MW2_STEAMCLIENT")) return path;
@@ -217,6 +269,12 @@ namespace
         const auto path = std::filesystem::path(folder) / "steamclient64.dll";
         return std::filesystem::exists(path, ec) ? path.string() : std::string();
 #else
+        for (const Running& steam : RunningSteams())
+        {
+            std::error_code ec;
+            const auto path = steam.root / "linux64" / "steamclient.so";
+            if (std::filesystem::exists(path, ec)) return path.string();
+        }
         const char* home = env::Text("HOME");
         if (!home) return {};
         const char* candidates[] = {
@@ -651,3 +709,87 @@ namespace
 }
 
 std::unique_ptr<online::Service> online::MakeSteam() { return std::make_unique<Steam>(); }
+
+#ifdef _WIN32
+bool online::EnterSteamNamespace(int& exitCode)
+{
+    (void)exitCode;
+    return true;
+}
+#else
+namespace
+{
+    pid_t g_game = 0;
+
+    // The parent hands a request to end on to the game. An interrupt from the
+    // terminal reaches the game itself, as it reaches every process of the
+    // terminal's job.
+    void Forward(int signal) { if (g_game > 0) kill(g_game, signal); }
+
+    // The Flatpak's namespaces are owned by a user namespace the player's own
+    // uid made, so joining needs no privilege. Both at once through a pidfd
+    // (Linux 5.8), which some kernels require; else the user namespace, which
+    // grants the right to join the process one, then that.
+    bool Join(int pid)
+    {
+        const int pidfd = int(syscall(SYS_pidfd_open, pid, 0));
+        if (pidfd >= 0)
+        {
+            const bool joined = setns(pidfd, CLONE_NEWUSER | CLONE_NEWPID) == 0;
+            close(pidfd);
+            if (joined) return true;
+        }
+        const std::string at = "/proc/" + std::to_string(pid) + "/ns/";
+        const int user = open((at + "user").c_str(), O_RDONLY | O_CLOEXEC);
+        const int process = open((at + "pid").c_str(), O_RDONLY | O_CLOEXEC);
+        const bool joined = user >= 0 && process >= 0 && setns(user, CLONE_NEWUSER) == 0 &&
+                            setns(process, CLONE_NEWPID) == 0;
+        if (user >= 0) close(user);
+        if (process >= 0) close(process);
+        return joined;
+    }
+}
+
+bool online::EnterSteamNamespace(int& exitCode)
+{
+    std::error_code ec;
+    const auto own = std::filesystem::read_symlink("/proc/self/ns/pid", ec);
+    if (ec) return true;
+    for (const Running& steam : RunningSteams())
+    {
+        const auto its = std::filesystem::read_symlink("/proc/" + std::to_string(steam.pid) + "/ns/pid", ec);
+        if (ec || its == own) continue;
+        if (!Join(steam.pid))
+        {
+            LOGW("online: could not join the namespace of Steam %d (%s), which runs from %s: it may drop "
+                 "the game's connection",
+                 steam.pid, std::strerror(errno), steam.root.string().c_str());
+            return true;
+        }
+        // A process namespace is entered by the children made after joining it.
+        std::fflush(nullptr);
+        const pid_t child = fork();
+        if (child < 0)
+        {
+            LOGW("online: could not start the game in Steam's namespace (%s)", std::strerror(errno));
+            return true;
+        }
+        if (child == 0)
+        {
+            // Ends with the parent, however that ends.
+            prctl(PR_SET_PDEATHSIG, SIGKILL);
+            LOGI("online: in the namespace of Steam %d, which runs from %s", steam.pid, steam.root.string().c_str());
+            return true;
+        }
+        g_game = child;
+        std::signal(SIGINT, SIG_IGN);
+        std::signal(SIGTERM, Forward);
+        std::signal(SIGHUP, Forward);
+        int status = 0;
+        while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+        exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+        return false;
+    }
+    return true;
+}
+#endif

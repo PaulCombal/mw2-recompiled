@@ -172,11 +172,14 @@ namespace
         }
     }
 
-    // How far the picture's shape is from 4:3 towards 16:9: 1 at 16:9.
+    // How far the picture's shape is from 4:3 towards 16:9: 1 at 16:9. A frame
+    // no wider than 4:3 leaves the constants be: dvarbool(widescreen) is 0
+    // then, the video mode's (render_size.h).
     float Widescreen()
     {
         static const float share = [] {
             const render::Size frame = render::Frame();
+            if (!render::Widescreen(frame)) return 1.0f;
             const float aspect = float(frame.width) / float(frame.height);
             return (aspect - 4.0f / 3.0f) / (kConsoleAspect - 4.0f / 3.0f);
         }();

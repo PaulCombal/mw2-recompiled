@@ -147,7 +147,7 @@ def download(w=390, h=72):
 # ---- feature tiles, in a grid
 FEATURES = [
     ('60+', 'FPS', 'as on the console, or uncapped'),
-    ('4K', 'RESOLUTION', '720p to 2160p, 16:9 or 16:10'),
+    ('4K', 'RESOLUTION', '480p to 2160p; 16:9, 16:10, 4:3'),
     ('1–4', 'PLAYERS', 'split screen on one PC'),
     ('STEAM', 'INVITES', 'friends join, no port to open'),
     ('LAN', 'SYSTEM LINK', 'for players without Steam'),

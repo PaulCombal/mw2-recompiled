@@ -5,6 +5,7 @@
 #include "kernel.h"
 #include "../guest.h"
 #include "../log.h"
+#include "../render_size.h"
 #include "../gpu/gpu.h"
 
 namespace
@@ -34,7 +35,7 @@ namespace
         m->displayWidth   = kDisplayWidth;
         m->displayHeight  = kDisplayHeight;
         m->isInterlaced   = 0;
-        m->isWidescreen   = 1;
+        m->isWidescreen   = render::Widescreen(render::Frame());
         m->isHiDef        = 1;
         m->refreshRate    = FloatBits(60.0f);
         m->videoStandard  = 1;          // NTSC
@@ -86,7 +87,7 @@ PPC_FUNC(__imp__XGetVideoMode)
 PPC_FUNC(__imp__VdQueryVideoFlags)
 {
     // Widescreen | HiDef; the title only tests individual bits.
-    ctx.r3.u64 = 0x00000003;
+    ctx.r3.u64 = render::Widescreen(render::Frame()) ? 0x00000003 : 0x00000002;
 }
 
 PPC_FUNC(__imp__VdGetCurrentDisplayInformation)

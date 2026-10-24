@@ -104,6 +104,15 @@ namespace online
     std::unique_ptr<Service> MakeSteam();
     std::unique_ptr<Service> MakeLan();
 
+    // Before any thread exists. A Steam the Flatpak runs is in a process
+    // namespace of its own, and tells its clients apart by process id, so a
+    // client outside it has its connection dropped mid-call. With such a Steam
+    // running, this process joins its namespaces and a child goes on as the
+    // game (true); the parent waits for it and returns false with its exit
+    // status. True and nothing done everywhere else.
+    bool EnterServiceNamespace(int& exitCode);
+    bool EnterSteamNamespace(int& exitCode);   // steam.cpp's
+
     // The service, started on first use: the first backend built in that
     // starts. Null when there is none or none could start.
     Service* Get();

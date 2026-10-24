@@ -21,11 +21,11 @@
 
 <a id="features" href="#features"><img src="docs/images/readme/h-features.svg" alt="Features" height="56"></a>
 
-<img src="docs/images/readme/features.svg" width="100%" alt="60 fps or more; up to 4K, 16:9 or 16:10; 1 to 4 players in split screen; Steam invites; LAN system link; PC custom maps (beta)">
+<img src="docs/images/readme/features.svg" width="100%" alt="60 fps or more; up to 4K, 16:9, 16:10 or 4:3; 1 to 4 players in split screen; Steam invites; LAN system link; PC custom maps (beta)">
 
 - **Campaign and multiplayer**, with split screen for up to four controllers.
 - **Online with friends**: private matches and system link, through Steam invites or on your local network.
-- **Sharper than the console**: any window size or fullscreen; drawn at 720p, 1080p, 1440p or 4K, in 16:9 or 16:10; antialiasing up to 8x; wider field of view.
+- **Sharper than the console**: any window size or fullscreen; drawn at 720p, 1080p, 1440p or 4K, in 16:9, 16:10 or 4:3 (down to 640x480 for a CRT TV); antialiasing up to 8x; wider field of view.
 - **Your profiles**: set your rank and prestige, unlock everything, open any mission.
 - **Custom maps (beta)**: maps made for the PC game, converted by the launcher.
 - **Xbox 360-style controllers**, with rumble.
@@ -61,8 +61,8 @@ Not supported: public matchmaking and ranked playlists, which needed Activision'
 | Graphics | As on the console | Also |
 |---|---|---|
 | FULLSCREEN | | `F8` in the game |
-| ASPECT RATIO | 16:9 | 16:10 |
-| RESOLUTION | 720p | 1080p, 1440p, 4K, or their 16:10 sizes (faster graphics cards) |
+| ASPECT RATIO | 16:9 | 16:10, 4:3 |
+| RESOLUTION | 720p | 1080p, 1440p, 4K, or their 16:10 sizes (faster graphics cards); 640x480 to 2880x2160 in 4:3 |
 | ANTIALIASING | 2x | 4x, 8x, off |
 | FPS LIMIT | 60 | higher, or none |
 | FOV | 65 | up to 120 |

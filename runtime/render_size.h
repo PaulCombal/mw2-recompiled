@@ -60,6 +60,11 @@ namespace render
         return kConsoleScene;
     }
 
+    // Whether a frame is wider than 4:3. The video mode says the TV is
+    // widescreen when it is, and the title takes its 4:3 layout when not, as
+    // on a console set to a 4:3 TV.
+    constexpr bool Widescreen(Size frame) { return frame.width * 3 > frame.height * 4; }
+
     // "960x600"; nullopt for anything else.
     inline std::optional<Size> Parse(const char* text)
     {
