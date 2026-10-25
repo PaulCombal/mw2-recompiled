@@ -344,6 +344,8 @@ namespace
         CheckUpdate, InstallUpdate,
         // The graphics screen, and the next of what each of its entries sets.
         Graphics, Fullscreen, AspectRatio, Resolution, Stretch, Antialiasing, FpsLimit, Fov,
+        // The network screen: which service, and the server's address and password, typed.
+        Network, NextNetwork, ServerAddress, ServerPassword,
         // The maps screen; CUSTOM MAPS turned on asks first, on a screen of its own.
         Maps, CustomMaps, CustomMapsOn, CustomMapsCancel, PcGame,
         // and its maps: one shown at a time, put in or out of the game, removed after a question.
@@ -389,8 +391,11 @@ namespace
         bool profileScreen = false;
         std::vector<profile::Player> players;
         size_t player = 0;
-        bool renaming = false;          // the keyboard types a profile's new name
-        std::string newName;
+        // What the keyboard types: a profile's new name, or the server's address or password.
+        enum class Field { Name, Server, Password };
+        bool typing = false;
+        Field field = Field::Name;
+        std::string typed;
         profile::Campaign campaign;
         // RANK and PRESTIGE as moved on the screen, by the player's stats
         // file (Player::file); 0 and -1 are not moved. They are written as the
@@ -404,6 +409,7 @@ namespace
         bool gameRunning = false;       // looked up once a second while the profile screen shows
         bool reportScreen = false;
         bool graphicsScreen = false;
+        bool networkScreen = false;
         bool mapsScreen = false;
         bool mapsWarning = false;       // CUSTOM MAPS is to be turned on: what that lets in, first
         std::vector<maps::Map> mapList; // read when the screen opens and after each change
@@ -616,6 +622,7 @@ namespace
             case Action::Profile:
             case Action::Report:
             case Action::Graphics:
+            case Action::Network:
             case Action::Maps:
             case Action::Back:
             {
@@ -625,6 +632,7 @@ namespace
                 profileScreen = action == Action::Profile;
                 reportScreen = action == Action::Report;
                 graphicsScreen = action == Action::Graphics;
+                networkScreen = action == Action::Network;
                 mapsScreen = action == Action::Maps;
                 mapsWarning = false;
                 mapRemoving = false;
@@ -739,10 +747,16 @@ namespace
                 settings::SetFov(settings::Fov() >= settings::kWidestFov ? settings::kConsoleFov : settings::Fov() + settings::kFovStep);
                 break;
             case Action::Rename:
-                renaming = true;
-                newName = players[player].name;
-                message.clear();
-                SDL_StartTextInput(window);
+                StartTyping(Field::Name, players[player].name);
+                break;
+            case Action::NextNetwork:
+                settings::SetNetwork(settings::Network((int(settings::CurrentNetwork()) + 1) % settings::kNetworks));
+                break;
+            case Action::ServerAddress:
+                StartTyping(Field::Server, settings::Server());
+                break;
+            case Action::ServerPassword:
+                StartTyping(Field::Password, settings::ServerPassword());
                 break;
             case Action::Rank:
             case Action::Prestige:
@@ -759,26 +773,61 @@ namespace
             }
         }
 
-        // The keyboard while a profile is renamed.
+        void StartTyping(Field what, const std::string& from)
+        {
+            typing = true;
+            field = what;
+            typed = from;
+            message.clear();
+            SDL_StartTextInput(window);
+        }
+
+        // What a field takes: a name of letters, digits and spaces; an
+        // address or password of anything printable but a space.
+        bool Takes(char c) const
+        {
+            const unsigned char u = static_cast<unsigned char>(c);
+            switch (field)
+            {
+            case Field::Name: return typed.size() < 15 && (std::isalnum(u) || c == ' ');
+            case Field::Server: return typed.size() < 253 && u > ' ' && u < 0x7F;
+            case Field::Password: return typed.size() < 63 && u > ' ' && u < 0x7F;
+            }
+            return false;
+        }
+
+        // The keyboard while something is typed.
         void Type(const SDL_Event& event)
         {
             if (event.type == SDL_EVENT_TEXT_INPUT)
             {
                 for (const char* c = event.text.text; *c; c++)
-                    if (newName.size() < 15 && (std::isalnum(static_cast<unsigned char>(*c)) || *c == ' ')) newName += *c;
+                    if (Takes(*c)) typed += *c;
                 return;
             }
             if (event.type != SDL_EVENT_KEY_DOWN) return;
-            if (event.key.key == SDLK_BACKSPACE && !newName.empty()) newName.pop_back();
+            if (event.key.key == SDLK_BACKSPACE && !typed.empty()) typed.pop_back();
+            // Ctrl+V or Shift+Insert pastes, as much of it as the field takes.
+            const bool paste = (event.key.key == SDLK_V && (event.key.mod & SDL_KMOD_CTRL)) ||
+                               (event.key.key == SDLK_INSERT && (event.key.mod & SDL_KMOD_SHIFT));
+            if (paste)
+                if (char* clipboard = SDL_GetClipboardText())
+                {
+                    for (const char* c = clipboard; *c && *c != '\n' && *c != '\r'; c++)
+                        if (Takes(*c)) typed += *c;
+                    SDL_free(clipboard);
+                }
             const bool keep = event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER;
             if (!keep && event.key.key != SDLK_ESCAPE) return;
-            renaming = false;
+            typing = false;
             SDL_StopTextInput(window);
             if (!keep) return;
+            if (field == Field::Server) { settings::SetServer(typed); return; }
+            if (field == Field::Password) { settings::SetServerPassword(typed); return; }
             std::string error;
             const uint64_t id = players[player].id;
-            const bool done = profile::Rename(players[player], newName, error);
-            message = done ? "The profile is now " + newName + "." : error;
+            const bool done = profile::Rename(players[player], typed, error);
+            message = done ? "The profile is now " + typed + "." : error;
             messageIsError = !done;
             messageFocus = focus;
             ReadProfile();
@@ -980,9 +1029,9 @@ namespace
                 add(Action::NextPlayer, "PLAYER " + std::to_string(player + 1) + " OF " + std::to_string(players.size()), true, "PLAYER",
                     who + "\n\nSeveral players have played here. Choose to go to the next one.");
             add(Action::Rename, "RENAME", named && !gameRunning, "NAME",
-                renaming ? "New name: " + newName + "_\n\nENTER keeps it, ESC leaves the name as it was."
+                typing ? "New name: " + typed + "_\n\nENTER keeps it, ESC leaves the name as it was."
                          : who + "\n\n" + (named ? "Type a new name for this profile with the keyboard. On Steam, other players see the Steam name."
-                                                  : "No profile owns these stats any more: they are from a version of the game before profiles, or from a profile since deleted.") + close);
+                                                  : "No profile owns these stats any more: the profile was deleted, or they are from an early version of the game.") + close);
             const bool isFirst = named && players[player].first;
             add(Action::PlayAs, isFirst ? "PLAYER 1" : "PLAY AS", named && !isFirst && !gameRunning, "PLAYER 1",
                 who + "\n\n" + (isFirst ? "This profile plays at the first controller: the campaign's and the multiplayer's player. Choose another profile here to play as that one."
@@ -1079,6 +1128,54 @@ namespace
                 " Left and right change it. A wider view shows more to the sides and makes what is ahead smaller, "
                 "aiming down a sight included; it needs a faster computer. "
                 "It applies to the campaign and the multiplayer, from the next time either is started.");
+            add(Action::Back, "BACK", "", "")->shown.ruleAbove = true;
+            return entries;
+        }
+
+        // The network screen.
+        std::vector<Entry> NetworkEntries() const
+        {
+            std::vector<Entry> entries;
+            entries.reserve(kMostEntries);   // add() hands out pointers into it: it must not move
+            auto add = [&](Action action, std::string label, const char* heading, std::string text) {
+                Entry entry;
+                entry.shown.label = std::move(label);
+                entry.action = action;
+                entry.heading = heading;
+                entry.text = std::move(text);
+                entries.push_back(std::move(entry));
+                return &entries.back();
+            };
+            const settings::Network network = settings::CurrentNetwork();
+            const char* const now =
+                network == settings::Network::Lan      ? "the local network."
+                : network == settings::Network::Server ? "the server below."
+                : network == settings::Network::Steam  ? "Steam."
+                                                       : "none: system link plays on this computer only.";
+            add(Action::NextNetwork, std::string("NETWORK ") + settings::NetworkName(network), "NETWORK",
+                std::string("How the multiplayer reaches other players: now ") + now +
+                "\n\nLAN: SYSTEM LINK finds the games on your local network."
+                "\n\nSERVER: everyone on the same server sees each other's games in SYSTEM LINK, and can join each "
+                "other's private matches, wherever they are. Whoever runs the server gives you its address and password."
+                "\n\nSTEAM: invite your Steam friends to a private match. The game shows as Spacewar. Without Steam "
+                "running, it plays as LAN."
+                "\n\nPlayers can only meet on the same setting, so choose the one your friends use. Choose this "
+                "entry to switch to the next network. Restart the multiplayer for the change to take effect.");
+            const bool server = network == settings::Network::Server;
+            const bool typingServer = typing && field == Field::Server, typingPassword = typing && field == Field::Password;
+            const std::string address = settings::Server();
+            add(Action::ServerAddress, "SERVER " + (address.empty() ? std::string("NONE") : address), "SERVER",
+                typingServer ? "Address: " + typed + "_\n\nCTRL+V pastes. ENTER keeps it, ESC leaves it as it was."
+                             : std::string("The server's address, such as mw2.example.com or mw2.example.com:3074: now ") +
+                                   (address.empty() ? "none." : address + ".") +
+                                   "\n\nChoose to type it. It is used with NETWORK SERVER" +
+                                   (server ? "." : ", which is not chosen now.") +
+                                   "\n\nAnyone on the server can join the games you host: play only with people you trust.");
+            const std::string password = settings::ServerPassword();
+            add(Action::ServerPassword, std::string("PASSWORD ") + (password.empty() ? "NONE" : "SET"), "PASSWORD",
+                typingPassword ? "Password: " + std::string(typed.size(), '*') + "_\n\nCTRL+V pastes. ENTER keeps it, ESC leaves it as it was."
+                               : std::string("The password the server asks for: ") + (password.empty() ? "none now." : "set.") +
+                                     "\n\nChoose to type it; an empty one is none.");
             add(Action::Back, "BACK", "", "")->shown.ruleAbove = true;
             return entries;
         }
@@ -1402,6 +1499,7 @@ namespace
             if (profileScreen) return ProfileEntries();
             if (reportScreen) return ReportEntries();
             if (graphicsScreen) return GraphicsEntries();
+            if (networkScreen) return NetworkEntries();
             if (mapsScreen) return MapsEntries();
             const bool installed = state == setup::State::Installed;
             std::error_code ec;
@@ -1436,6 +1534,9 @@ namespace
 
             // What the game is played with.
             add(Action::Graphics, "GRAPHICS", true, "GRAPHICS", "Fullscreen or a window, the size the game draws at, its antialiasing, how many frames a second and how wide its view is.")->shown.ruleAbove = true;
+            add(Action::Network, "NETWORK", true, "NETWORK",
+                std::string("How the multiplayer reaches other players: on this computer only, the local network, a server, or Steam. Now ") +
+                    settings::NetworkName(settings::CurrentNetwork()) + ".");
             add(Action::Profile, "PROFILES", true, "PROFILES",
                 "Set the multiplayer rank and prestige, unlock everything, and open the campaign's and Special Ops' missions.");
             add(Action::Maps, "MAPS", true, "MAPS",
@@ -1516,7 +1617,7 @@ namespace
         while (!app.quit)
         {
             SDL_Event event;
-            const bool wasRenaming = app.renaming;
+            const bool wasTyping = app.typing;
             while (SDL_PollEvent(&event))
             {
                 ImGui_ImplSDL3_ProcessEvent(&event);
@@ -1527,8 +1628,8 @@ namespace
                 }
                 // A disc image dropped on the window installs from it; while
                 // the update is what is asked for, the file is the update.
-                // A profile's new name, typed.
-                if (app.renaming) app.Type(event);
+                // A profile's new name, or the server's address or password, typed.
+                if (app.typing) app.Type(event);
                 if (event.type == SDL_EVENT_DROP_FILE && event.drop.data)
                     app.Take(app.needsUpdateFile ? Action::ChooseUpdate : Action::Install, event.drop.data);
             }
@@ -1545,7 +1646,7 @@ namespace
                 SDL_RaiseWindow(app.window);
             }
             // The key that ended the typing is not also a choice.
-            const bool typed = wasRenaming && !app.renaming;
+            const bool typed = wasTyping && !app.typing;
 
             ImGui_ImplSDLRenderer3_NewFrame();
             ImGui_ImplSDL3_NewFrame();
@@ -1573,10 +1674,10 @@ namespace
             app.focus = std::clamp(app.focus, 0, count - 1);
             int chosen = pressed({ ImGuiKey_Enter, ImGuiKey_KeypadEnter, ImGuiKey_Space, ImGuiKey_GamepadFaceDown }, false) ? app.focus : -1;
             // While a name is typed the keys are its letters, and the entry stays.
-            if (app.renaming || typed) { app.focus = focusBefore; chosen = -1; }
-            if (app.renaming || typed) {}
+            if (app.typing || typed) { app.focus = focusBefore; chosen = -1; }
+            if (app.typing || typed) {}
             else if (app.JobShown() && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false)) app.job->Cancel();
-            else if ((app.profileScreen || app.graphicsScreen || app.mapsScreen || (app.reportScreen && !app.recording)) && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false))
+            else if ((app.profileScreen || app.graphicsScreen || app.networkScreen || app.mapsScreen || (app.reportScreen && !app.recording)) && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false))
             {
                 sound::Play(sound::Clip::Click);
                 app.Do(app.mapsWarning ? Action::CustomMapsCancel : app.mapRemoving ? Action::RemoveMapNo : Action::Back);
@@ -1643,7 +1744,7 @@ namespace
             if (*update::Current()) frame.corner = std::string(update::Current()) + "   " + frame.corner;
             if (!app.updated.empty()) frame.status = "Updated to " + app.updated + ". " + frame.status;
             frame.hint = app.recording                          ? ""
-                         : app.profileScreen || app.reportScreen || app.graphicsScreen || app.mapsScreen ? "ENTER OR (A) TO CHOOSE, ESC OR (B) TO GO BACK"
+                         : app.profileScreen || app.reportScreen || app.graphicsScreen || app.networkScreen || app.mapsScreen ? "ENTER OR (A) TO CHOOSE, ESC OR (B) TO GO BACK"
                                                                  : "ENTER OR (A) TO CHOOSE";
 
             if (current.action == Action::NextMap && app.mapList.size() > 1)
@@ -1810,8 +1911,13 @@ int main(int argc, char** argv)
 
     // What the last update left behind goes, now that the launcher it
     // replaced has ended.
-    const std::string updated = update::Finish();
+    std::string former;
+    const std::string updated = update::Finish(former);
     settings::Load();
+    // A release built with one online service updated to this one, which has
+    // them all: the network stays the one that release had.
+    if (!former.empty() && settings::CurrentNetwork() == settings::Network::None)
+        settings::SetNetwork(former == "steam" ? settings::Network::Steam : settings::Network::Lan);
     if (!arguments.empty() && play == Action::None)
     {
         if (usage)

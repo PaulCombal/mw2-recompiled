@@ -51,10 +51,13 @@ Read by every build; see [multiplayer.md](multiplayer.md).
 
 | switch | effect |
 |---|---|
-| `MW2_NAME=<name>` | lan: the player's name, instead of his profile's; the name of the first profile when it is made |
-| `MW2_LAN_PORT=<port>` | lan: the shared broadcast port (3074) |
-| `MW2_LAN_JOIN=<name>` | lan: joins that player's party or lobby when it is seen |
-| `MW2_LAN_ACCEPT=1` | lan: accepts invitations |
+| `MW2_NETWORK=none\|lan\|server\|steam` | the online service; `none` (default) keeps system link on this machine, `steam` is lan when Steam is not running. The launcher's NETWORK entry sets it |
+| `MW2_SERVER=<host>[:<port>]` | server: the relay's address (port 3074 when none is given) |
+| `MW2_SERVER_PASSWORD=<text>` | server: the password the relay asks for |
+| `MW2_NAME=<name>` | lan and server: the player's name, instead of his profile's; the name of the first profile when it is made |
+| `MW2_LAN_PORT=<port>` | lan: the shared broadcast port (3074); lan and server: each copy's own port is the first free one above it |
+| `MW2_LAN_JOIN=<name>` | lan and server: joins that player's party or lobby when it is seen |
+| `MW2_LAN_ACCEPT=1` | lan and server: accepts invitations |
 | `MW2_STEAM_APPID=<id>` | steam: the app id to run as (480, Spacewar) |
 | `MW2_STEAMCLIENT=<path>` | steam: the Steam client library, when it is not found |
 | `MW2_TRACE_ONLINE=1` | every datagram through the service (diagnostic) |

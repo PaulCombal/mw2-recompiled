@@ -142,11 +142,6 @@ renamed (`kernel::MovePlayerData`): two machines playing as one player is two
 of the same player in a match, and the title drops the host when a player it
 already has connects again.
 
-Versions before profiles knew the first player by the service's own number,
-Steam's account or a hash of the lan's name. The rank kept under that number
-is renamed to the profile's the first time it plays (`Service::FormerAccount`,
-`InheritOfflineStats` in `kernel/xam.cpp`).
-
 Nobody is at the other controllers until the sign-in screen puts someone
 there, and that is not kept between runs.
 It is the console's screen, which a title asks for with `XamShowSigninUI` and

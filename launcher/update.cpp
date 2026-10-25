@@ -24,12 +24,14 @@ namespace
 #ifndef MW2_RELEASE_KIND
 #define MW2_RELEASE_KIND ""
 #endif
-    // An archive is mw2-<tag>-<system>-<online service>, as the workflow names it.
+    // An archive is mw2-<tag>-<system>, as the workflow names it; until
+    // v0.7.x, mw2-<tag>-<system>-<online service>.
 #ifdef _WIN32
-    constexpr const char* kArchiveEnd = "-" MW2_RELEASE_KIND ".zip";
+    constexpr const char* kExtension = ".zip";
 #else
-    constexpr const char* kArchiveEnd = "-" MW2_RELEASE_KIND ".tar.gz";
+    constexpr const char* kExtension = ".tar.gz";
 #endif
+    const std::string kArchiveEnd = std::string("-") + MW2_RELEASE_KIND + kExtension;
     // GitHub's description of the newest published release: its tag, and for
     // each archive its name, size, SHA-256 and address.
     constexpr const char* kNewest = "https://api.github.com/repos/PaulCombal/mw2-recompiled/releases/latest";
@@ -140,7 +142,7 @@ update::Check update::Look(Release& release, std::string& error)
     fs::remove_all(kFolder, ec);
     release.version = Value(json, "tag_name");
     // An archive's entry gives its name, then its size, digest and address.
-    const std::string end = kArchiveEnd;
+    const std::string& end = kArchiveEnd;
     for (size_t at = json.find("\"name\""); at != std::string::npos; at = json.find("\"name\"", at + 1))
     {
         const std::string name = Value(json, "name", at);
@@ -235,13 +237,23 @@ setup::Result update::Install(const Release& release, setup::Progress& progress,
     return setup::Result::Done;
 }
 
-std::string update::Finish()
+std::string update::Finish(std::string& former)
 {
     std::string version;
     std::ifstream(kDone) >> version;
+    former.clear();
+    std::error_code ec;
+    for (fs::directory_iterator it(kFolder, ec), end; !ec && it != end; it.increment(ec))
+    {
+        const std::string name = Utf8(it->path().filename());
+        for (const char* service : { "steam", "lan" })
+        {
+            const std::string end = std::string("-") + MW2_RELEASE_KIND + "-" + service + kExtension;
+            if (name.size() > end.size() && name.compare(name.size() - end.size(), end.size(), end) == 0) former = service;
+        }
+    }
     // The launcher this one replaced may still be closing, and its file
     // cannot go before it has: the next start tries again.
-    std::error_code ec;
     fs::remove_all(kFolder, ec);
     return version;
 }

@@ -106,8 +106,8 @@ there (`MW2_WALK_TO`, `MW2_WALK_PATH`; [switches.md](switches.md)).
 
 ## The online service
 
-What the title's network calls reach is a backend chosen at build time,
-declared in `runtime/online/service.h`. The kernel side (`kernel/net.cpp`,
+What the title's network calls reach is a backend the player chooses as the
+game starts, declared in `runtime/online/service.h`. The kernel side (`kernel/net.cpp`,
 `kernel/xam.cpp`) keeps everything Xbox-shaped -- `XNADDR`s, session keys,
 sockets, ports -- and asks the service only for what a service does:
 
@@ -121,30 +121,31 @@ sockets, ports -- and asks the service only for what a service does:
 | `Advertise`, `NextJoin`, `InviteFriends` | optional: system-link invitations as the title's `connect` console line |
 | `Lobbies`, `SetJoinable`, `NextInvite` | optional: Xbox LIVE parties and private matches |
 
-    ONLINE=none  TITLE=mp ./build.sh    # default: system link on this machine
-    ONLINE=lan   TITLE=mp ./build.sh    # plain UDP between machines
-    ONLINE=steam TITLE=mp ./build.sh    # through the player's Steam client, or lan without it
+    MW2_NETWORK=none     # default: system link on this machine
+    MW2_NETWORK=lan      # plain UDP between machines
+    MW2_NETWORK=server   # through a relay server (MW2_SERVER)
+    MW2_NETWORK=steam    # through the player's Steam client, or lan without it
 
-A backend is one file, `runtime/online/<name>.cpp`, with a function that makes
-it (`online::MakeLan`). `ONLINE` (CMake `MW2_ONLINE`) says which are built in,
-and `online::Get()` tries them in `service.cpp`'s order and keeps the first
-whose `Start()` succeeds: `steam` builds Steam and then lan, so a player whose
-Steam is not running plays over the local network instead, as another player
-(below). The log names the service.
+The launcher's NETWORK screen writes it, with the server's address and
+password, to `.env`. Every build has every backend; a backend is a function
+that makes it (`online::MakeLan`), and `online::Get()` tries the chosen one's
+list in `service.cpp` and keeps the first whose `Start()` succeeds: `steam` is
+Steam and then lan, so a player whose Steam is not running plays over the local
+network instead, as another player (below). The log names the service. Only
+steam joins the Flatpak Steam's namespace at the start
+(`EnterServiceNamespace`).
 
-`none` builds no backend, and the title's sockets are host UDP sockets, enough
+With `none` there is no service, and the title's sockets are host UDP sockets, enough
 for system link on one machine. Only one copy can have the title's ports then;
 a second one's binds fail, which the title takes for a fatal error and restarts
 on, so `NetDll_bind` leaves its sockets unbound and it plays without a network.
 
-The player's rank is kept under the service's account, so each service has its
-own, and a player with no service is account 1. The first time a service's
-player is seen on a machine he starts from what account 1 earned there
-(`InheritOfflineStats` in `runtime/kernel/xam.cpp`): its stats package is copied
-to his offline XUID's and, without its four leading bytes and its last, to his
-Live stats. Nothing is copied over stats he already has.
+The player's rank is the profile's, whichever service he plays through
+([gameplay.md](gameplay.md#signing-in)): the offline stats under his offline
+XUID and, signed in to Live, the Live stats under his online one
+([saves.md](saves.md)).
 
-With a service built in, the title's sockets are the service's and nothing is
+With a service, the title's sockets are the service's and nothing is
 bound on the host, so several copies can run on one machine. A peer's 64-bit id
 travels inside its `XNADDR` (in `abOnline`, behind the tag `MW2O`), and
 `XNetXnAddrToInAddr` hands the title a stand-in IPv4 address in `10.0.0.0/8`
@@ -162,22 +163,39 @@ A system-link host logs the line another machine joins with:
 issues after a search. `MW2_TRACE_ONLINE=1` logs every datagram through the
 service (diagnostic builds).
 
-### LAN
+### LAN and server
+
+The two are one service, `runtime/online/players.cpp`, over two transports
+(`transport.h`): a transport opens, says where this copy is reached and which
+copy on the machine it is (its slot), sends to one peer or to all, and hands
+over what arrived. The service frames the title's datagrams, keeps who is
+there, and carries the Xbox LIVE lobbies, so both have the same System Link
+list and private matches.
 
 `runtime/online/lan.cpp`: plain UDP on the local network. Each copy sends from a
 port of its own, the first free one above the shared port; broadcasts go to the
 shared port, `MW2_LAN_PORT` (3074). A peer id is the IPv4 address in the top
-bits and the port in the low 16.
+bits and the port in the low 16. The log names the network connections found
+and the one announced.
+
+`runtime/online/server.cpp`: a relay server (`relay/`, [relay.md](relay.md)) at
+`MW2_SERVER`, with `MW2_SERVER_PASSWORD`. The copy says Hello, answers the
+relay's challenge with the token it was given, which every later packet
+carries, and gets its id, 48 bits; one that has none within five seconds does not start,
+and the title stays offline. "To all" is everyone on the relay, and every
+packet goes through it, so nobody needs an open port and nobody learns another
+player's address. A thread says Alive every second, so a copy stays known while
+the title is loading a map and not polling; a relay that forgot it answers
+Unknown, and the copy says Hello again with the id it had. Its own port is
+picked as lan's is, for the slot.
 
 The account is the profile at the first controller
-([gameplay.md](gameplay.md#signing-in)) plus the copy's port slot, so a second
+([gameplay.md](gameplay.md#signing-in)) plus the copy's slot, so a second
 copy on one machine is a second player; `MW2_NAME` is another name for him than
-the profile's. The log names the network connections found and the one
-announced, and says so when another machine on the network has the same
-account.
+the profile's. The log says so when another machine has the same account.
 
-Every copy announces who it is and what can be joined once a second on the
-shared port. `MW2_LAN_JOIN=<name>` joins that player's party or lobby as soon as
+Every copy announces who it is and what can be joined once a second to
+everyone the transport reaches. `MW2_LAN_JOIN=<name>` joins that player's party or lobby as soon as
 it is seen, as choosing a friend and "Join Session" does on the console. The
 lobby's "Invite friends" invites every player seen; a copy started with
 `MW2_LAN_ACCEPT=1` accepts.
@@ -280,9 +298,11 @@ refuses as signed out.
 | switch | effect |
 |---|---|
 | `TITLE=sp\|mp` | `build.sh`: which executable to build |
-| `ONLINE=none\|lan\|steam` | `build.sh`: which online service to build in |
+| `MW2_NETWORK=none\|lan\|server\|steam` | which online service; the launcher's NETWORK |
+| `MW2_SERVER=<host>[:<port>]` | server: the relay's address |
+| `MW2_SERVER_PASSWORD` | server: the relay's password |
 | `MW2_NET_LINK=0\|1` | Ethernet link reported down or up (default: up in the multiplayer, down in the campaign) |
-| `MW2_NAME` | lan: the player's name |
+| `MW2_NAME` | lan and server: the player's name |
 | `MW2_LAN_PORT` | lan: the shared broadcast port (3074) |
 | `MW2_LAN_JOIN=<name>` | lan: join that player's party or lobby when seen |
 | `MW2_LAN_ACCEPT=1` | lan: accept invitations |

@@ -92,6 +92,20 @@ namespace settings
     // MW2_LAUNCHER_SOUNDS: 0 keeps the launcher's menus silent. Written by hand.
     bool Sounds();
 
+    // MW2_NETWORK: how the multiplayer reaches other players -- none, the
+    // default, keeps system link on this machine; lan is the local network;
+    // server a relay server (MW2_SERVER, its password MW2_SERVER_PASSWORD);
+    // steam is Steam, and lan when Steam is not running.
+    enum class Network { None, Lan, Server, Steam };
+    constexpr int kNetworks = 4;
+    const char* NetworkName(Network network);   // "SERVER"
+    Network CurrentNetwork();
+    void SetNetwork(Network network);
+    std::string Server();
+    void SetServer(const std::string& address);
+    std::string ServerPassword();
+    void SetServerPassword(const std::string& password);
+
     // MW2_PC_GAME: the PC game's folder, whose pictures and sounds a map
     // converted from the PC takes (maps.h); nullopt when .env has no such
     // line, empty when it says there is none.

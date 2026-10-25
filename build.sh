@@ -10,13 +10,10 @@
 #   launcher looks for a newer one than it. Without it the launcher does not.
 #   RELEASE=1 builds without diagnostics (runtime/diagnostics.h) into
 #   build-release/ or build-mp-release/.
-#   ONLINE=none|lan|steam picks the online service (runtime/online/); none, the
-#   default, keeps system link on this machine, and steam is lan when Steam is
-#   not running.
 #   WINDOWS=1 cross-compiles for Windows with llvm-mingw (LLVM_MINGW names its
 #   folder; cmake/mingw-w64.cmake) into a -win directory: build-win/, ...
 #   BUILD_DIR=<dir> builds there instead. REGENERATE=0 keeps the recompiled
-#   tree already there, for a second build of the same title (another ONLINE).
+#   tree already there, for a second build of the same title.
 #   The game is built from title update 6: the disc's executables go in
 #   mw2/tu0/, the update's files in mw2/update/, and the executables the
 #   update makes of the disc's in mw2/. TU=<the update's package, or a folder
@@ -177,7 +174,7 @@ if [ "$BUILD" != build ]; then
     [ -d build/_deps/ffmpeg_xma-src ] && FETCHED="$FETCHED -DFETCHCONTENT_SOURCE_DIR_FFMPEG_XMA=$ROOT/build/_deps/ffmpeg_xma-src"
     [ -d build/_deps/imgui-src ]      && FETCHED="$FETCHED -DFETCHCONTENT_SOURCE_DIR_IMGUI=$ROOT/build/_deps/imgui-src"
 fi
-cmake -B $BUILD -G Ninja -DCMAKE_BUILD_TYPE=Release -DMW2_TITLE=$TITLE -DMW2_VERSION=$VERSION -DMW2_DIAGNOSTICS=$DIAGNOSTICS -DMW2_ONLINE=${ONLINE:-none} -DMW2_PORTABLE=$PORTABLE -DMW2_RELEASE_TAG=${RELEASE_TAG:-} $FETCHED $CMAKE_EXTRA \
+cmake -B $BUILD -G Ninja -DCMAKE_BUILD_TYPE=Release -DMW2_TITLE=$TITLE -DMW2_VERSION=$VERSION -DMW2_DIAGNOSTICS=$DIAGNOSTICS -DMW2_PORTABLE=$PORTABLE -DMW2_RELEASE_TAG=${RELEASE_TAG:-} $FETCHED $CMAKE_EXTRA \
       $TOOLCHAIN >/dev/null
 cmake --build $BUILD -j"$(nproc)"
 ls -la $BUILD/$EXE

@@ -10,6 +10,7 @@ namespace settings
     // Puts the file's switches in the environment, where the rest of the
     // runtime reads them. One already set there is left as it is, so a
     // switch given on the command line still decides. Called once, before
-    // anything reads a switch. Returns what it set, for the log.
+    // anything reads a switch. Returns what it set, for the log, with the
+    // value of any *PASSWORD* switch hidden.
     std::string Load(const std::filesystem::path& file);
 }

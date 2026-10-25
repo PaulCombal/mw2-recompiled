@@ -8,11 +8,11 @@
 // peer is a 64-bit id the backend chooses (an address, a SteamID, an account
 // number); the kernel never looks inside it.
 //
-// The backends are chosen when the runtime is built (MW2_ONLINE in CMakeLists,
-// ONLINE= for build.sh), in the order they are tried: the first that starts is
-// the service. A backend is one file under runtime/online/ with a function that
-// makes it, listed in service.cpp; a new service is one more such file. "none"
-// builds none, and the title keeps its offline system link on this machine.
+// Every build has every backend, and the player chooses one as the game starts
+// (MW2_NETWORK, the launcher's NETWORK): none, the default, lan, server or
+// steam, which is lan when Steam is not running. A backend is a function that
+// makes it, listed in service.cpp. With none, there is no service, and the
+// title keeps its offline system link on this machine.
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -58,10 +58,6 @@ namespace online
         // multiplayer rank and settings under it. The profile at the first
         // controller (signin.h), and unique among everyone in a match.
         virtual uint64_t Account() = 0;
-        // What Account() was before there were profiles, the service's own
-        // number for the player, or 0: the kernel moves the rank kept under
-        // that one to Account(), where that has none.
-        virtual uint64_t FormerAccount() { return 0; }
         // The name the service has for the player, or empty: he then goes by
         // his profile's.
         // The title shows the first 15 characters.
@@ -103,10 +99,11 @@ namespace online
     // One per backend, in its file.
     std::unique_ptr<Service> MakeSteam();
     std::unique_ptr<Service> MakeLan();
+    std::unique_ptr<Service> MakeServer();
 
-    // Before any thread exists. A Steam the Flatpak runs is in a process
-    // namespace of its own, and tells its clients apart by process id, so a
-    // client outside it has its connection dropped mid-call. With such a Steam
+    // Before any thread exists, with steam chosen. A Steam the Flatpak runs is
+    // in a process namespace of its own, and tells its clients apart by process
+    // id, so a client outside it has its connection dropped mid-call. With such a Steam
     // running, this process joins its namespaces and a child goes on as the
     // game (true); the parent waits for it and returns false with its exit
     // status. True and nothing done everywhere else.

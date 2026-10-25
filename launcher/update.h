@@ -4,7 +4,7 @@
 //
 // GitHub describes the newest published release at a fixed address: its tag,
 // and each archive's name, size, SHA-256 and address.
-// The archive for this build's system and online service is downloaded,
+// The archive for this build's system is downloaded,
 // checked, unpacked with the system's tar, and its files swapped in; the ones
 // they replace wait in update/ until the next start removes it, since a
 // running program can be moved aside but not deleted.
@@ -18,7 +18,7 @@ namespace update
     // The release this build is, or empty: a build nobody released has
     // nothing to compare with and does not update.
     const char* Current();
-    // Its system and online service, "linux-steam".
+    // Its system, "linux".
     const char* Kind();
 
     struct Release
@@ -34,6 +34,9 @@ namespace update
     setup::Result Install(const Release& release, setup::Progress& progress, std::string& error);
 
     // Removes what the last update left. Returns the version it installed
-    // when this is the first start since.
-    std::string Finish();
+    // when this is the first start since, and in `former` the online service
+    // of the release it was installed by, from the archive that launcher
+    // took: "steam" or "lan" until v0.7.x, which were built with one each,
+    // and empty since.
+    std::string Finish(std::string& former);
 }

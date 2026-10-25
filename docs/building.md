@@ -52,7 +52,6 @@ Everything under version control is hand-written or a patch.
 | `TU=<path>` | the title update: its package, or a folder holding its files. Needed until `mw2/update/` has them |
 | `VERSION=tu0` | builds the disc's own executables, without the update; see [The disc version](#the-disc-version) |
 | `RELEASE=1` | builds without diagnostics (`-DMW2_DIAGNOSTICS=OFF`) and, on Linux, with the C++ runtime linked statically (`MW2_PORTABLE`); adds `-release` to the build directory |
-| `ONLINE=none\|lan\|steam` | the online service ([multiplayer.md](multiplayer.md)); `none` (default) keeps system link on this machine; `steam` has lan behind it |
 | `WINDOWS=1` | cross-compiles for Windows with llvm-mingw; the build directory becomes `build-win...` and the executable `mw2.exe` |
 | `LLVM_MINGW=<dir>` | the unpacked [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) release, required by `WINDOWS=1` |
 | `ISO=<path>` | the disc image. Without one, `mw2/tu0/default.xex` and `mw2/tu0/default_mp.xex` are enough to build, and no game data is extracted |
@@ -138,7 +137,6 @@ The switches are in [switches.md](switches.md).
 | `MW2_DIAGNOSTICS` | `ON` | traces, dumps, statistics, end-of-run reports, the stutter detector and pacing timeline, the flash hunt, the write watchpoint and the headless harness (walker, input script, run deadlines, watchdog); see `runtime/diagnostics.h`. `OFF` unsets every diagnostic switch whatever the environment says |
 | `MW2_LOGGING` | `ON` | `OFF` compiles out every log line, warnings included |
 | `MW2_TRACE_INDIRECT` | `ON` | the generated code checks an indirect call's target and reports a missing one instead of jumping to null; a target outside the code section is reported in every build |
-| `MW2_ONLINE` | `none` | the online service: `none`, `lan`, or `steam` (Steam, then lan) |
 | `MW2_PORTABLE` | `OFF` | links libstdc++ and libgcc statically (Linux) |
 | `MW2_USE_SDL` | `ON` | SDL3 for the window, input and audio |
 | `MW2_X86_LEVEL` | `x86-64-v2` | the `-march` the game is compiled for. Below SSSE3 every big-endian vector load, store and permute of the recompiled code becomes sixteen byte moves; `runtime/cpu_level.cpp`, compiled for the baseline, tells a player whose processor lacks the level |
@@ -285,7 +283,11 @@ for each archive, its name, size, SHA-256 and address, and compares the tag
 with its own. The workflow gives the build its tag
 (`RELEASE_TAG=v0.3.0 ./build.sh`, CMake's `MW2_RELEASE_TAG`); a build without
 one has nothing to compare and the entry is off. The archive it wants is the
-one for its system and online service, `mw2-<tag>-<linux|windows>-<service>`.
+one for its system, `mw2-<tag>-<linux|windows>`. Releases up to v0.7.x were
+built once per online service and their launchers want
+`mw2-<tag>-<system>-<steam|lan>`, so the workflow publishes the archive under
+those two names as well. The first start after such an update finds that name
+in `update/` and keeps the service as NETWORK (`update::Finish`).
 
 Choosing UPDATE TO downloads that archive into `update/` beside the launcher,
 checks its SHA-256, unpacks it with the system's `tar` (Windows 10 and later
@@ -377,11 +379,15 @@ It needs Windows 10 1803 or later, for the placeholder mapping of guest memory.
 ## Release workflow
 
 `.github/workflows/release.yml` runs by hand from the Actions tab with a version
-tag. It builds both titles of title update 6 with both `steam` and `lan` for Linux (Ubuntu 22.04,
+tag. It builds both titles of title update 6 for Linux (Ubuntu 22.04,
 so the binaries need glibc 2.35 at most, with Vulkan-Headers 1.3.275 installed
 over the system's) and for Windows (cross-compiled on Ubuntu with llvm-mingw),
-with ccache, then packages `mw2-sp` and `mw2-mp` with the README per platform
-and service, and drafts a GitHub Release. The two executables come from a
+with ccache, then packages `mw2-sp` and `mw2-mp` with the README per platform,
+and drafts a GitHub Release. A third job builds the relay's image
+([relay.md](relay.md)) for amd64 and arm64, pushes it to
+`ghcr.io/<owner>/mw2-relay:<tag>` with the workflow's own token, and adds the
+amd64 binary to the release. The registry makes a new package private: it is
+made public once, in the package's settings on GitHub. The two executables come from a
 private repository named by the secret `ASSET_REPO`, read with
 `ASSET_REPO_TOKEN`, which holds `default.xex` and `default_mp.xex` at its root
 and the update's two patches and three fastfiles under `title-updates/TU6/`.
@@ -401,6 +407,7 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `tools/routes/` | recorded walks and flights for `MW2_WALK_PATH` and `MW2_FLY_PATH` |
 | `pgo/` | the recorded profiles the build is optimised with ([Optimisation](#optimisation)) |
 | `launcher/` | the launcher: install, and starting the game ([The launcher](#the-launcher)) |
+| `relay/` | the relay server for NETWORK SERVER, and its Dockerfile ([relay.md](relay.md)) |
 | `third_party/ffmpeg-xenia/` | builds the XMA frame decoder from Xenia's FFmpeg branch, fetched at configure time |
 | `third_party/fonts/` | the launcher's fonts (Barlow), and Michroma for the README's titles; SIL Open Font License |
 | `docs/` | this documentation |
@@ -417,7 +424,7 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `install/` | a player's start: the executable check, XEX decryption, the hand-over to the launcher |
 | `kernel/` | kernel and XAM imports: memory, objects and waits, threads, files, content and profile, input, networking, video, audio |
 | `apu/` | the XAudio render driver and the XMA decoder |
-| `online/` | the online service backends (`none`, `lan`, `steam`) |
+| `online/` | the online services (`lan`, `server`, `steam`), chosen as the game starts |
 | `gpu/` | the command processor: ring and PM4 packets, interrupts, D3D9's command-buffer arena, texture fetch and tiling, the D3D9 hooks, the write watch (`memory_watch.*`) |
 | `gpu/vulkan/` | the Vulkan renderer: draws, targets, resolves, frames, pipelines and pipeline libraries, the shader translator, the texture cache, the recorder thread, the display table, the presenter window, RenderDoc capture |
 | `image_move.cpp` | the image pool's block copy, which the console makes with a memory-export draw |
@@ -466,6 +473,7 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | [rendering.md](rendering.md) | render targets, resolves, pipeline state, gamma and MSAA |
 | [gameplay.md](gameplay.md) | getting from the menu into a level |
 | [multiplayer.md](multiplayer.md) | the multiplayer executable and the online services |
+| [relay.md](relay.md) | running a server for NETWORK SERVER, and its protocol |
 | [audio.md](audio.md) | the audio driver and the XMA decoder |
 | [saves.md](saves.md) | content packages, saved games and the profile |
 

@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <string>
@@ -225,3 +226,44 @@ void settings::SetPcGame(const std::string& folder)
     g_kept["MW2_PC_GAME"] = folder;
     Save();
 }
+
+namespace
+{
+    constexpr const char* kNetworkValues[] = { "none", "lan", "server", "steam" };
+    constexpr const char* kNetworkNames[] = { "NONE", "LAN", "SERVER", "STEAM" };
+    static_assert(std::size(kNetworkValues) == settings::kNetworks && std::size(kNetworkNames) == settings::kNetworks);
+
+    std::string Kept(const char* name)
+    {
+        const auto kept = g_kept.find(name);
+        return kept == g_kept.end() ? std::string() : kept->second;
+    }
+
+    // An empty value is the game's own way: the line goes.
+    void Keep(const char* name, const std::string& value)
+    {
+        if (value.empty()) g_kept.erase(name);
+        else g_kept[name] = value;
+        Save();
+    }
+}
+
+const char* settings::NetworkName(Network network) { return kNetworkNames[int(network)]; }
+
+settings::Network settings::CurrentNetwork()
+{
+    const std::string kept = Kept("MW2_NETWORK");
+    for (int i = 0; i < kNetworks; i++)
+        if (kept == kNetworkValues[i]) return Network(i);
+    return Network::None;
+}
+
+void settings::SetNetwork(Network network)
+{
+    Keep("MW2_NETWORK", network == Network::None ? "" : kNetworkValues[int(network)]);
+}
+
+std::string settings::Server() { return Kept("MW2_SERVER"); }
+void settings::SetServer(const std::string& address) { Keep("MW2_SERVER", address); }
+std::string settings::ServerPassword() { return Kept("MW2_SERVER_PASSWORD"); }
+void settings::SetServerPassword(const std::string& password) { Keep("MW2_SERVER_PASSWORD", password); }

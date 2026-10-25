@@ -84,44 +84,6 @@ namespace
         return name;
     }
 
-    // The first time a profile plays at the first controller, it takes over
-    // what the player has earned here so far. From the versions that knew him
-    // by the online service's own number (FormerAccount: Steam's account, the
-    // lan's hash of his name), the rank kept under that number is renamed to
-    // the profile's. Failing that, the rank earned with no service, when the
-    // one player was account 1, is copied: the offline stats package under his
-    // own offline XUID, and, signed in to Live, the stats Live keeps for him,
-    // which are the same file without its four leading bytes and its last
-    // (docs/saves.md). What he already has is left alone.
-    void InheritOfflineStats()
-    {
-        auto* service = online::Get();
-        const auto hex = XuidText;
-        const fs::path& saves = SaveRoot();
-        std::error_code ec;
-        if (service)
-            if (const uint64_t former = service->FormerAccount()) kernel::MovePlayerData(former, LocalAccount());
-        const std::string none = "mpdata_e000000000000001";
-        std::ifstream in(saves / none / none, std::ios::binary);
-        const std::vector<char> stats{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
-        constexpr size_t kLead = 4, kStored = 8192;
-        if (stats.size() != kLead + kStored + 1) return;
-
-        const std::string own = "mpdata_" + hex(LocalXuid());
-        if (own != none && !fs::exists(saves / own, ec) && fs::create_directories(saves / own, ec))
-        {
-            std::ofstream(saves / own / own, std::ios::binary).write(stats.data(), std::streamsize(stats.size()));
-            LOGI("xam: %s starts from the rank earned here offline", own.c_str());
-        }
-        if (!service || !online::Live()) return;
-        const fs::path live = saves / "online" / "user" / hex(LocalOnlineXuid());
-        if (!fs::exists(live / "mpdata", ec) && (fs::create_directories(live, ec), fs::is_directory(live, ec)))
-        {
-            std::ofstream(live / "mpdata", std::ios::binary).write(stats.data() + kLead, std::streamsize(kStored));
-            LOGI("xam: the Live stats of %s start from the rank earned here offline", hex(LocalOnlineXuid()).c_str());
-        }
-    }
-
     // Who is at a controller. The first is the player above, signed in to
     // Live when the online service carries lobbies. The others are whoever
     // the sign-in screen put there (signin.h): a profile of this machine,
@@ -137,8 +99,6 @@ namespace
         Who who;
         if (user == kLocalUser)
         {
-            static std::once_flag inherited;
-            std::call_once(inherited, InheritOfflineStats);
             const bool live = online::Live();
             who.state = live ? kSignedInToLive : kSignedInLocally;
             who.offline = LocalXuid();

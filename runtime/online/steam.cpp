@@ -417,7 +417,6 @@ namespace
         // The profile at the first controller; until there were profiles it
         // was the Steam account, and the rank is still under that.
         uint64_t Account() override { return signin::First().id; }
-        uint64_t FormerAccount() override { return self_; }
         std::string LocalName() override { return name_; }
 
         bool Send(uint64_t peer, uint16_t fromPort, uint16_t toPort,

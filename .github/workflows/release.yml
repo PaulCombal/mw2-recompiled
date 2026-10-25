@@ -7,6 +7,10 @@
 # ASSET_REPO names it (owner/name), ASSET_REPO_TOKEN is a token that can read
 # it, and it holds default.xex and default_mp.xex at its root and the update's
 # files (two .xexp, three .ff) under title-updates/TU6/.
+#
+# The relay players choose with NETWORK SERVER (relay/) is built from this
+# repository alone: its image goes to the GitHub Container Registry under the
+# release's tag, and its Linux binary into the release.
 name: release
 
 on:
@@ -18,6 +22,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   linux:
@@ -80,29 +85,26 @@ jobs:
         run: |
           export CMAKE_EXTRA="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DFETCHCONTENT_BASE_DIR=$PWD/out/_deps"
           for title in sp mp; do
-            regenerate=1
-            for online in steam lan; do
-              TITLE=$title RELEASE=1 RELEASE_TAG=${{ inputs.version }} ONLINE=$online BUILD_DIR=out/$title-$online REGENERATE=$regenerate ./build.sh
-              regenerate=0
-            done
+            TITLE=$title RELEASE=1 RELEASE_TAG=${{ inputs.version }} BUILD_DIR=out/$title ./build.sh
           done
           ccache --show-stats
 
       - name: Package
         run: |
           mkdir -p dist
-          for online in steam lan; do
-            name=mw2-${{ inputs.version }}-linux-$online
-            mkdir -p $name
-            cp out/sp-$online/mw2 $name/mw2-sp
-            cp out/mp-$online/mw2 $name/mw2-mp
-            cp out/sp-$online/mw2-launcher $name/mw2-launcher
-            strip $name/mw2-sp $name/mw2-mp $name/mw2-launcher
-            cp README.md LICENSE $name/
-            cp third_party/fonts/OFL.txt $name/FONT-LICENSE.txt
-            tar czf dist/$name.tar.gz $name
-          done
-          echo "glibc needed: $(objdump -T out/mp-steam/mw2 | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1)"
+          name=mw2-${{ inputs.version }}-linux
+          mkdir -p $name
+          cp out/sp/mw2 $name/mw2-sp
+          cp out/mp/mw2 $name/mw2-mp
+          cp out/sp/mw2-launcher $name/mw2-launcher
+          strip $name/mw2-sp $name/mw2-mp $name/mw2-launcher
+          cp README.md LICENSE $name/
+          cp third_party/fonts/OFL.txt $name/FONT-LICENSE.txt
+          tar czf dist/$name.tar.gz $name
+          # Launchers up to v0.7.x look for the archive of their own online
+          # service; the same archive under both names updates them.
+          for online in steam lan; do cp dist/$name.tar.gz dist/$name-$online.tar.gz; done
+          echo "glibc needed: $(objdump -T out/mp/mw2 | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1)"
           ls -la dist
 
       - uses: actions/upload-artifact@v6
@@ -159,28 +161,25 @@ jobs:
         run: |
           export CMAKE_EXTRA="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DFETCHCONTENT_BASE_DIR=$PWD/out/_deps"
           for title in sp mp; do
-            regenerate=1
-            for online in steam lan; do
-              WINDOWS=1 TITLE=$title RELEASE=1 RELEASE_TAG=${{ inputs.version }} ONLINE=$online BUILD_DIR=out/$title-$online REGENERATE=$regenerate ./build.sh
-              regenerate=0
-            done
+            WINDOWS=1 TITLE=$title RELEASE=1 RELEASE_TAG=${{ inputs.version }} BUILD_DIR=out/$title ./build.sh
           done
           ccache --show-stats
 
       - name: Package
         run: |
           mkdir -p dist
-          for online in steam lan; do
-            name=mw2-${{ inputs.version }}-windows-$online
-            mkdir -p $name
-            cp out/sp-$online/mw2.exe $name/mw2-sp.exe
-            cp out/mp-$online/mw2.exe $name/mw2-mp.exe
-            cp out/sp-$online/mw2-launcher.exe $name/mw2-launcher.exe
-            $LLVM_MINGW/bin/llvm-strip $name/mw2-sp.exe $name/mw2-mp.exe $name/mw2-launcher.exe
-            cp README.md LICENSE $name/
-            cp third_party/fonts/OFL.txt $name/FONT-LICENSE.txt
-            zip -qr dist/$name.zip $name
-          done
+          name=mw2-${{ inputs.version }}-windows
+          mkdir -p $name
+          cp out/sp/mw2.exe $name/mw2-sp.exe
+          cp out/mp/mw2.exe $name/mw2-mp.exe
+          cp out/sp/mw2-launcher.exe $name/mw2-launcher.exe
+          $LLVM_MINGW/bin/llvm-strip $name/mw2-sp.exe $name/mw2-mp.exe $name/mw2-launcher.exe
+          cp README.md LICENSE $name/
+          cp third_party/fonts/OFL.txt $name/FONT-LICENSE.txt
+          zip -qr dist/$name.zip $name
+          # Launchers up to v0.7.x look for the archive of their own online
+          # service; the same archive under both names updates them.
+          for online in steam lan; do cp dist/$name.zip dist/$name-$online.zip; done
           ls -la dist
 
       - uses: actions/upload-artifact@v6
@@ -188,8 +187,39 @@ jobs:
           name: windows
           path: dist/*
 
+  relay:
+    # The image for amd64 and arm64, the second built under emulation, and the
+    # amd64 binary out of it for the release.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push the image
+        run: |
+          image=ghcr.io/$(echo "${{ github.repository_owner }}" | tr A-Z a-z)/mw2-relay:${{ inputs.version }}
+          docker buildx build relay/ --platform linux/amd64,linux/arm64 --push --tag $image \
+            --label org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          mkdir -p dist
+          docker buildx build relay/ --platform linux/amd64 --output type=local,dest=binary
+          cp binary/mw2-relay dist/mw2-relay-${{ inputs.version }}-linux-x86_64
+          ls -la dist
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: relay
+          path: dist/*
+
   release:
-    needs: [linux, windows]
+    needs: [linux, windows, relay]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v7
@@ -210,8 +240,11 @@ jobs:
           - Built on ${{ github.sha }}
 
           Needs your own copy of the game: an ISO of the Xbox 360 disc, version 1.0.557.
-          Take `steam` to play online through Steam, `lan` to play on a local network.
+          Take `linux` or `windows` (the `-steam` and `-lan` copies are the same file, for launchers of v0.7.x to update themselves).
           Extract it anywhere and start `mw2-launcher`: it installs the game from your ISO, then starts it.
+          NETWORK in the launcher chooses how the multiplayer reaches other players: none, LAN, a server, or Steam.
+
+          To run a server for your players: `docker run -d --restart unless-stopped -p 3074:3074/udp -e MW2_RELAY_PASSWORD=<password> ghcr.io/paulcombal/mw2-relay:${{ inputs.version }}`, or the `mw2-relay` binary below (docs/relay.md).
           EOF
           gh release create "${{ inputs.version }}" dist/* --repo "${{ github.repository }}" \
             --draft --title "${{ inputs.version }}" --notes-file notes.md --target "${{ github.sha }}"

@@ -1,54 +1,61 @@
 #include "service.h"
-#include "../log.h"
 #include "../console.h"
+#include "../env.h"
 #include "../kernel/kernel.h"
+#include "../log.h"
 
-bool online::EnterServiceNamespace(int& exitCode)
-{
-#ifdef MW2_ONLINE_STEAM
-    return EnterSteamNamespace(exitCode);
-#else
-    (void)exitCode;
-    return true;
-#endif
-}
+#include <cstring>
 
 namespace
 {
-    // The backends this build has, in the order they are tried (MW2_ONLINE).
+    // A backend and those tried after it when it does not start.
     struct Backend
     {
         const char* name;
         std::unique_ptr<online::Service> (*make)();
     };
-    constexpr Backend kBackends[] = {
-#ifdef MW2_ONLINE_STEAM
-        { "steam", online::MakeSteam },
-#endif
-#ifdef MW2_ONLINE_LAN
-        { "lan", online::MakeLan },
-#endif
-        { nullptr, nullptr },
-    };
+    constexpr Backend kLan[] = { { "lan", online::MakeLan }, { nullptr, nullptr } };
+    constexpr Backend kServer[] = { { "server", online::MakeServer }, { nullptr, nullptr } };
+    constexpr Backend kSteam[] = { { "steam", online::MakeSteam }, { "lan", online::MakeLan }, { nullptr, nullptr } };
+    constexpr Backend kNone[] = { { nullptr, nullptr } };
+
+    // MW2_NETWORK: what the player chose; none when unset or unknown.
+    const Backend* Chosen()
+    {
+        const char* network = env::Text("MW2_NETWORK");
+        if (!network || !*network || std::strcmp(network, "none") == 0) return kNone;
+        if (std::strcmp(network, "lan") == 0) return kLan;
+        if (std::strcmp(network, "server") == 0) return kServer;
+        if (std::strcmp(network, "steam") == 0) return kSteam;
+        LOGW("online: MW2_NETWORK=%s is none of none, lan, server, steam; playing without a network", network);
+        return kNone;
+    }
+}
+
+bool online::EnterServiceNamespace(int& exitCode)
+{
+    if (Chosen() != kSteam) return true;
+    return EnterSteamNamespace(exitCode);
 }
 
 online::Service* online::Get()
 {
     static Service* const service = [] {
         static std::unique_ptr<Service> made;
-        for (const Backend& backend : kBackends)
+        const Backend* const chosen = Chosen();
+        for (const Backend* backend = chosen; backend->make; backend++)
         {
-            if (!backend.make) break;
-            made = backend.make();
+            made = backend->make();
             if (made->Start())
             {
-                LOGI("online: the service is %s", backend.name);
+                LOGI("online: the service is %s", backend->name);
                 return made.get();
             }
             made.reset();
-            LOGW("online: %s did not start", backend.name);
+            LOGW("online: %s did not start", backend->name);
         }
-        if (kBackends[0].make) LOGW("online: no service started; the title stays offline");
+        if (chosen->make) LOGW("online: no service started; the title stays offline");
+        else LOGI("online: no network chosen; system link stays on this machine");
         return static_cast<Service*>(nullptr);
     }();
     return service;

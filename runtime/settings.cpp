@@ -20,7 +20,9 @@ std::string settings::Load(const std::filesystem::path& path)
 #else
         setenv(name.c_str(), value.c_str(), 0);
 #endif
-        set += (set.empty() ? "" : " ") + line;
+        // A password stays out of the log, which a bug report publishes.
+        const bool secret = name.find("PASSWORD") != std::string::npos;
+        set += (set.empty() ? "" : " ") + (secret ? name + "=(hidden)" : line);
     }
     return set;
 }

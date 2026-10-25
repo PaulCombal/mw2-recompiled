@@ -163,31 +163,16 @@ set_source_files_properties("${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_build
 # kernel import the runtime lacks, a tracing hook for every D3D9 entry point --
 # lives beside that output, since it is different for each title.
 # ---- online service --------------------------------------------------------
-# What the title's network calls reach (runtime/online/service.h): "none" keeps
-# system link on this machine, "lan" is plain UDP between machines, "steam" is
-# Steam, with lan behind it for when Steam is not running. A backend is the one
-# file runtime/online/<name>.cpp; the runtime tries them in service.cpp's order.
-set(MW2_ONLINE "none" CACHE STRING "Online service: none, lan or steam")
-if(MW2_ONLINE STREQUAL "none")
-    set(MW2_ONLINE_BACKENDS "")
-elseif(MW2_ONLINE STREQUAL "lan")
-    set(MW2_ONLINE_BACKENDS lan)
-elseif(MW2_ONLINE STREQUAL "steam")
-    set(MW2_ONLINE_BACKENDS steam lan)
-else()
-    message(FATAL_ERROR "MW2_ONLINE=${MW2_ONLINE}: none, lan or steam")
-endif()
-set(MW2_ONLINE_SOURCES "")
-set(MW2_ONLINE_DEFINITIONS "")
-foreach(backend ${MW2_ONLINE_BACKENDS})
-    list(APPEND MW2_ONLINE_SOURCES "${CMAKE_SOURCE_DIR}/runtime/online/${backend}.cpp")
-    string(TOUPPER "${backend}" backend_upper)
-    list(APPEND MW2_ONLINE_DEFINITIONS "MW2_ONLINE_${backend_upper}=1")
-endforeach()
-message(STATUS "Online service: ${MW2_ONLINE}")
+# What the title's network calls reach (runtime/online/service.h). Every build
+# has every backend, and the player chooses one as the game starts (MW2_NETWORK).
+set(MW2_ONLINE_SOURCES
+    "${CMAKE_SOURCE_DIR}/runtime/online/service.cpp"
+    "${CMAKE_SOURCE_DIR}/runtime/online/players.cpp"
+    "${CMAKE_SOURCE_DIR}/runtime/online/lan.cpp"
+    "${CMAKE_SOURCE_DIR}/runtime/online/server.cpp"
+    "${CMAKE_SOURCE_DIR}/runtime/online/steam.cpp")
 
 add_executable(mw2 ${RUNTIME_SOURCES}
-    "${CMAKE_SOURCE_DIR}/runtime/online/service.cpp"
     ${MW2_ONLINE_SOURCES}
     "${MW2_PPC_DIR}/stubs_generated.cpp")
 target_link_libraries(mw2 PRIVATE ppc_recomp)
@@ -201,7 +186,6 @@ if(MW2_PGO_TRAINING)
     target_sources(mw2 PRIVATE "${CMAKE_SOURCE_DIR}/runtime/pgo/training.cpp")
     target_link_options(mw2 PRIVATE -Wl,--wrap=_exit)
 endif()
-target_compile_definitions(mw2 PRIVATE ${MW2_ONLINE_DEFINITIONS})
 if(MW2_DIAGNOSTICS)
     target_compile_definitions(mw2 PRIVATE MW2_DIAGNOSTICS=1)
 else()
@@ -342,6 +326,13 @@ if(Vulkan_FOUND)
 endif()
 endif()
 
+# ---- relay -----------------------------------------------------------------
+# The server players choose with NETWORK SERVER (relay/): a program of its own,
+# for Linux, which its Dockerfile builds too. Built here for trying it locally.
+if(NOT WIN32)
+    add_executable(mw2-relay "${CMAKE_SOURCE_DIR}/relay/relay.cpp")
+endif()
+
 # ---- launcher --------------------------------------------------------------
 # What a player opens (launcher/): it installs the game and starts it. One
 # executable with nothing beside it, like the game's: Dear ImGui on SDL's own
@@ -467,9 +458,9 @@ if(MW2_USE_SDL)
     # release workflow gives the tag. A build without one does not update.
     set(MW2_RELEASE_TAG "" CACHE STRING "The release tag this build is published as, e.g. v0.3.0")
     if(WIN32)
-        set(MW2_RELEASE_KIND "windows-${MW2_ONLINE}")
+        set(MW2_RELEASE_KIND "windows")
     else()
-        set(MW2_RELEASE_KIND "linux-${MW2_ONLINE}")
+        set(MW2_RELEASE_KIND "linux")
     endif()
     set_source_files_properties("${CMAKE_SOURCE_DIR}/launcher/update.cpp" PROPERTIES COMPILE_DEFINITIONS
         "MW2_RELEASE_TAG=\"${MW2_RELEASE_TAG}\";MW2_RELEASE_KIND=\"${MW2_RELEASE_KIND}\"")
