@@ -318,10 +318,29 @@ frame times spread, what was compiled in the middle of a draw, and where the
 ring consumer's thread spent play. That last line says what holds a slow run
 back: the thread itself when it is at work nearly all the time, the graphics
 chip when much of that work is waiting for it, and the title's own threads or
-the display when it is neither.
+the display when it is neither. Of the work, it also gives the share that went
+on reading textures and on compiling at a draw.
+
+Three more lines say whether the machine itself was short of something. Once a
+second of play the report reads the processor time of the whole system, of
+the process and of each thread the runtime registered (`crash::RegisterThread`
+hands them to `report::ThreadStarted`), and the free memory and the commit
+charge (`platform::ProcessorLoad`, `ThreadTime`, `MemoryState`). From them:
+how busy the processor's threads were in play, and how much of that was the
+game rather than other programs; the busiest of the game's threads, in % of
+one processor thread, the rest being the driver's and the system's threads;
+and the memory, with what the hardware keeps for itself (an integrated
+graphics chip's share, on Windows), the least that was free in play and the
+game's own peak. A reading costs about 0.1 ms, once a second, on the ring
+consumer's thread. A fourth line counts the memory watch's write faults and
+changes of page protection a second of play (`gpu/memory_watch.cpp`), and
+what the changes cost: a few microseconds each on Linux, more on Windows,
+and more again with Memory Integrity on. They are counted and timed only in
+this mode.
 
 The launcher then writes `reports/mw2-report-<date>-<time>.txt`: the version,
-the system, processor, memory, graphics and displays, the game's own summary,
+the system, processor, memory, whether Windows' Memory Integrity runs, whether
+a laptop is on its battery, graphics and displays, the game's own summary,
 and the log. An issue is public, so the log first loses the player's name, IP
 addresses, the session keys of a `connect` line, account numbers, other
 players' names, and the game's and the home folder's paths; the log as the

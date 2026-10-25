@@ -27,14 +27,18 @@ namespace report
     // Where the ring consumer's time goes, which says what holds a slow run
     // back: the thread itself when it is busy all the time, the graphics chip
     // when the busy time is waiting for it, the title when it is neither.
-    // kExecuting has the two waits in it. All three are timed on the consumer's
+    // kExecuting has the others in it. All are timed on the consumer's
     // thread, where report::Frame is called from.
-    enum Time { kExecuting, kRecorderWait, kGpuWait, kTimeCount };
+    enum Time { kExecuting, kRecorderWait, kGpuWait, kTextures, kCompiling, kTimeCount };
     void Spent(Time time, uint64_t nanoseconds);
     // A shader the renderer built, and whether the driver found it in the
     // pipeline cache the launcher compiled every shader of the game into:
     // 1 it did, 0 it compiled it, -1 it does not say. Any thread.
     void ShaderBuilt(int fromCache);
+    // A thread of ours, so the report can say what each one took of the
+    // processor in play. Called on the thread itself (crash::RegisterThread).
+    void ThreadStarted(const char* name);
+    void ThreadEnded();
     // What the launcher's compile pass is to this run (shader_marker.h).
     void ShadersCompiled(std::string state);
     struct Timed

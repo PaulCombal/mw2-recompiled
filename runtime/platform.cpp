@@ -6,8 +6,12 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <timeapi.h>
+#include <psapi.h>
 #include <string>
 #else
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <pthread.h>
@@ -95,6 +99,67 @@ void* platform::OpenLibrary(const char* path)
     return LoadLibraryExW(wide.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
 }
 
+uintptr_t platform::ThreadClock()
+{
+    HANDLE self = nullptr;
+    // A handle of its own: GetCurrentThread's means whichever thread asks.
+    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &self,
+                         THREAD_QUERY_LIMITED_INFORMATION, FALSE, 0))
+        return 0;
+    return reinterpret_cast<uintptr_t>(self);
+}
+
+namespace
+{
+    uint64_t Nanoseconds(FILETIME time)
+    {
+        return ((uint64_t(time.dwHighDateTime) << 32) | time.dwLowDateTime) * 100;
+    }
+}
+
+bool platform::ThreadTime(uintptr_t clock, uint64_t& nanoseconds)
+{
+    FILETIME created, exited, kernel, user;
+    if (!clock || !GetThreadTimes(reinterpret_cast<HANDLE>(clock), &created, &exited, &kernel, &user))
+        return false;
+    nanoseconds = Nanoseconds(kernel) + Nanoseconds(user);
+    return true;
+}
+
+bool platform::ProcessorLoad(Load& load)
+{
+    FILETIME created, exited, kernel, user, idle;
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return false;
+    load.process = Nanoseconds(kernel) + Nanoseconds(user);
+    // The system's kernel time has its idle time in it.
+    if (!GetSystemTimes(&idle, &kernel, &user)) return false;
+    load.total = Nanoseconds(kernel) + Nanoseconds(user);
+    load.busy = load.total - Nanoseconds(idle);
+    return true;
+}
+
+platform::Memory platform::MemoryState()
+{
+    Memory memory;
+    ULONGLONG kilobytes = 0;
+    if (GetPhysicallyInstalledSystemMemory(&kilobytes)) memory.installed = uint64_t(kilobytes) << 10;
+    MEMORYSTATUSEX status{ sizeof(status) };
+    if (GlobalMemoryStatusEx(&status))
+    {
+        memory.usable = status.ullTotalPhys;
+        memory.free = status.ullAvailPhys;
+        memory.commitLimit = status.ullTotalPageFile;
+        memory.committed = status.ullTotalPageFile - status.ullAvailPageFile;
+    }
+    PROCESS_MEMORY_COUNTERS counters{ sizeof(counters) };
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)))
+    {
+        memory.processPeak = counters.PeakWorkingSetSize;
+        memory.processCommitted = counters.PeakPagefileUsage;
+    }
+    return memory;
+}
+
 void* platform::LoadedLibrary(const char* name) { return GetModuleHandleA(name); }
 
 void* platform::Symbol(void* library, const char* name)
@@ -132,6 +197,71 @@ void platform::PrintBacktrace(const char* why)
     backtrace_symbols_fd(frames, n, 2);
     std::fprintf(stderr, "[E] --------------------------------\n");
     std::fflush(stderr);
+}
+
+uintptr_t platform::ThreadClock()
+{
+    clockid_t clock;
+    if (pthread_getcpuclockid(pthread_self(), &clock) != 0) return 0;
+    // Shifted past 0, which says there is none.
+    return uintptr_t(uint32_t(clock)) + 1;
+}
+
+bool platform::ThreadTime(uintptr_t clock, uint64_t& nanoseconds)
+{
+    timespec time;
+    if (!clock || clock_gettime(clockid_t(uint32_t(clock - 1)), &time) != 0) return false;
+    nanoseconds = uint64_t(time.tv_sec) * 1000000000u + uint64_t(time.tv_nsec);
+    return true;
+}
+
+bool platform::ProcessorLoad(Load& load)
+{
+    timespec time;
+    if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &time) != 0) return false;
+    load.process = uint64_t(time.tv_sec) * 1000000000u + uint64_t(time.tv_nsec);
+    // The first line sums every processor thread, in ticks of USER_HZ.
+    std::FILE* stat = std::fopen("/proc/stat", "r");
+    if (!stat) return false;
+    unsigned long long user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0, steal = 0;
+    const int read = std::fscanf(stat, "cpu %llu %llu %llu %llu %llu %llu %llu %llu", &user, &nice, &system, &idle,
+                                 &iowait, &irq, &softirq, &steal);
+    std::fclose(stat);
+    if (read < 4) return false;
+    const uint64_t tick = 1000000000u / uint64_t(sysconf(_SC_CLK_TCK));
+    load.total = (user + nice + system + idle + iowait + irq + softirq + steal) * tick;
+    load.busy = load.total - (idle + iowait) * tick;
+    return true;
+}
+
+namespace
+{
+    // A "Name: N kB" line of a /proc file, in bytes.
+    uint64_t Kilobytes(const char* path, const char* name)
+    {
+        std::FILE* file = std::fopen(path, "r");
+        if (!file) return 0;
+        const size_t length = std::strlen(name);
+        char line[256];
+        uint64_t bytes = 0;
+        while (std::fgets(line, sizeof line, file))
+            if (!std::strncmp(line, name, length) && line[length] == ':')
+            {
+                bytes = std::strtoull(line + length + 1, nullptr, 10) << 10;
+                break;
+            }
+        std::fclose(file);
+        return bytes;
+    }
+}
+
+platform::Memory platform::MemoryState()
+{
+    Memory memory;
+    memory.usable = Kilobytes("/proc/meminfo", "MemTotal");
+    memory.free = Kilobytes("/proc/meminfo", "MemAvailable");
+    memory.processPeak = Kilobytes("/proc/self/status", "VmHWM");
+    return memory;
 }
 
 void* platform::OpenLibrary(const char* path) { return dlopen(path, RTLD_NOW | RTLD_LOCAL); }

@@ -1,9 +1,11 @@
 #include "memory_watch.h"
 #include "../guest_memory.h"
 #include "../log.h"
+#include "../report.h"
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 
 #ifdef _WIN32
@@ -45,6 +47,7 @@ namespace
     std::atomic<bool> g_enabled{ false };
 
     std::atomic<uint64_t> g_faults{ 0 }, g_bulkWrites{ 0 };
+    std::atomic<uint64_t> g_protects{ 0 }, g_protectNanoseconds{ 0 };
     uint64_t g_arms = 0, g_pagesArmed = 0, g_armedWrittenDuring = 0, g_armFailures = 0;
     uint64_t g_served = 0, g_servedBytes = 0, g_tracked = 0;
     uint64_t g_refusedInFlight = 0, g_refusedBackingOff = 0, g_refusedOutside = 0;
@@ -56,6 +59,9 @@ namespace
         uint8_t* base = guest::Base();
         const size_t offset = size_t(firstPage) * gpu::watch::kPageBytes;
         const size_t length = size_t(pages) * gpu::watch::kPageBytes;
+        const bool timed = report::On();
+        std::chrono::steady_clock::time_point began;
+        if (timed) began = std::chrono::steady_clock::now();
         bool ok = true;
         for (uint32_t window : { guest::kPhysicalBase, guest::kApertureBase })
         {
@@ -65,6 +71,13 @@ namespace
 #else
             ok &= mprotect(base + window + offset, length, writable ? PROT_READ | PROT_WRITE : PROT_READ) == 0;
 #endif
+        }
+        if (timed)
+        {
+            g_protects.fetch_add(2, std::memory_order_relaxed);
+            g_protectNanoseconds.fetch_add(uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                               std::chrono::steady_clock::now() - began).count()),
+                                           std::memory_order_relaxed);
         }
         return ok;
     }
@@ -153,6 +166,12 @@ void gpu::watch::SetShadow(uint8_t* shadow, uint32_t bytes)
     }
     g_shadow = shadow;
     g_enabled.store(true, std::memory_order_release);
+}
+
+gpu::watch::Costs gpu::watch::CostsSoFar()
+{
+    return { g_faults.load(std::memory_order_relaxed), g_protects.load(std::memory_order_relaxed),
+             g_protectNanoseconds.load(std::memory_order_relaxed) };
 }
 
 bool gpu::watch::Enabled() { return g_enabled.load(std::memory_order_relaxed); }

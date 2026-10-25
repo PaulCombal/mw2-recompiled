@@ -16,6 +16,11 @@
 // would have drawn from.
 namespace gpu::watch
 {
+    // For a bug report (report.cpp): totals so far. The protection changes
+    // are counted and timed only while MW2_REPORT is on.
+    struct Costs { uint64_t faults = 0, protects = 0, protectNanoseconds = 0; };
+    Costs CostsSoFar();
+
     constexpr uint32_t kPageBytes = 4096;
 
     // The copy, as mapped for the CPU: physical address N at `shadow + N`.

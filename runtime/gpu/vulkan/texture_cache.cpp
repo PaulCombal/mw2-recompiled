@@ -9,6 +9,7 @@
 #include "renderer.h"
 #include "../../env.h"
 #include "../../guest.h"
+#include "../../report.h"
 #include "../../image_move.h"
 #include "../../kernel/physical.h"
 #include "../../log.h"
@@ -1174,6 +1175,7 @@ namespace
         image->checkedFrame = g.frame;
         g.resigned++;
         stutters::Timed timed(stutters::kRefreshedTextures);
+        report::Timed spent(report::kTextures);
 
         image->watchStamp = TrackImage(*image);
         const uint64_t now = SignImage(*image, true);
@@ -1528,6 +1530,7 @@ uint64_t vk::textures::Upload(const gpu::TextureFetch& fetch, const char** error
     }
 
     stutters::Timed timed(stutters::kNewTextures);
+    report::Timed spent(report::kTextures);
     // The base and the mip chain are two ranges with an address each.
     const gpu::TextureExtents extents = gpu::ExtentsOf(fetch);
     const uint8_t* base = HostAddress(extents.baseAddress);
@@ -1666,6 +1669,7 @@ void* vk::textures::EndSegment()
     const bool last = g.endingSubmission;
     {
         stutters::Timed timed(stutters::kRefreshedTextures);
+        report::Timed spent(report::kTextures);
         RefreshRewritten();
         RefreshEmpty();
     }

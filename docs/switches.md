@@ -33,7 +33,7 @@ them as unset whatever the environment says, and also drops the keys `F5`, `F7`,
 | `MW2_FULLSCREEN=1` | R | starts fullscreen, borderless at the desktop's resolution. `F8` toggles it |
 | `MW2_STRETCH=1` | R | the frame fills the window or screen whatever their shapes, instead of keeping its proportions between black bars: for a TV that shows a widescreen signal at 4:3, with a 4:3 frame (`MW2_RENDER`) |
 | `MW2_LOG_FILE=<path>` | R | writes the log there, creating its folder. The log goes to stderr, so `> file` does not catch it. A title started from the other one's menus writes on in the same file |
-| `MW2_REPORT=1` | R | what a bug report needs, as the launcher's REPORT A BUG sets it: the log names the graphics driver and ends with the run's frame rate, frame time spread and what was compiled at a draw ([building.md](building.md)) |
+| `MW2_REPORT=1` | R | what a bug report needs, as the launcher's REPORT A BUG sets it: the log names the graphics driver and ends with the run's frame rate, frame time spread, what was compiled at a draw, and the processor and memory in play: how busy, how much of it this game's and which threads, how much memory was free, what the memory watch's protection changes cost ([building.md](building.md)) |
 | `MW2_LOG_TIME=1` | | stamps every log line with the time since start |
 | `MW2_CONSOLE="30:map af_caves;45:god"` | R | queues commands into the title's console command buffer at the given wall-clock seconds; see [gameplay.md](gameplay.md) |
 | `MW2_CUSTOM_MAPS=1` | R | the multiplayer loads fastfiles nobody signed: a map converted from the PC game. Off, it refuses them as the console does, and the launcher's shader pass reads only the game's own fastfiles ([gameplay.md](gameplay.md)) |

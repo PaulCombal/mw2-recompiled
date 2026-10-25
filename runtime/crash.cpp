@@ -9,6 +9,7 @@
 #include "log.h"
 #include "diagnostics.h"
 #include "platform.h"
+#include "report.h"
 #include <ppc_config.h>
 #include <csignal>
 #include <cstdio>
@@ -183,6 +184,7 @@ namespace
 
 void crash::RegisterThread(const char* name)
 {
+    report::ThreadStarted(name);
     std::lock_guard g(g_threadsLock);
     t_name = g_names.emplace_back(name).c_str();
     g_threads.push_back({ pthread_self(), t_name });
@@ -196,6 +198,7 @@ const char* crash::CurrentThreadName() { return t_name; }
 
 void crash::UnregisterThread()
 {
+    report::ThreadEnded();
     std::lock_guard g(g_threadsLock);
     pthread_t self = pthread_self();
     for (auto it = g_threads.begin(); it != g_threads.end(); ++it)
@@ -327,13 +330,14 @@ void crash::Install()
 
 void crash::RegisterThread(const char* name)
 {
+    report::ThreadStarted(name);
     std::lock_guard g(g_threadsLock);
     t_name = g_names.emplace_back(name).c_str();
     if (!platform::IsMainThread()) platform::SetThreadName(name);
 }
 
 const char* crash::CurrentThreadName() { return t_name; }
-void crash::UnregisterThread() {}
+void crash::UnregisterThread() { report::ThreadEnded(); }
 
 extern "C" [[noreturn]] void MW2ReportBadIndirectCall(unsigned int guestAddress)
 {

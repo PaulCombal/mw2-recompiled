@@ -123,7 +123,47 @@ namespace
         if (RegGetValueW(HKEY_LOCAL_MACHINE, key, value, RRF_RT_REG_SZ, nullptr, text, &size) != ERROR_SUCCESS) return {};
         return Utf8(fs::path(text));
     }
+
+    // Windows' Memory Integrity runs the kernel under the hypervisor, which
+    // makes every change of a page's protection dearer, and the game's memory
+    // watch makes thousands a second. The system says whether it is running;
+    // the setting is the fallback.
+    std::string MemoryIntegrity()
+    {
+        struct CodeIntegrity { ULONG length, options; };
+        constexpr ULONG kCodeIntegrityInformation = 103;   // SystemCodeIntegrityInformation
+        constexpr ULONG kHypervisorEnforced = 0x400;       // CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED
+        using Query = LONG(WINAPI*)(ULONG, void*, ULONG, ULONG*);
+        if (const auto query = reinterpret_cast<Query>(reinterpret_cast<void*>(
+                GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation"))))
+        {
+            CodeIntegrity information{ sizeof(CodeIntegrity), 0 };
+            if (query(kCodeIntegrityInformation, &information, sizeof(information), nullptr) >= 0)
+                return information.options & kHypervisorEnforced ? "on" : "off";
+        }
+        DWORD on = 0, size = sizeof(on);
+        if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                         L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",
+                         L"Enabled", RRF_RT_REG_DWORD, nullptr, &on, &size) != ERROR_SUCCESS)
+            return "off (not set)";
+        return on ? "on (set; the system did not say whether it runs)" : "off";
+    }
 #endif
+
+    // A laptop on its battery runs its processor slower.
+    std::string Power()
+    {
+        int percent = -1;
+        switch (SDL_GetPowerInfo(nullptr, &percent))
+        {
+        case SDL_POWERSTATE_ON_BATTERY:
+            return percent >= 0 ? "on battery (" + std::to_string(percent) + "%)" : "on battery";
+        case SDL_POWERSTATE_NO_BATTERY: return "no battery";
+        case SDL_POWERSTATE_CHARGING:
+        case SDL_POWERSTATE_CHARGED: return "plugged in";
+        default: return "unknown";
+        }
+    }
 
     std::string System()
     {
@@ -276,6 +316,10 @@ bool report::Make(Made& made, std::string& error)
     system += "- System: " + System() + "\n";
     system += "- Processor: " + Processor() + "\n";
     system += "- Memory: " + std::to_string((SDL_GetSystemRAM() + 512) / 1024) + " GB\n";
+#ifdef _WIN32
+    system += "- Memory Integrity: " + MemoryIntegrity() + "\n";
+#endif
+    system += "- Power: " + Power() + "\n";
     system += "- Graphics: " + graphics + "\n";
     system += "- Display: " + Displays() + "\n";
     // How the run performed, as the game summed it up.
