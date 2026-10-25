@@ -79,6 +79,11 @@ namespace settings
     int Msaa();
     void SetMsaa(int samples);
 
+    // MW2_STRETCH: the picture fills a screen or window of another shape
+    // instead of keeping its own between black bars.
+    bool Stretch();
+    void SetStretch(bool on);
+
     // MW2_CUSTOM_MAPS: the multiplayer loads fastfiles nobody signed, a map
     // converted from the PC game (runtime/unsigned_fastfiles.cpp).
     bool CustomMaps();

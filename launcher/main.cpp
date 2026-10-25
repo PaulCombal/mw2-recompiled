@@ -343,7 +343,7 @@ namespace
         Profile, Back, NextPlayer, Rename, PlayAs, Rank, Prestige, UnlockEverything, UnlockMissions, AllStars,
         CheckUpdate, InstallUpdate,
         // The graphics screen, and the next of what each of its entries sets.
-        Graphics, Fullscreen, AspectRatio, Resolution, Antialiasing, FpsLimit, Fov,
+        Graphics, Fullscreen, AspectRatio, Resolution, Stretch, Antialiasing, FpsLimit, Fov,
         // The maps screen; CUSTOM MAPS turned on asks first, on a screen of its own.
         Maps, CustomMaps, CustomMapsOn, CustomMapsCancel, PcGame,
         // and its maps: one shown at a time, put in or out of the game, removed after a question.
@@ -653,6 +653,9 @@ namespace
                 break;
             case Action::Fullscreen:
                 settings::SetFullscreen(!settings::Fullscreen());
+                break;
+            case Action::Stretch:
+                settings::SetStretch(!settings::Stretch());
                 break;
             case Action::CustomMaps:
                 // Off at once; on only past the warning.
@@ -1044,6 +1047,14 @@ namespace
                 (resolution.width == 1280 && resolution.height == 720 && resolution.scale == 1 ? ", the console's own." : ".") +
                 "\n\nChoose to go to the next: " + sizes + ". A larger one is sharper and needs a faster graphics card. "
                 "The best is the screen's own: a smaller one is enlarged to fit it, a larger one made smaller."
+                "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
+            const bool stretch = settings::Stretch();
+            add(Action::Stretch, std::string("STRETCH ") + (stretch ? "ON" : "OFF"), "STRETCH",
+                std::string("What a screen or window of another shape than the picture shows: now ") +
+                (stretch ? "the picture stretched to fill it." : "the picture at its own shape, between black bars.") +
+                "\n\nChoose to switch it. Stretching suits a TV that is sent a widescreen picture and shows it at 4:3, "
+                "as a CRT TV can: with ASPECT RATIO at 4:3, the picture then fills it at its right shape. "
+                "On a screen of the picture's own shape, it changes nothing."
                 "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
             const int msaa = settings::Msaa();
             add(Action::Antialiasing, "ANTIALIASING " + (msaa ? std::to_string(msaa) + "X" : std::string("OFF")), "ANTIALIASING",

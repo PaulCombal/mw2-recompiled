@@ -53,7 +53,7 @@ Not supported: public matchmaking and ranked playlists, which needed Activision'
 | Screen | |
 |---|---|
 | **PROFILES** | rename yourself or switch profile; set the multiplayer rank and prestige; unlock everything; open the campaign's and Special Ops' missions |
-| **GRAPHICS** | fullscreen, aspect ratio, resolution, antialiasing, frame rate limit and field of view (below) |
+| **GRAPHICS** | fullscreen, aspect ratio, resolution, stretching, antialiasing, frame rate limit and field of view (below) |
 | **MAPS** *(beta)* | ADD MAP converts a map made for the PC game (IW4x). It then shows in a private match under BONUS MAPS. PC GAME points at your copy of the PC game, which such maps borrow pictures and sounds from; it is found on Steam by itself. Some maps don't convert yet, and some that do don't play. |
 | **CHECK FOR UPDATES** | installs a newer release over this one |
 | **REPORT A BUG** | runs the game once with its log kept, writes a report and opens a new issue with your system filled in |
@@ -63,6 +63,7 @@ Not supported: public matchmaking and ranked playlists, which needed Activision'
 | FULLSCREEN | | `F8` in the game |
 | ASPECT RATIO | 16:9 | 16:10, 4:3 |
 | RESOLUTION | 720p | 1080p, 1440p, 4K, or their 16:10 sizes (faster graphics cards); 640x480 to 2880x2160 in 4:3 |
+| STRETCH | off, black bars on a screen of another shape | on, the picture fills it (for a CRT TV) |
 | ANTIALIASING | 2x | 4x, 8x, off |
 | FPS LIMIT | 60 | higher, or none |
 | FOV | 65 | up to 120 |
@@ -101,6 +102,7 @@ What the launcher sets is kept in a file named `.env` beside the executables, on
 |---|---|
 | `MW2_FULLSCREEN=1` | FULLSCREEN |
 | `MW2_RENDER=<w>x<h>`, `MW2_SCALE=<2 or 3>` | ASPECT RATIO and RESOLUTION |
+| `MW2_STRETCH=1` | STRETCH |
 | `MW2_MSAA=<n>`, `MW2_NO_MSAA=1` | ANTIALIASING |
 | `MW2_FPS_LIMIT=<n>` | FPS LIMIT; 0 is no limit |
 | `MW2_FOV=<65 to 120>` | FOV |

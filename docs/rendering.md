@@ -393,7 +393,8 @@ the present image it is about to reuse. With four present images, the renderer
 can run three frames ahead. The window presents every frame once, in order,
 one per blank (`FIFO`). Frames the window has not taken within 250 ms are
 dropped, so a hidden window never stalls the game. The window is resizable and
-letterboxed. `F8` or `MW2_FULLSCREEN=1` switches to borderless fullscreen.
+letterboxed, or stretched to fill it under `MW2_STRETCH=1`. `F8` or
+`MW2_FULLSCREEN=1` switches to borderless fullscreen.
 
 **The guest's blank follows the display.** On the console the blank the title
 counts is the display's own. `VK_KHR_present_wait` timestamps each present.

@@ -180,6 +180,20 @@ void settings::SetMsaa(int samples)
     Save();
 }
 
+bool settings::Stretch()
+{
+    const auto kept = g_kept.find("MW2_STRETCH");
+    return kept != g_kept.end() && !kept->second.empty() && kept->second != "0";
+}
+
+void settings::SetStretch(bool on)
+{
+    // Off is the game's own way: the line goes.
+    if (on) g_kept["MW2_STRETCH"] = "1";
+    else g_kept.erase("MW2_STRETCH");
+    Save();
+}
+
 bool settings::CustomMaps()
 {
     const auto kept = g_kept.find("MW2_CUSTOM_MAPS");

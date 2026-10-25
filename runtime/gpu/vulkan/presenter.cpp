@@ -79,6 +79,7 @@ namespace
         // nothing to remake it for, and frames are skipped until it has one.
         bool remakeSwapchain = false;
         bool fullscreen = false;
+        bool stretch = false;   // MW2_STRETCH
         uint64_t swapchainsMade = 0;
 
         VkCommandPool pool = VK_NULL_HANDLE;
@@ -428,9 +429,17 @@ namespace
 
     // Where the frame lands in a window of another shape: as large as fits
     // at the frame's own proportions, centred, the rest black. Nothing is
-    // squashed, and the window can be any shape at all.
+    // squashed, and the window can be any shape at all. Under MW2_STRETCH=1
+    // it fills the window whatever the shapes: a CRT TV fed a widescreen
+    // signal shows a 4:3 picture made as wide as that at its own shape.
     void Letterbox(uint32_t frameWidth, uint32_t frameHeight, VkOffset3D& from, VkOffset3D& to)
     {
+        if (g.stretch)
+        {
+            from = { 0, 0, 0 };
+            to = { int32_t(g.extent.width), int32_t(g.extent.height), 1 };
+            return;
+        }
         const uint64_t byWidth = uint64_t(g.extent.width) * frameHeight;
         const uint64_t byHeight = uint64_t(g.extent.height) * frameWidth;
         uint32_t width = g.extent.width, height = g.extent.height;
@@ -896,6 +905,7 @@ namespace
         // borderless at the desktop's resolution, which SDL gives a window
         // asked for fullscreen without a mode of its own. F8 toggles it.
         g.fullscreen = env::Flag("MW2_FULLSCREEN");
+        g.stretch = env::Flag("MW2_STRETCH");
         // Hidden until ShowWindow. As tall as the console's frame, and as wide
         // as the title's frame is for that (render_size.h).
         const render::Size frame = render::Frame();
