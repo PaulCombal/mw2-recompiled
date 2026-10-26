@@ -133,6 +133,7 @@ namespace vk::renderer::detail
         const uint32_t query = g.guestQueryFirst + g.guestQueryCount;
         const VkQueryControlFlags flags =
             vk::pipeline::PreciseOcclusionQueries() ? VK_QUERY_CONTROL_PRECISE_BIT : 0;
+        g.guestQueryScale[query % kGuestQueryRing] = uint8_t(g.currentScale);
         Record([=](VkCommandBuffer command) { vkCmdBeginQuery(command, pool, query, flags); });
         g.guestQueryOpen = true;
     }
@@ -347,9 +348,13 @@ namespace
                                   sizeof(uint64_t) * query.count, samples, sizeof(uint64_t),
                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) != VK_SUCCESS)
             return;
-        for (uint32_t i = 0; i < query.count; i++) query.samples += samples[i];
-        // The title compares the count with numbers of its own pixels.
-        query.samples /= uint64_t(g.scale) * g.scale;
+        // The title compares the count with numbers of its own pixels, and
+        // each query counted the pixels of its own pass's scale.
+        for (uint32_t i = 0; i < query.count; i++)
+        {
+            const uint64_t scale = g.guestQueryScale[(query.first + i) % kGuestQueryRing];
+            query.samples += samples[i] / (scale * scale);
+        }
     }
 }
 

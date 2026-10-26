@@ -122,9 +122,11 @@ set 2  binding 0  uint[]   the frame arena, as dwords
 push constants
   pixel  (offset 0, 16 B)   alpha function, alpha reference, colour scale, gamma-target flag
   vertex (offset 16, 16 B)  float2 scale, float2 offset: window to clip space
-  both   (offset 32, 4 B)   a bit per texture slot bound to a resolve's copy;
-                            only in shaders built under MW2_SCALE
-  both   (offset 36, 20 B)  where each constant block is in the arena, in dwords:
+  both   (offset 32, 16 B)  a bit per texture slot bound to a resolve's copy at the
+                            frame's scale, the same at the shadow maps' scale, and the
+                            reciprocal of each scale; only in shaders built under
+                            MW2_SCALE or MW2_SHADOW_SCALE
+  both   (offset 48, 20 B)  where each constant block is in the arena, in dwords:
                             0  the vertex constant table
                             1  vertex fetch constants (96 pairs of dwords, each padded to four)
                             2  256 boolean constants, packed bits (8 dwords)
@@ -299,8 +301,8 @@ constant ([textures.md](textures.md)). The translator:
   axis (Xenia's value) so a point sample on a texel boundary lands where the
   console's fixed-point coordinates (8 fractional bits) put it. Offsets and
   unnormalised coordinates are in texels of the bound image's size, which
-  under `MW2_SCALE` is divided by the scale for a slot bound to a resolve's
-  copy ([rendering.md](rendering.md#resolution-scale));
+  under `MW2_SCALE` or `MW2_SHADOW_SCALE` is divided by the copy's scale for
+  a slot bound to a resolve's copy ([rendering.md](rendering.md#resolution-scale));
 - computes LOD from the fetch constant's LOD bias (dword 4 bits 12..21, signed,
   in 32nds, read from binding 1 at run time), the instruction's own bias (in
   16ths) and, when `use_register_lod` is set, the `set_lod` value;

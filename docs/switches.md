@@ -11,7 +11,7 @@ it first thing (`runtime/settings.cpp`) and sets each `MW2_` switch the
 environment does not already have, so a variable given on the command line
 decides. The launcher writes its own settings there (FULLSCREEN is
 `MW2_FULLSCREEN`, ASPECT RATIO and RESOLUTION are `MW2_RENDER` and `MW2_SCALE`, STRETCH is `MW2_STRETCH`, ANTIALIASING is `MW2_MSAA` or
-`MW2_NO_MSAA`, FPS LIMIT is `MW2_FPS_LIMIT`, FOV is `MW2_FOV`, CUSTOM MAPS is `MW2_CUSTOM_MAPS`) and keeps the other lines. When the
+`MW2_NO_MSAA`, ANISOTROPY is `MW2_ANISOTROPY`, SHADOWS is `MW2_SHADOW_SCALE`, FPS LIMIT is `MW2_FPS_LIMIT`, FOV is `MW2_FOV`, CUSTOM MAPS is `MW2_CUSTOM_MAPS`) and keeps the other lines. When the
 file has no `MW2_FPS_LIMIT`, the launcher writes the screen's refresh rate as
 it opens (60 for a 60 Hz screen, which is the console's pacing). `MW2_LAUNCHER_SOUNDS=0`, written there
 by hand, keeps the launcher's own menus silent. `MW2_PC_GAME=<folder>` is the PC game's folder, whose
@@ -113,6 +113,8 @@ walking to it.
 | `MW2_FOV=<degrees>` | R | the field of view, 65 (the console's) to 120, counted as the title's `cg_fov` is: the width of a 4:3 picture, so 65 is 81 degrees across the 16:9 one and 90 is 106. It scales every view the title draws, a weapon's sight included, and leaves the title's own settings to its scripts. The launcher's FOV entry sets it in the settings file ([gameplay.md](gameplay.md#field-of-view)) |
 | `MW2_MSAA=<n>` | R | draws every surface the title multisamples at n samples, rounded down to what the device offers |
 | `MW2_NO_MSAA=1` | R | draws the title's 2x and 4x surfaces at one sample |
+| `MW2_SHADOW_SCALE=<2 to 4>` | R | draws the sun's and the spots' shadow maps that many times wider and taller than the title's 1024x2048 and 512x2048, and never smaller than `MW2_SCALE` draws them. The launcher's SHADOWS entry sets it in the settings file ([rendering.md](rendering.md#the-shadow-maps-scale)) |
+| `MW2_ANISOTROPY=<2, 4, 8 or 16>` | R | the anisotropic filtering every mipmapped texture gets at least: the title's `r_texFilterAnisoMin`, the PC game's setting, registered with it as its default. Unset or 1 is the console's, 1:1 to 4:1 as each material asks. The launcher's ANISOTROPY entry sets it in the settings file ([rendering.md](rendering.md#anisotropic-filtering)) |
 | `MW2_ARENA_MB=<n>` | R | the upload arena for constants, vertices and indices, shared by the frame slots (512) |
 | `MW2_TEXTURE_BUDGET_MB=<n>` | R | the texture cache's budget, past which it lets go of what has not been bound lately, even textures whose memory is unchanged (default half the device-local memory, within 256 MB to 2 GB) |
 | `MW2_PIPELINE_CACHE=<file>` | R | keeps the driver's compiled pipelines across runs, in place of a player's `shaders/pipelines.bin` |

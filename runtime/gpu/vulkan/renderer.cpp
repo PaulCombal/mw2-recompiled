@@ -144,6 +144,17 @@ bool vk::renderer::Initialise()
         if (g.scale > 1)
             LOGI("renderer: drawing at %ux the title's sizes, a %ux%u frame", g.scale,
                  g.presentWidth, g.presentHeight);
+
+        // MW2_SHADOW_SCALE=2 to 4 draws the shadow maps that many times wider
+        // and taller, and never smaller than the rest (PassScale).
+        const uint32_t shadowAsked = uint32_t(std::clamp<uint64_t>(env::Number("MW2_SHADOW_SCALE", 1), 1,
+                                                                   vk::shaders::kMaxShadowScale));
+        g.shadowScale = vk::shaders::ShadowScale(g.physical, shadowAsked, g.scale);
+        if (g.shadowScale < shadowAsked)
+            LOGW("renderer: MW2_SHADOW_SCALE=%u is more than the device's %u-pixel images hold",
+                 shadowAsked, properties.limits.maxImageDimension2D);
+        if (g.shadowScale != g.scale)
+            LOGI("renderer: drawing the shadow maps at %ux the title's sizes", g.shadowScale);
     }
 
     // The launcher compiled every shader for a device, a scale and the
@@ -152,7 +163,7 @@ bool vk::renderer::Initialise()
     if (g_compiled.checked)
     {
         g_compiled.device = vk::pipeline::DeviceId(g.physical);
-        const std::string fingerprint = vk::shaders::Fingerprint(g.physical, g.scale, g_compiled.gameFolder,
+        const std::string fingerprint = vk::shaders::Fingerprint(g.physical, g.shadowScale > 1, g_compiled.gameFolder,
                                                                    env::Flag("MW2_CUSTOM_MAPS"));
         g_compiled.current = vk::shaders::Compiled(fingerprint, &g_compiled.why);
         const vk::shaders::Marker marker = vk::shaders::ReadMarker();
@@ -325,6 +336,7 @@ bool vk::renderer::Initialise()
         image.format = VK_FORMAT_R8G8B8A8_UNORM;
         image.width = g.presentWidth / g.scale;     // MakeImage scales
         image.height = g.presentHeight / g.scale;
+        image.scale = g.scale;
         // STORAGE so the display's colour table can be applied to it in place.
         if (!MakeImage(image, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                               VK_IMAGE_USAGE_STORAGE_BIT, 0))

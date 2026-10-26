@@ -246,17 +246,49 @@ multiplication:
 - **Fetches of a resolve's copy.** The translated shader takes a texture's
   size from the bound image, for half-texel offsets and unnormalised
   coordinates, and a copy is larger than the surface the title means. Each
-  draw pushes a bit per slot bound to a copy, and a shader built under a scale
-  divides those slots' sizes by it. A shader built without one has no such
-  code ([shaders.md](shaders.md)).
-- **Occlusion counts** are divided by the scale squared: the title compares
-  them with numbers of its own pixels.
+  draw pushes a bit per slot bound to a copy, with the reciprocal of the
+  copy's scale, and a shader built under a scale divides those slots' sizes
+  by it. A shader built without one has no such code ([shaders.md](shaders.md)).
+- **Occlusion counts** are divided by the scale squared, each query's by its
+  pass's: the title compares them with numbers of its own pixels.
 - **Depth bias.** The slope term is multiplied by the scale, as Xenia does: a
   slope is depth per pixel, and the pixels are smaller.
 
 The launcher's RESOLUTION entry keeps the scale in `.env` as
 `MW2_SCALE=<n>`, with the title's frame below
 ([switches.md](switches.md#the-settings-file)).
+
+### The shadow maps' scale
+
+`MW2_SHADOW_SCALE=2` to `4` draws the shadow maps at a scale of their own,
+never below `MW2_SCALE`'s. The sun's map is 1024x2048, two cascades, and the
+spots' 512x2048, as on the PC; a shadow's edge steps by a texel of them.
+
+**Which passes** (`runtime/shadow_resolution.cpp`). `R_InitRenderTargets`
+fills `gfxRenderTargets`, `{ image, colour surface, depth surface, width,
+height }` a target; 11 and 12 are the two shadow maps. A D3D surface keeps
+the registers D3D writes when it is bound: `RB_SURFACE_INFO` at +24 and
+`RB_DEPTH_INFO` at +28. Both maps draw depth at tile 0 in D24FS8 at one
+sample, and no other target the title made does; a pass with no depth
+surface has `RB_DEPTH_INFO` 0, tile 0 in D24S8. So a pass whose depth
+registers name that tile, format and sample count is drawn at the shadow
+maps' scale (`PassScale`), its colour surface too.
+
+**Keys.** A `TargetKey` and a `Resolved` carry the scale they were made at,
+and a copy takes its source surface's. The spots' map has its colour surface
+at the tile and pitch of the half-size particles' (tile 0, 560 wide), and
+each pass gets its own image at its own scale: nothing reads one through the
+other.
+
+**Height.** The title also draws a stencil rectangle into the shadow surface
+in depth-only mode, with the scissor at its 8192 reset value, which makes the
+surface 4096 of its rows tall at 1x. A shadow pass's surface is held to the
+height the title made the maps, 2048: at 4x the depth surface is then
+4160x8192 rather than twice that.
+
+The shaders depend only on whether either scale is past 1, so the
+precompiled shaders' marker records that (`scaled yes`), not the scales.
+The launcher's SHADOWS entry keeps it as `MW2_SHADOW_SCALE=<n>`.
 
 ## The title's frame and the picture's shape
 
@@ -341,6 +373,22 @@ twin through `vkCmdResolveImage`, which averages as the console does. Depth
 reaches it through an empty rendering instance with `SAMPLE_ZERO`, because an
 averaged depth describes a surface nothing was drawn at. Sample positions are
 Vulkan's standard ones.
+
+## Anisotropic filtering
+
+A fetch constant carries the anisotropy the title asks for, and the sampler
+takes it, up to the device's `maxSamplerAnisotropy`; a fetch whose LOD does not
+come from derivatives filters along none, as the hardware does. The title
+picks it from two settings of the PC game's that the console keeps:
+`r_texFilterAnisoMax`, 16, and `r_texFilterAnisoMin`, 1, between which each
+material's sampler state falls. On the console the materials ask for 1:1 to
+4:1, and samplers that filter without mips (the menus, the HUD) for none.
+
+`MW2_ANISOTROPY=<n>` (`runtime/texture_filtering.cpp`) is the PC's ANISOTROPIC
+FILTERING slider: `Dvar_RegisterInt` registers `r_texFilterAnisoMin` with n as
+its default. The setting has no flags, so it is no cheat, and nothing the title
+runs sets it; with 16 every mipmapped sampler of a level asks for 16:1, and the
+menus' stay at none.
 
 ## Submissions, segments and frame slots
 

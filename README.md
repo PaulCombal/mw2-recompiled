@@ -25,7 +25,7 @@
 
 - **Campaign and multiplayer**, with split screen for up to four controllers.
 - **Online with friends**: private matches and system link, through Steam invites or on your local network.
-- **Sharper than the console**: any window size or fullscreen; drawn at 720p, 1080p, 1440p or 4K, in 16:9, 16:10 or 4:3 (down to 640x480 for a CRT TV); antialiasing up to 8x; wider field of view.
+- **Sharper than the console**: any window size or fullscreen; drawn at 720p, 1080p, 1440p or 4K, in 16:9, 16:10 or 4:3 (down to 640x480 for a CRT TV); antialiasing up to 8x; 16x texture filtering; sharper shadows; wider field of view.
 - **Your profiles**: set your rank and prestige, unlock everything, open any mission.
 - **Custom maps (beta)**: maps made for the PC game, converted by the launcher.
 - **Xbox 360-style controllers**, with rumble.
@@ -53,7 +53,7 @@ Not supported: public matchmaking and ranked playlists, which needed Activision'
 | Screen | |
 |---|---|
 | **PROFILES** | rename yourself or switch profile; set the multiplayer rank and prestige; unlock everything; open the campaign's and Special Ops' missions |
-| **GRAPHICS** | fullscreen, aspect ratio, resolution, stretching, antialiasing, frame rate limit and field of view (below) |
+| **GRAPHICS** | fullscreen, aspect ratio, resolution, stretching, antialiasing, texture filtering, shadows, frame rate limit and field of view (below) |
 | **NETWORK** | how the multiplayer reaches other players: NONE (this PC only), LAN, SERVER or STEAM ([below](#online)) |
 | **MAPS** *(beta)* | ADD MAP converts a map made for the PC game (IW4x). It then shows in a private match under BONUS MAPS. PC GAME points at your copy of the PC game, which such maps borrow pictures and sounds from; it is found on Steam by itself. Some maps don't convert yet, and some that do don't play. |
 | **CHECK FOR UPDATES** | installs a newer release over this one |
@@ -66,6 +66,8 @@ Not supported: public matchmaking and ranked playlists, which needed Activision'
 | RESOLUTION | 720p | 1080p, 1440p, 4K, or their 16:10 sizes (faster graphics cards); 640x480 to 2880x2160 in 4:3 |
 | STRETCH | off, black bars on a screen of another shape | on, the picture fills it (for a CRT TV) |
 | ANTIALIASING | 2x | 4x, 8x, off |
+| ANISOTROPY | 1x to 4x | 2x to 16x at least (sharper ground and walls at a slant) |
+| SHADOWS | console | 2x, 3x, 4x (smoother shadow edges; faster graphics cards) |
 | FPS LIMIT | 60 | higher, or none |
 | FOV | 65 | up to 120 |
 
@@ -108,6 +110,8 @@ What the launcher sets is kept in a file named `.env` beside the executables, on
 | `MW2_RENDER=<w>x<h>`, `MW2_SCALE=<2 or 3>` | ASPECT RATIO and RESOLUTION |
 | `MW2_STRETCH=1` | STRETCH |
 | `MW2_MSAA=<n>`, `MW2_NO_MSAA=1` | ANTIALIASING |
+| `MW2_ANISOTROPY=<2 to 16>` | ANISOTROPY |
+| `MW2_SHADOW_SCALE=<2 to 4>` | SHADOWS |
 | `MW2_FPS_LIMIT=<n>` | FPS LIMIT; 0 is no limit |
 | `MW2_FOV=<65 to 120>` | FOV |
 | `MW2_NO_AUDIO=1` | no sound |

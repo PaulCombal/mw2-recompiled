@@ -79,6 +79,18 @@ namespace settings
     int Msaa();
     void SetMsaa(int samples);
 
+    // MW2_SHADOW_SCALE: how many times the title's size the shadow maps are
+    // drawn at, 1 to 4, and never less than the RESOLUTION's scale; 1 writes
+    // nothing.
+    constexpr int kMaxShadowScale = 4;
+    int ShadowScale();
+    void SetShadowScale(int scale);
+
+    // MW2_ANISOTROPY: the anisotropic filtering textures get at least, 2 to
+    // 16; 1, the console's own, writes nothing.
+    int Anisotropy();
+    void SetAnisotropy(int filtering);
+
     // MW2_STRETCH: the picture fills a screen or window of another shape
     // instead of keeping its own between black bars.
     bool Stretch();

@@ -35,6 +35,10 @@ namespace vk::shaders
     // MW2_SCALE as the device can draw it: a surface is at most 4096 of the
     // title's pixels either way, and must fit one of the device's images.
     uint32_t Scale(VkPhysicalDevice physical, uint32_t asked);
+    // MW2_SHADOW_SCALE as the device can draw it: the shadow maps' surfaces
+    // at 1 to 4 times the title's, and never less than the frame's `scale`.
+    constexpr uint32_t kMaxShadowScale = 4;
+    uint32_t ShadowScale(VkPhysicalDevice physical, uint32_t asked, uint32_t scale);
 
     // The dynamic state every pipeline here has, and the rasterisation state
     // every one starts from.
@@ -57,7 +61,8 @@ namespace vk::shaders
         int fromCache = -1;
     };
     // Any thread: the device, layout and cache are vk::pipeline's.
-    Built Build(shader::Type type, const uint32_t* code, size_t words, uint32_t scale, VkFormat depthFormat);
+    // `scaled`: either scale is past 1 (shader::Translate).
+    Built Build(shader::Type type, const uint32_t* code, size_t words, bool scaled, VkFormat depthFormat);
     void Destroy(Built& built);
 }
 #endif

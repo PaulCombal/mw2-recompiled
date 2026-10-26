@@ -39,6 +39,15 @@ uint32_t vk::shaders::Scale(VkPhysicalDevice physical, uint32_t asked)
     return scale;
 }
 
+uint32_t vk::shaders::ShadowScale(VkPhysicalDevice physical, uint32_t asked, uint32_t scale)
+{
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(physical, &properties);
+    uint32_t shadow = std::clamp(asked, 1u, kMaxShadowScale);
+    while (shadow > 1 && 4096 * shadow > properties.limits.maxImageDimension2D) shadow--;
+    return std::max(shadow, scale);
+}
+
 const VkDynamicState vk::shaders::kDynamicStates[] = {
     VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_DEPTH_BIAS,
     VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK, VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
@@ -131,11 +140,11 @@ namespace
     }
 }
 
-vk::shaders::Built vk::shaders::Build(shader::Type type, const uint32_t* code, size_t words, uint32_t scale,
+vk::shaders::Built vk::shaders::Build(shader::Type type, const uint32_t* code, size_t words, bool scaled,
                                       VkFormat depthFormat)
 {
     Built built;
-    built.translation = shader::Translate(type, code, words, scale);
+    built.translation = shader::Translate(type, code, words, scaled);
     if (!built.translation.ok) return built;
     VkShaderModuleCreateInfo info{ VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
     info.codeSize = built.translation.spirv.size() * 4;

@@ -547,7 +547,7 @@ namespace vk::renderer::detail
             DumpImage(target.samples > 1 ? target.singleImage : target.image,
                       target.samples > 1 ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
                                          : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                      target.width * g.scale, std::min(target.height, 1024u) * g.scale, name);
+                      target.width * target.scale, std::min(target.height, 1024u) * target.scale, name);
         }
 
         // A multisampled depth image cannot be copied out, so it is resolved into
@@ -571,7 +571,7 @@ namespace vk::renderer::detail
                           (unsigned long long)g.frames, shot.tile,
                           shot.target->width, tall, 1u << shot.samples);
             DumpImage(shot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                      shot.target->width * g.scale, tall * g.scale, name,
+                      shot.target->width * shot.target->scale, tall * shot.target->scale, name,
                       VK_IMAGE_ASPECT_DEPTH_BIT, g.depthFormat);
         }
         for (const Shot& shot : shots)
@@ -585,7 +585,7 @@ namespace vk::renderer::detail
                           (unsigned long long)g.frames, address,
                           resolved.depth ? "_depth" : "");
             DumpImage(resolved.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                      resolved.width * g.scale, resolved.height * g.scale, name,
+                      resolved.width * resolved.scale, resolved.height * resolved.scale, name,
                       resolved.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT,
                       resolved.format);
         }

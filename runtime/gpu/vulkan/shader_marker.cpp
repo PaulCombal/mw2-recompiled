@@ -86,7 +86,7 @@ std::vector<fs::path> vk::shaders::GameFiles(const fs::path& game, bool customMa
     return files;
 }
 
-std::string vk::shaders::Fingerprint(void* physical, uint32_t scale, const fs::path& game, bool customMaps)
+std::string vk::shaders::Fingerprint(void* physical, bool scaled, const fs::path& game, bool customMaps)
 {
     std::string text = std::string("build ") + kBuildId + "\n";
 #ifdef MW2_HAVE_VULKAN
@@ -103,7 +103,7 @@ std::string vk::shaders::Fingerprint(void* physical, uint32_t scale, const fs::p
 #else
     (void)physical;
 #endif
-    text += "scale " + std::to_string(scale) + "\n";
+    text += std::string("scaled ") + (scaled ? "yes" : "no") + "\n";
     // A file another of the same name and size replaced has another time.
     for (const fs::path& file : GameFiles(game, customMaps))
     {
@@ -159,7 +159,7 @@ bool vk::shaders::Compiled(const std::string& fingerprint, std::string* why)
         if (key == "build") return say("This version of the game draws with other shaders than the last one.");
         if (key == "device-id" || key == "device") return say("The game now draws on another graphics card.");
         if (key == "driver" || key == "cache-format") return say("The graphics driver has changed.");
-        if (key == "scale") return say("The resolution has changed, and the shaders are made for it.");
+        if (key == "scaled") return say("The resolution has changed, and the shaders are made for it.");
         return say("The game's files have changed.");
     }
     return say("The compiled shaders are for something else.");

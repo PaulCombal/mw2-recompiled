@@ -52,6 +52,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -343,7 +344,7 @@ namespace
         Profile, Back, NextPlayer, Rename, PlayAs, Rank, Prestige, UnlockEverything, UnlockMissions, AllStars,
         CheckUpdate, InstallUpdate,
         // The graphics screen, and the next of what each of its entries sets.
-        Graphics, Fullscreen, AspectRatio, Resolution, Stretch, Antialiasing, FpsLimit, Fov,
+        Graphics, Fullscreen, AspectRatio, Resolution, Stretch, Antialiasing, Anisotropy, Shadows, FpsLimit, Fov,
         // The network screen: which service, and the server's address and password, typed.
         Network, NextNetwork, ServerAddress, ServerPassword,
         // The maps screen; CUSTOM MAPS turned on asks first, on a screen of its own.
@@ -354,6 +355,8 @@ namespace
         Report, ReportCampaign, ReportMultiplayer,
         // The question a start asks when a recorded run was never reported.
         SendPending, DiscardPending,
+        // The question a start asks when the graphics card cannot compile shaders ahead.
+        PlayAnyway, DriverBack,
     };
 
     // More than any screen has, so that a screen's list never moves while it is filled.
@@ -376,6 +379,41 @@ namespace
         std::string path;
         std::vector<std::string> paths;   // every file chosen, for a dialog that takes several
     };
+
+    // A setting with a few values, set with a slider: its steps in the
+    // slider's order, the one kept (the first when it is none of them), and
+    // how a step is kept.
+    struct Steps
+    {
+        std::vector<int> values;
+        int kept = 0;
+        void (*set)(int) = nullptr;
+    };
+    std::optional<Steps> StepsOf(Action action)
+    {
+        Steps steps;
+        int now = 0;
+        switch (action)
+        {
+        case Action::Antialiasing:
+            steps = { { 0, 2, 4, 8 }, 0, settings::SetMsaa };
+            now = settings::Msaa();
+            break;
+        case Action::Anisotropy:
+            steps = { { 1, 2, 4, 8, 16 }, 0, settings::SetAnisotropy };
+            now = settings::Anisotropy();
+            break;
+        case Action::Shadows:
+            steps = { { 1, 2, 3, 4 }, 0, settings::SetShadowScale };
+            now = settings::ShadowScale();
+            break;
+        default:
+            return std::nullopt;
+        }
+        const auto at = std::find(steps.values.begin(), steps.values.end(), now);
+        steps.kept = at == steps.values.end() ? 0 : int(at - steps.values.begin());
+        return steps;
+    }
 
     struct App
     {
@@ -451,6 +489,9 @@ namespace
         }
         bool recording = false;         // the reported run goes on
         bool pendingReport = false;     // a recorded run was never reported: the start asks about it
+        Action driverWarned = Action::None;   // shaders cannot be compiled ahead: what to start past the question
+        std::string driverDevice;       // and the shaders' device it starts with
+        std::string driverCard;         // that device by name
         std::chrono::steady_clock::time_point recordingSince{};
         std::chrono::steady_clock::time_point gameChecked{};
         int focus = 0;
@@ -656,6 +697,15 @@ namespace
                 report::Discard();
                 focusPlaced = false;
                 break;
+            case Action::PlayAnyway:
+            case Action::DriverBack:
+            {
+                const Action then = driverWarned;
+                driverWarned = Action::None;
+                focusPlaced = false;
+                if (action == Action::PlayAnyway) Launch(then, driverDevice);
+                break;
+            }
             case Action::NextPlayer:
                 player = (player + 1) % players.size();
                 break;
@@ -725,12 +775,12 @@ namespace
                                         (settings::ResolutionRow() + 1) % int(settings::Resolutions(settings::AspectRatio()).size()));
                 break;
             case Action::Antialiasing:
+            case Action::Anisotropy:
+            case Action::Shadows:
             {
-                // The choice after the one kept; one written by hand that is
-                // none of them goes back to the first.
-                static constexpr int kChoices[] = { 2, 4, 8, 0 };
-                const int* kept = std::find(std::begin(kChoices), std::end(kChoices), settings::Msaa());
-                settings::SetMsaa(kept == std::end(kChoices) || kept + 1 == std::end(kChoices) ? kChoices[0] : kept[1]);
+                // Choosing goes one step up the slider, and round to its start.
+                const Steps steps = *StepsOf(action);
+                steps.set(steps.values[(steps.kept + 1) % steps.values.size()]);
                 break;
             }
             case Action::FpsLimit:
@@ -1109,8 +1159,29 @@ namespace
             add(Action::Antialiasing, "ANTIALIASING " + (msaa ? std::to_string(msaa) + "X" : std::string("OFF")), "ANTIALIASING",
                 std::string("How smooth the edges of what the game draws are: now ") +
                 (msaa == 2 ? "2x, the console's own." : msaa ? std::to_string(msaa) + "x, where the console's is 2x." : "off, with jagged edges.") +
-                "\n\nChoose to go to the next: 2x, 4x, 8x, off. More is smoother and needs a faster graphics card; a graphics card "
+                " Left and right change it: off, 2x, 4x, 8x.\n\nMore is smoother and needs a faster graphics card; a graphics card "
                 "that can't draw as many uses the most it can. Off is the fastest."
+                "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
+            const int filtering = settings::Anisotropy();
+            add(Action::Anisotropy, "ANISOTROPY " + (filtering > 1 ? std::to_string(filtering) + "X" : std::string("CONSOLE")),
+                "ANISOTROPIC FILTERING",
+                std::string("How sharp the ground, walls and roads stay as they go into the distance: now ") +
+                (filtering > 1 ? std::to_string(filtering) + "x." : "the console's own, 1x to 4x as each surface asks.") +
+                " Left and right change it: console, 2x, 4x, 8x, 16x.\n\nMore is sharper at a slant, and costs little on most "
+                "graphics cards. 16x is the PC game's highest."
+                "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
+            // RESOLUTION draws the shadow maps at its own scale already, and
+            // the game takes the larger of the two.
+            const int shadows = settings::ShadowScale(), drawn = std::max(shadows, resolution.scale);
+            add(Action::Shadows, "SHADOWS " + (shadows > 1 ? std::to_string(shadows) + "X" : std::string("CONSOLE")),
+                "SHADOW RESOLUTION",
+                std::string("How sharp the edges of shadows are: now ") +
+                (drawn > 1 ? "the shadow maps are drawn at " + std::to_string(drawn) + "x the console's size" +
+                                 (drawn > shadows ? ", as RESOLUTION " + std::string(resolution.name) + " draws them." : ".")
+                           : std::string("the console's own.")) +
+                " Left and right change it: console, 2x, 3x, 4x.\n\nMore makes shadows less jagged and needs a faster "
+                "graphics card with more memory. A larger RESOLUTION draws them larger too, and the game takes the larger "
+                "of the two. The PC game's are the console's size."
                 "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
             const int limit = settings::FpsLimit();
             add(Action::FpsLimit, "FPS LIMIT " + (limit ? std::to_string(limit) : std::string("NONE")), "FPS LIMIT",
@@ -1374,13 +1445,21 @@ namespace
                 if (result.ok)
                 {
                     if (result.noLibraries)
-                        message = result.device + " can compile a shader only with the state of the draw it is "
-                                  "for, so the game compiles each as it first meets it, and may stutter then.";
+                        message = "The graphics driver for " + result.device + " cannot prepare the game's shaders "
+                                  "ahead, so the game may stutter. A newer driver usually can.";
                     else if (!result.current)
                         message = "Every shader of the game, " + std::to_string(result.shaders) +
                                   ", is compiled for this computer.";
                     messageIsError = false;
-                    if (then != Action::None) Launch(then, result.deviceId);
+                    // Asked first: the start goes on past the question, or not.
+                    if (then != Action::None && result.noLibraries)
+                    {
+                        message.clear();
+                        driverWarned = then;
+                        driverDevice = result.deviceId;
+                        driverCard = result.device;
+                    }
+                    else if (then != Action::None) Launch(then, result.deviceId);
                 }
                 else if (result.cancelled)
                 {
@@ -1474,6 +1553,25 @@ namespace
                 }
                 return entries;
             }
+            if (driverWarned != Action::None)
+            {
+                std::vector<Entry> entries(2);
+                entries[0].shown.label = "GO BACK";
+                entries[0].action = Action::DriverBack;
+                entries[1].shown.label = "PLAY ANYWAY";
+                entries[1].action = Action::PlayAnyway;
+                entries[1].shown.ruleAbove = true;
+                for (Entry& entry : entries)
+                {
+                    entry.heading = "UPDATE YOUR GRAPHICS DRIVER";
+                    entry.text = "The graphics driver for " + driverCard + " cannot prepare the game's shaders "
+                                 "before it is played. The game then prepares each one the first time it is needed, "
+                                 "and stutters while it does.\n\n"
+                                 "A newer driver from the maker of your graphics card usually can. Install it, then "
+                                 "start the game again.";
+                }
+                return entries;
+            }
             std::vector<Entry> entries;
             entries.reserve(kMostEntries);   // add() hands out pointers into it: it must not move
             auto add = [&](Action action, std::string label, bool enabled, const char* heading, std::string text) {
@@ -1533,7 +1631,7 @@ namespace
             if (!reinstall) install()->shown.ruleAbove = true;
 
             // What the game is played with.
-            add(Action::Graphics, "GRAPHICS", true, "GRAPHICS", "Fullscreen or a window, the size the game draws at, its antialiasing, how many frames a second and how wide its view is.")->shown.ruleAbove = true;
+            add(Action::Graphics, "GRAPHICS", true, "GRAPHICS", "Fullscreen or a window, the size the game draws at, its antialiasing, texture filtering and shadows, how many frames a second and how wide its view is.")->shown.ruleAbove = true;
             add(Action::Network, "NETWORK", true, "NETWORK",
                 std::string("How the multiplayer reaches other players: on this computer only, the local network, a server, or Steam. Now ") +
                     settings::NetworkName(settings::CurrentNetwork()) + ".");
@@ -1677,6 +1775,13 @@ namespace
             if (app.typing || typed) { app.focus = focusBefore; chosen = -1; }
             if (app.typing || typed) {}
             else if (app.JobShown() && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false)) app.job->Cancel();
+            else if (app.driverWarned != Action::None && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false))
+            {
+                sound::Play(sound::Clip::Click);
+                app.Do(Action::DriverBack);
+                ImGui::EndFrame();
+                continue;
+            }
             else if ((app.profileScreen || app.graphicsScreen || app.networkScreen || app.mapsScreen || (app.reportScreen && !app.recording)) && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false))
             {
                 sound::Play(sound::Clip::Click);
@@ -1767,6 +1872,12 @@ namespace
             }
             frame.picture = pictures->Get(renderer, current.picture);
 
+            const std::optional<Steps> steps = StepsOf(current.action);
+            if (steps)
+            {
+                frame.slider = float(steps->kept) / float(steps->values.size() - 1);
+                frame.hint = "LEFT AND RIGHT TO CHANGE, ESC OR (B) TO GO BACK";
+            }
             if (current.action == Action::Fov)
             {
                 const int range = settings::kWidestFov - settings::kConsoleFov;
@@ -1789,6 +1900,21 @@ namespace
 
             float slid = -1;
             const int pointed = ui::Draw(fonts, frame, scale, app.focus, slid);
+            if (steps)
+            {
+                // A step a press to either side, or the one nearest where the pointer holds it.
+                const int last = int(steps->values.size()) - 1;
+                int step = steps->kept;
+                if (pressed({ ImGuiKey_LeftArrow, ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadLStickLeft }, true)) step--;
+                if (pressed({ ImGuiKey_RightArrow, ImGuiKey_GamepadDpadRight, ImGuiKey_GamepadLStickRight }, true)) step++;
+                if (slid >= 0) step = int(std::lround(slid * float(last)));
+                step = std::clamp(step, 0, last);
+                if (step != steps->kept)
+                {
+                    steps->set(steps->values[step]);
+                    sound::Play(sound::Clip::Over);
+                }
+            }
             if (current.action == Action::Fov)
             {
                 // The slider: a step a press to either side, or wherever the pointer holds it.

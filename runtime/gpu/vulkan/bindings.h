@@ -50,10 +50,13 @@ namespace vk::bindings
     // for a program drawn with the viewport transform off.
     constexpr uint32_t kVertexPushOffset = 16, kVertexPushBytes = 16;
     // Both, and only in shaders built for render targets larger than the
-    // title's (MW2_SCALE): { uint, a bit per texture slot bound to a resolve's
-    // copy }, whose image is that many times the size the title gave it.
-    constexpr uint32_t kScaledPushOffset = 32, kScaledPushBytes = 4;
+    // title's (MW2_SCALE, MW2_SHADOW_SCALE): { uint frame copies, uint shadow
+    // copies, float frame factor, float shadow factor }. A bit per texture
+    // slot bound to a resolve's copy, whose image is a whole number of times
+    // the size the title gave it -- the frame's scale, or the shadow maps' --
+    // and the reciprocal of each scale.
+    constexpr uint32_t kScaledPushOffset = 32, kScaledPushBytes = 16;
     // Both: { uint x5 }, the dword offset of each constant block in the arena,
     // in the order above.
-    constexpr uint32_t kConstantPushOffset = 36, kConstantPushBytes = 4 * kConstantBlocks;
+    constexpr uint32_t kConstantPushOffset = 48, kConstantPushBytes = 4 * kConstantBlocks;
 }

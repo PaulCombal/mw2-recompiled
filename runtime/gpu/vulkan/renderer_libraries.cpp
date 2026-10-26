@@ -233,7 +233,7 @@ namespace vk::renderer::detail
     {
         // The launcher built every shader the same way before the game first
         // ran, into the pipeline cache this one starts with (shader_build.h).
-        vk::shaders::Built built = vk::shaders::Build(type, code, words, g.scale, g.depthFormat);
+        vk::shaders::Built built = vk::shaders::Build(type, code, words, g.shadowScale > 1, g.depthFormat);
         if (built.library)
         {
             g_fromCache[built.fromCache + 1].fetch_add(1, std::memory_order_relaxed);

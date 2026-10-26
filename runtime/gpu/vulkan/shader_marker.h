@@ -28,9 +28,10 @@ namespace vk::shaders
     std::vector<std::filesystem::path> GameFiles(const std::filesystem::path& game, bool customMaps);
 
     // What a cache made now would be good for: a line a fact, as the marker
-    // keeps them. `physical` is the VkPhysicalDevice, `scale` MW2_SCALE as the
-    // device draws it (Scale in shader_build.h), `customMaps` as GameFiles.
-    std::string Fingerprint(void* physical, uint32_t scale, const std::filesystem::path& game, bool customMaps);
+    // keeps them. `physical` is the VkPhysicalDevice, `scaled` whether either
+    // scale is past 1 as the device draws them (shader_build.h), which is
+    // what the shaders depend on, `customMaps` as GameFiles.
+    std::string Fingerprint(void* physical, bool scaled, const std::filesystem::path& game, bool customMaps);
 
     struct Marker
     {

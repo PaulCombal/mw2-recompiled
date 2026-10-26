@@ -52,6 +52,9 @@
 // the view's angle, and the zoom the distance culls take from it (field_of_view.cpp)
 #define T_CG_ViewFov           8215B9A8
 #define T_CG_CullZoom          8215BC28
+// Dvar_RegisterInt(name, default, min, max, flags, description): the anisotropy
+// the textures are filtered with at least, r_texFilterAnisoMin (texture_filtering.cpp)
+#define T_Dvar_RegisterInt     8230EE48
 // the sizes the title draws at, and the picture's shape (render_size.cpp).
 // R_VideoSizes(config) fills { bool wide, hiDef; float refresh; scene w, h;
 // frame w, h; samples } from the video mode, the sizes its own: 1024x600 and
@@ -65,6 +68,10 @@
 #define T_R_DrawStretchPic     823C6DB0
 #define T_UI_EvaluateStatement 822D72F0   // a menu expression's value (localClientNum, statement)
 #define T_DATA_VidConfig          0x83B3A928u
+// gfxRenderTargets: 20 bytes a render target { image, colour surface, depth
+// surface, width, height }, in the order of the R_RENDERTARGET_ names; 11 and
+// 12 are the sun's and the spots' shadow maps (shadow_resolution.cpp).
+#define T_DATA_RenderTargets      0x83D8DA80u
 // network hardening against the known IW4 vulnerabilities.
 // PartyHost_HandleJoinPartyRequest is the "joinParty" OOB handler whose
 // subparty count is unbounded -- CVE-2019-20893 (joinparty_overflow.cpp) --
@@ -373,12 +380,14 @@
 #define T_Image_FlushMove      823A52F8
 #define T_CG_ViewFov           8210FCD8
 #define T_CG_CullZoom          8210FF80
+#define T_Dvar_RegisterInt     822E1620
 // the sizes the title draws at, and the picture's shape (render_size.cpp)
 #define T_R_VideoSizes         8238E5D0
 #define T_R_SetVidConfig       8238DDC8
 #define T_R_DrawStretchPic     823915B0
 #define T_UI_EvaluateStatement 822BF4B8
 #define T_DATA_VidConfig          0x83C911A8u
+#define T_DATA_RenderTargets      0x83E49800u
 // network hardening -- the campaign (co-op / Spec Ops) is network-exposed too.
 // UI_ReplaceDirective is instruction-identical to the multiplayer's and has the
 // same unbounded directive-name buffer (ui_directive_overflow.cpp). The
@@ -455,6 +464,8 @@
 #define T_Image_FlushMove      823DD658
 #define T_CG_ViewFov           8215B9D0
 #define T_CG_CullZoom          8215BC50
+#define T_Dvar_RegisterInt     8230E2F8
+#define T_DATA_RenderTargets      0x83D33D80u
 #define T_PartyHost_HandleJoinPartyRequest 821A65C0
 #define T_atoi                 8241A118
 #define T_DATA_TimeStampBundlePtr 0x820007B4u
@@ -485,6 +496,8 @@
 #define T_Image_FlushMove      823A52F8
 #define T_CG_ViewFov           8210FCD8
 #define T_CG_CullZoom          8210FF80
+#define T_Dvar_RegisterInt     822E1618
+#define T_DATA_RenderTargets      0x83E49800u
 #define T_DATA_TimeStampBundlePtr 0x82000780u
 #define T_DATA_DebugMonitorPtr    0x820007F8u
 #define T_DATA_DeviceTable        0x83A53020u

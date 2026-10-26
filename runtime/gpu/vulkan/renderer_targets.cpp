@@ -14,7 +14,7 @@ namespace vk::renderer::detail
         VkImageCreateInfo info{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
         info.imageType = VK_IMAGE_TYPE_2D;
         info.format = target.format;
-        info.extent = { target.width * g.scale, target.height * g.scale, 1 };
+        info.extent = { target.width * target.scale, target.height * target.scale, 1 };
         info.mipLevels = 1;
         info.arrayLayers = 1;
         info.samples = target.samples;
@@ -73,9 +73,9 @@ namespace vk::renderer::detail
     // a depth image has one sample count, and the colour target it is bound
     // beside has to share it. MW2 tests and writes its world depth at 2x in
     // both passes, so nothing is split by that.
-    TargetKey DepthKey(uint32_t baseTile, uint32_t format, uint32_t samples)
+    TargetKey DepthKey(uint32_t baseTile, uint32_t format, uint32_t samples, uint32_t scale)
     {
-        return { baseTile, 0, format, g.msaa ? samples : 0, true };
+        return { baseTile, 0, format, g.msaa ? samples : 0, true, scale };
     }
 
     // The console's 1x, 2x and 4x, as the device can draw them. A count the
@@ -240,10 +240,10 @@ namespace vk::renderer::detail
                       VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
         VkImageResolve region{};
         region.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-        region.srcOffset = Scaled(at.x, at.y, 0);
+        region.srcOffset = Scaled(at.x, at.y, 0, target.scale);
         region.dstSubresource = region.srcSubresource;
         region.dstOffset = region.srcOffset;
-        region.extent = { width * g.scale, height * g.scale, 1 };
+        region.extent = { width * target.scale, height * target.scale, 1 };
         const VkImage from = target.image, into = target.singleImage;
         Record([=](VkCommandBuffer command) {
             vkCmdResolveImage(command, from, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -293,7 +293,7 @@ namespace vk::renderer::detail
         // the twin comes out in TRANSFER_SRC, ready to be copied from.
         const VkImageView view = target.view, twinView = target.singleView;
         const VkImage twin = target.singleImage;
-        const VkRect2D area{ Scaled(at), Scaled(VkExtent2D{ width, height }) };
+        const VkRect2D area{ Scaled(at, target.scale), Scaled(VkExtent2D{ width, height }, target.scale) };
         Record([=](VkCommandBuffer command) {
             constexpr VkImageAspectFlags kBoth = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
             // The draws before it wrote the depth; the copies before it read the twin.
@@ -376,6 +376,7 @@ namespace vk::renderer::detail
 
         Target target;
         target.depth = key.depth;
+        target.scale = key.scale;
         target.width = width;
         target.height = height;
         target.format = VkFormat(key.format);
@@ -398,7 +399,7 @@ namespace vk::renderer::detail
         if (!MakeImage(target, usage, aspect)) { Skip("render target allocation"); return nullptr; }
 
         LOGI("renderer: %s target %ux%u at EDRAM tile %u (%s), %ux for the title's %ux",
-             key.depth ? "depth" : "colour", target.width * g.scale, target.height * g.scale,
+             key.depth ? "depth" : "colour", target.width * target.scale, target.height * target.scale,
              key.baseTile,
              key.depth ? gpu::DepthTargetFormatName(guestFormat)
                        : (gpu::ColorTargetFormatName(guestFormat) ?: "unknown"),
@@ -413,7 +414,8 @@ namespace vk::renderer::detail
     {
         EndPass();
         const VkImageView colourView = colour.view, depthView = depth.view;
-        const VkExtent2D area = Scaled(VkExtent2D{ width, height });
+        // Both are drawn at the pass's scale: their keys carry it.
+        const VkExtent2D area = Scaled(VkExtent2D{ width, height }, colour.scale);
         Record([=](VkCommandBuffer command) {
             // What a render pass's dependency in from the outside was: a frame
             // is many passes over the same attachments, with copies and clears
@@ -447,6 +449,7 @@ namespace vk::renderer::detail
             info.pStencilAttachment = &depthAttachment;
             dispatch.beginRendering(command, &info);
         });
+        g.currentScale = colour.scale;
         OpenGuestQuery();
         g.currentColour = colour.view;
         g.currentDepth = depth.view;
@@ -468,7 +471,8 @@ namespace vk::renderer::detail
             const gpu::ColorInfo colour{ r[gpu::RB_COLOR_INFO] };
             if (Target* target = FindTarget({ colour.BaseTile(), surface.Pitch(),
                                               uint32_t(ColourFormatFor(colour.Format())),
-                                              surface.MsaaSamples(), false }))
+                                              surface.MsaaSamples(), false,
+                                              PassScale(r[gpu::RB_DEPTH_INFO], surface.MsaaSamples()) }))
             {
                 // RB_COLOR_CLEAR is the packed colour in the surface's own format;
                 // for the 8_8_8_8 family that is ARGB, most significant byte first.
@@ -502,7 +506,8 @@ namespace vk::renderer::detail
             const gpu::SurfaceInfo surface{ r[gpu::RB_SURFACE_INFO] };
             const gpu::DepthInfo depthInfo{ r[gpu::RB_DEPTH_INFO] };
             if (Target* target = FindTarget(DepthKey(depthInfo.BaseTile(), uint32_t(g.depthFormat),
-                                                     surface.MsaaSamples())))
+                                                     surface.MsaaSamples(),
+                                                     PassScale(r[gpu::RB_DEPTH_INFO], surface.MsaaSamples()))))
             {
                 // The stored value is 24-bit depth with stencil in the low byte.
                 const uint32_t packed = r[gpu::RB_DEPTH_CLEAR];

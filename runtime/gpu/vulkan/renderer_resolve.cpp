@@ -42,7 +42,9 @@ namespace vk::renderer::detail
         return ring.copies[ring.newest];
     }
 
-    bool MakeResolveImage(Resolved& into, uint32_t width, uint32_t height,
+    // `scale` is the surface's the copy comes out of: a copy is as many times
+    // the title's size as that surface.
+    bool MakeResolveImage(Resolved& into, uint32_t width, uint32_t height, uint32_t scale,
                           VkFormat format, bool depth = false, bool exact = false)
     {
         // Grow only within a frame: the second shadow cascade lands inside the
@@ -53,9 +55,9 @@ namespace vk::renderer::detail
         // image, so an image wider than the surface stretches what it holds.
         const bool fits = exact ? into.width == width && into.height == height
                                 : into.width >= width && into.height >= height;
-        if (into.image && fits && into.format == format && into.depth == depth)
+        if (into.image && fits && into.format == format && into.depth == depth && into.scale == scale)
             return true;
-        if (!exact && into.image && into.format == format && into.depth == depth)
+        if (!exact && into.image && into.format == format && into.depth == depth && into.scale == scale)
         {
             width = std::max(width, into.width);
             height = std::max(height, into.height);
@@ -79,7 +81,7 @@ namespace vk::renderer::detail
         VkImageCreateInfo info{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
         info.imageType = VK_IMAGE_TYPE_2D;
         info.format = format;
-        info.extent = { width * g.scale, height * g.scale, 1 };
+        info.extent = { width * scale, height * scale, 1 };
         info.mipLevels = 1;
         info.arrayLayers = 1;
         info.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -132,9 +134,10 @@ namespace vk::renderer::detail
         into.format = format;
         into.width = width;
         into.height = height;
+        into.scale = scale;
         into.depth = depth;
-        LOGI("renderer: %ux%u image for a %s resolve destination", width * g.scale,
-             height * g.scale,
+        LOGI("renderer: %ux%u image for a %s resolve destination", width * scale,
+             height * scale,
              depth ? "depth" : "colour");
         return true;
     }
@@ -161,7 +164,8 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
     {
         const gpu::DepthInfo depthInfo{ r[gpu::RB_DEPTH_INFO] };
         Target* from = FindTarget(DepthKey(depthInfo.BaseTile(), uint32_t(g.depthFormat),
-                                           surface.MsaaSamples()));
+                                           surface.MsaaSamples(),
+                                           PassScale(r[gpu::RB_DEPTH_INFO], surface.MsaaSamples())));
         if (!from) { Skip("resolve of a depth surface never drawn into"); SubmitIfFilling(); return; }
         if (!g.recording && !BeginFrame()) { Skip("no command buffer"); return; }
         g.resolves++;
@@ -214,7 +218,7 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
                                               std::min(destPitch.Height(), 4096u));
         const bool firstThisFrame = into.writtenFrame != g.frames;
         if (!destination || !width || !height ||
-            !MakeResolveImage(into, imageWidth, imageHeight, from->format, true, firstThisFrame))
+            !MakeResolveImage(into, imageWidth, imageHeight, from->scale, from->format, true, firstThisFrame))
         {
             Skip("depth resolve destination image");
             SubmitIfFilling();
@@ -240,10 +244,10 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
         // and a plain copy asks nothing of the format beyond being transferable.
         VkImageCopy copy{};
         copy.srcSubresource = { kBoth, 0, 0, 1 };
-        copy.srcOffset = Scaled(rect.offset.x, rect.offset.y, 0);
+        copy.srcOffset = Scaled(rect.offset.x, rect.offset.y, 0, from->scale);
         copy.dstSubresource = copy.srcSubresource;
-        copy.dstOffset = Scaled(int32_t(destX), int32_t(destY), 0);
-        copy.extent = { width * g.scale, height * g.scale, 1 };
+        copy.dstOffset = Scaled(int32_t(destX), int32_t(destY), 0, from->scale);
+        copy.extent = { width * from->scale, height * from->scale, 1 };
         const VkImage intoImage = into.image;
         Record([=](VkCommandBuffer command) {
             vkCmdCopyImage(command, fromImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -266,7 +270,8 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
     // it: the world's is resolved after a later pass has bound its own.
     const TargetKey sourceKey{ colour.BaseTile(), surface.Pitch(),
                                uint32_t(ColourFormatFor(colour.Format())),
-                               surface.MsaaSamples(), false };
+                               surface.MsaaSamples(), false,
+                               PassScale(r[gpu::RB_DEPTH_INFO], surface.MsaaSamples()) };
     Target* source = FindTarget(sourceKey);
     if (!source) { Skip("resolve of a surface never drawn into"); SubmitIfFilling(); return; }
 
@@ -304,7 +309,7 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
     Resolved& into = ResolveCopyFor(destination);
     const bool firstThisFrame = into.writtenFrame != g.frames;
     if (!destination || !width || !height ||
-        !MakeResolveImage(into, surfaceWidth, surfaceHeight, source->format, false,
+        !MakeResolveImage(into, surfaceWidth, surfaceHeight, source->scale, source->format, false,
                           firstThisFrame))
     {
         Skip("resolve destination image");
@@ -323,8 +328,8 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
 
     VkImageBlit copy{};
     copy.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-    copy.srcOffsets[0] = Scaled(int32_t(destX), int32_t(destY), 0);
-    copy.srcOffsets[1] = Scaled(int32_t(destX + width), int32_t(destY + height), 1);
+    copy.srcOffsets[0] = Scaled(int32_t(destX), int32_t(destY), 0, source->scale);
+    copy.srcOffsets[1] = Scaled(int32_t(destX + width), int32_t(destY + height), 1, source->scale);
     copy.dstSubresource = copy.srcSubresource;
     copy.dstOffsets[0] = copy.srcOffsets[0];
     copy.dstOffsets[1] = copy.srcOffsets[1];
@@ -379,7 +384,7 @@ void vk::renderer::Swap(uint32_t frontBuffer)
 
     VkImageBlit blit{};
     blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-    blit.srcOffsets[1] = Scaled(int32_t(frame.width), int32_t(frame.height), 1);
+    blit.srcOffsets[1] = Scaled(int32_t(frame.width), int32_t(frame.height), 1, frame.scale);
     blit.dstSubresource = blit.srcSubresource;
     blit.dstOffsets[1] = { int32_t(g.presentWidth), int32_t(g.presentHeight), 1 };
     const VkImage frameImage = frame.image;

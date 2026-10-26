@@ -73,11 +73,15 @@ namespace vk::renderer::detail
     // thirty-two, but a shader cannot read what it did not declare.
     //
     // `scaled` gets a bit for each slot bound to a resolve's copy, whose image
-    // is State::scale times the size the title gave it.
+    // is a whole number of times the size the title gave it: [0] for the
+    // frame's scale, [1] for the shadow maps' where it differs.
     VkDescriptorSet TextureSetFor(const gpu::RegisterFile& r, uint32_t mask, const uint8_t* kinds,
-                                  uint32_t& scaled)
+                                  uint32_t (&scaled)[2])
     {
-        scaled = 0;
+        scaled[0] = scaled[1] = 0;
+        const auto note = [&](uint32_t slot, uint32_t copyScale) {
+            if (copyScale) scaled[copyScale == g.scale ? 0 : 1] |= 1u << slot;
+        };
         Stopwatch watch(g.textureNanoseconds);
         uint64_t ids[vk::textures::kSlots]{};
         const uint64_t epoch = vk::textures::Epoch();
@@ -100,17 +104,17 @@ namespace vk::renderer::detail
             {
                 g.textureSlotsKept++;
                 ids[slot] = kept.id;
-                if (kept.scaled) scaled |= 1u << slot;
-                else if constexpr (diag::kOn)
-                    if (ids[slot] && g.currentSamples > 1)
+                note(slot, kept.copyScale);
+                if constexpr (diag::kOn)
+                    if (!kept.copyScale && ids[slot] && g.currentSamples > 1)
                         ids[slot] = vk::textures::NoteDrawnInWorld(ids[slot]);
                 continue;
             }
             g.textureSlotsLookedUp++;
-            const auto keep = [&](uint64_t id, bool isScaled) {
+            const auto keep = [&](uint64_t id, uint32_t copyScale) {
                 std::memcpy(kept.fetch, fetch.d, sizeof kept.fetch);
                 kept.id = id;
-                kept.scaled = isScaled;
+                kept.copyScale = copyScale;
                 kept.epoch = epoch;
                 kept.resolveEpoch = g.resolveEpoch;
                 kept.valid = true;
@@ -149,14 +153,14 @@ namespace vk::renderer::detail
                     key, linearise ? newest->gammaView : newest->view, fetch);
                 if (ids[slot])
                 {
-                    scaled |= 1u << slot;
-                    keep(ids[slot], true);
+                    note(slot, newest->scale);
+                    keep(ids[slot], newest->scale);
                     if (g.drawRecord) NoteDrawTexture(slot, fetch, ids[slot], true);
                     continue;
                 }
             }
             ids[slot] = vk::textures::Upload(fetch, nullptr);
-            keep(ids[slot], false);
+            keep(ids[slot], 0);
             // MW2_MARK_EMPTY: the world pass is the multisampled one; the
             // interface and the post chain are not. A texture read from an empty
             // block matters when a draw into the world binds it.
@@ -180,6 +184,9 @@ namespace vk::renderer::detail
             kIndexBuffer = 512, kIndexed = 1024, kFaces = 2048, kDepthTests = 4096,
             kScaled = 8192,
         };
+        // bindings::kScaledPushOffset's block.
+        struct ScaledCopies { uint32_t slots[2]; float factors[2]; };
+        static_assert(sizeof(ScaledCopies) == bindings::kScaledPushBytes);
         uint32_t set = 0;
         VkPipelineLayout layout = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
@@ -189,7 +196,7 @@ namespace vk::renderer::detail
         float depthBias[2]{};
         uint32_t stencil[2]{};
         uint32_t push[4]{};
-        uint32_t scaled = 0;
+        ScaledCopies scaled{};
         VkCullModeFlags cullMode = 0;
         VkFrontFace frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         DepthTests depthTests{};
@@ -340,7 +347,8 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
         const uint32_t format = uint32_t(ColourFormatFor(colour.Format()));
         for (const auto& [key, target] : g.targets)
             if (!key.depth && key.baseTile == colour.BaseTile() && key.format == format &&
-                key.samples < useSamples && (key.pitch << key.samples) == row)
+                key.samples < useSamples && (key.pitch << key.samples) == row &&
+                key.scale == PassScale(r[gpu::RB_DEPTH_INFO], key.samples))
             {
                 usePitch = key.pitch;
                 useSamples = key.samples;
@@ -351,15 +359,22 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
     // the draws cover. Clamped, because a scissor left at its reset value asks for
     // a target taller than any display.
     const uint32_t width = std::min(usePitch, 4096u);
-    const uint32_t height = std::clamp(uint32_t(scissor.offset.y) + scissor.extent.height,
-                                       32u, 4096u);
+    uint32_t height = std::clamp(uint32_t(scissor.offset.y) + scissor.extent.height,
+                                 32u, 4096u);
 
+    // The shadow maps' scale or the frame's, for both targets.
+    const uint32_t passScale = PassScale(r[gpu::RB_DEPTH_INFO], useSamples);
+    // A shadow map's surface is as tall as the title made it. The title also
+    // draws a stencil rectangle into it in depth-only mode with the scissor
+    // at its 8192 reset value, which would make it 4096 tall: at the shadow
+    // maps' scale, twice the memory for rows nothing reads.
+    if (passScale != g.scale) height = std::min(height, shadows::SurfaceHeight());
     Target* colourTarget = EnsureTarget({ colour.BaseTile(), usePitch,
                                           uint32_t(ColourFormatFor(colour.Format())),
-                                          useSamples, false },
+                                          useSamples, false, passScale },
                                         width, height, colour.Format());
     Target* depthTarget = EnsureTarget(DepthKey(depthInfo.BaseTile(), uint32_t(g.depthFormat),
-                                                useSamples),
+                                                useSamples, passScale),
                                        width, height, depthInfo.Format());
     if (!colourTarget || !depthTarget) return;
 
@@ -547,7 +562,7 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
         kinds[s] = (pixel->translation.textureMask & (1u << s))
                        ? pixel->translation.textureKinds[s]
                        : vertex->translation.textureKinds[s];
-    uint32_t scaledSlots = 0;
+    uint32_t scaledSlots[2]{};
     VkDescriptorSet textureSet = TextureSetFor(
         r, vertex->translation.textureMask | pixel->translation.textureMask, kinds, scaledSlots);
     if (!textureSet) { Skip("no texture descriptor set"); return; }
@@ -613,17 +628,19 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
     }
 
     // The title's pixels up to here, the images' from here.
-    viewport.x *= float(g.scale);
-    viewport.y *= float(g.scale);
-    viewport.width *= float(g.scale);
-    viewport.height *= float(g.scale);
-    scissor = { Scaled(scissor.offset), Scaled(scissor.extent) };
+    viewport.x *= float(passScale);
+    viewport.y *= float(passScale);
+    viewport.width *= float(passScale);
+    viewport.height *= float(passScale);
+    scissor = { Scaled(scissor.offset, passScale), Scaled(scissor.extent, passScale) };
 
-    if (g.scale > 1 && (!bound.scaledValid || bound.scaled != scaledSlots))
+    if ((g.scale > 1 || g.shadowScale > 1) &&
+        (!bound.scaledValid || std::memcmp(bound.scaled, scaledSlots, sizeof scaledSlots)))
     {
         op.set |= DrawOp::kScaled;
-        op.scaled = scaledSlots;
-        bound.scaled = scaledSlots;
+        op.scaled = { { scaledSlots[0], scaledSlots[1] },
+                      { 1.0f / float(g.scale), 1.0f / float(g.shadowScale) } };
+        std::memcpy(bound.scaled, scaledSlots, sizeof scaledSlots);
         bound.scaledValid = true;
     }
 
@@ -684,7 +701,7 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
             offset * (depthInfo.Format() ? float(1u << 24) : float((1u << 24) - 1)),
             // A slope is depth per pixel, and the images' pixels are smaller
             // than the title's.
-            scale * (1.0f / 16.0f) * float(g.scale),
+            scale * (1.0f / 16.0f) * float(passScale),
         };
         if (!bound.depthBiasValid || std::memcmp(bound.depthBias, bias, sizeof bias))
         {

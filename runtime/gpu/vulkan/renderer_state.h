@@ -24,6 +24,7 @@
 #include "../../env.h"
 #include "../../stutters.h"
 #include "../../words_hash.h"
+#include "../../shadow_resolution.h"
 
 #include <chrono>
 #include <map>
@@ -67,10 +68,17 @@ namespace vk::renderer::detail
     // A tile of EDRAM is one surface however the title declares it, so the key
     // holds the host format: 8_8_8_8 and its gamma twin are one image, which is
     // what a title relies on when it resolves a pass it drew under the other name.
+    //
+    // And the scale the image is drawn at (PassScale): a shadow map's pass
+    // draws its colour surface at the shadow maps' scale, and another pass
+    // with a colour surface at the same tile and pitch -- the half-size
+    // particles share the spots' -- at the frame's, each into its own image.
+    // Nothing reads one pass's colour through the other's.
     struct TargetKey
     {
         uint32_t baseTile = 0, pitch = 0, format = 0, samples = 0;
         bool depth = false;
+        uint32_t scale = 0;
         auto operator<=>(const TargetKey&) const = default;
     };
 
@@ -97,6 +105,7 @@ namespace vk::renderer::detail
         uint32_t guestFormat = 0;   // for the report
         uint32_t width = 0, height = 0;
         bool depth = false;
+        uint32_t scale = 1;         // how many times the title's size the image is, each way
         // The console's 2x and 4x surfaces are drawn with that many samples
         // here. A multisampled image can be neither blitted, copied nor
         // sampled, so every read of one -- a resolve, the present, a dump --
@@ -172,6 +181,7 @@ namespace vk::renderer::detail
         VkImageView gammaView = VK_NULL_HANDLE;
         VkFormat format = VK_FORMAT_UNDEFINED;
         uint32_t width = 0, height = 0;
+        uint32_t scale = 1;         // the surface's it was copied out of
         // A depth resolve is sampled through a depth-only view; the title reads
         // the scene's depth as an ordinary texture.
         bool depth = false;
@@ -221,6 +231,9 @@ namespace vk::renderer::detail
         // registers, stay the title's, and are multiplied where they are
         // handed to Vulkan (Scaled).
         uint32_t scale = 1;
+        // MW2_SHADOW_SCALE: the same for the surfaces the title draws its
+        // shadow maps in and their copies, at least `scale` (PassScale).
+        uint32_t shadowScale = 1;
 
         // The console's command processor runs while the title builds the next
         // frame. A slot owns the command buffer it records into, the fence that
@@ -309,6 +322,8 @@ namespace vk::renderer::detail
         uint32_t guestQueryFirst = 0;   // the bracket in progress's first query
         uint32_t guestQueryCount = 0;   // and how many of them it has used
         uint32_t guestQueryNext = 0;    // where the next bracket starts in the ring
+        // The scale of the pass each query in the ring counted in.
+        uint8_t guestQueryScale[kGuestQueryRing]{};
         // Brackets submitted whose counts the GPU has not produced yet.
         struct PendingQuery
         {
@@ -368,7 +383,7 @@ namespace vk::renderer::detail
             bool pushValid = false;
             float ndc[4]{};          // window -> clip, for a pre-transformed vertex
             bool ndcValid = false;
-            uint32_t scaled = 0;     // the slots bound to a resolve's copy
+            uint32_t scaled[2]{};    // the slots bound to a resolve's copy at either scale
             bool scaledValid = false;
             VkBuffer indexBuffer = VK_NULL_HANDLE;
             uint32_t indexOffset = 0;
@@ -383,6 +398,7 @@ namespace vk::renderer::detail
         // The open pass's size and sample count. Values, not the target: a
         // target that grows is replaced, and a pointer to it would dangle.
         uint32_t currentWidth = 0, currentHeight = 0, currentSamples = 1;
+        uint32_t currentScale = 1;
 
         // So a frame is not overwritten while it is on screen.
         VkImage present[kPresentImages]{};
@@ -415,7 +431,8 @@ namespace vk::renderer::detail
         {
             uint32_t fetch[6];
             uint64_t id, epoch, resolveEpoch;
-            bool scaled, valid;
+            uint32_t copyScale;   // the scale of the resolve's copy bound, 0 for none
+            bool valid;
         };
         TextureSlot textureSlots[vk::textures::kSlots]{};
         uint64_t textureSlotsKept = 0, textureSlotsLookedUp = 0;
@@ -507,18 +524,38 @@ namespace vk::renderer::detail
     constexpr VkPipelineStageFlags kShaderStages =
         VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 
-    // The title's pixels as the images' (State::scale).
-    inline VkOffset2D Scaled(VkOffset2D at)
+    // The title's pixels as an image's drawn at `scale` (State::scale).
+    inline VkOffset2D Scaled(VkOffset2D at, uint32_t scale)
     {
-        return { at.x * int32_t(g.scale), at.y * int32_t(g.scale) };
+        return { at.x * int32_t(scale), at.y * int32_t(scale) };
     }
-    inline VkExtent2D Scaled(VkExtent2D size)
+    inline VkExtent2D Scaled(VkExtent2D size, uint32_t scale)
     {
-        return { size.width * g.scale, size.height * g.scale };
+        return { size.width * scale, size.height * scale };
     }
-    inline VkOffset3D Scaled(int32_t x, int32_t y, int32_t z)
+    inline VkOffset3D Scaled(int32_t x, int32_t y, int32_t z, uint32_t scale)
     {
-        return { x * int32_t(g.scale), y * int32_t(g.scale), z };
+        return { x * int32_t(scale), y * int32_t(scale), z };
+    }
+
+    // The scale a pass is drawn at, and its surfaces and their copies made at:
+    // the shadow maps' for a pass whose depth registers name the surface the
+    // title made for them (shadow_resolution.h), the frame's for any other.
+    // Asked with the depth registers and the sample count the pass's targets
+    // are keyed with.
+    inline uint32_t PassScale(uint32_t depthInfo, uint32_t samples)
+    {
+        if (g.shadowScale == g.scale) return g.scale;
+        static bool known = false;
+        if (!known && !(known = shadows::SurfacesKnown())) return g.scale;
+        static uint32_t lastInfo = UINT32_MAX, lastSamples = UINT32_MAX, lastScale = 1;
+        if (depthInfo != lastInfo || samples != lastSamples)
+        {
+            lastInfo = depthInfo;
+            lastSamples = samples;
+            lastScale = shadows::IsShadowMapDepth(depthInfo, samples) ? g.shadowScale : g.scale;
+        }
+        return lastScale;
     }
 
     inline uint32_t FindMemory(uint32_t allowed, VkMemoryPropertyFlags want)
@@ -592,7 +629,7 @@ namespace vk::renderer::detail
     // ---- renderer_targets.cpp ----
     bool MakeImage(Target& target, VkImageUsageFlags usage, VkImageAspectFlags aspect);
     VkFormat ColourFormatFor(uint32_t format);
-    TargetKey DepthKey(uint32_t baseTile, uint32_t format, uint32_t samples);
+    TargetKey DepthKey(uint32_t baseTile, uint32_t format, uint32_t samples, uint32_t scale);
     VkSampleCountFlagBits HostSamples(uint32_t guestSamples);
     Target* FindTarget(const TargetKey& key);
     Target* EnsureTarget(const TargetKey& key, uint32_t width, uint32_t height,

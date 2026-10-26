@@ -181,6 +181,33 @@ void settings::SetMsaa(int samples)
     Save();
 }
 
+int settings::ShadowScale()
+{
+    const auto kept = g_kept.find("MW2_SHADOW_SCALE");
+    return std::clamp(kept == g_kept.end() ? 1 : std::atoi(kept->second.c_str()), 1, kMaxShadowScale);
+}
+
+void settings::SetShadowScale(int scale)
+{
+    if (scale > 1) g_kept["MW2_SHADOW_SCALE"] = std::to_string(std::min(scale, kMaxShadowScale));
+    else g_kept.erase("MW2_SHADOW_SCALE");
+    Save();
+}
+
+int settings::Anisotropy()
+{
+    const auto kept = g_kept.find("MW2_ANISOTROPY");
+    const int filtering = kept == g_kept.end() ? 1 : std::atoi(kept->second.c_str());
+    return filtering == 2 || filtering == 4 || filtering == 8 || filtering == 16 ? filtering : 1;
+}
+
+void settings::SetAnisotropy(int filtering)
+{
+    if (filtering > 1) g_kept["MW2_ANISOTROPY"] = std::to_string(filtering);
+    else g_kept.erase("MW2_ANISOTROPY");
+    Save();
+}
+
 bool settings::Stretch()
 {
     const auto kept = g_kept.find("MW2_STRETCH");

@@ -57,6 +57,22 @@ namespace
         return uint32_t(settings::Scale());
     }
 
+    // MW2_SHADOW_SCALE, the same way.
+    static_assert(settings::kMaxShadowScale == int(vk::shaders::kMaxShadowScale));
+    uint32_t AskedShadowScale()
+    {
+        if (const char* set = std::getenv("MW2_SHADOW_SCALE"))
+            return uint32_t(std::clamp(std::strtol(set, nullptr, 10), 1L, long(settings::kMaxShadowScale)));
+        return uint32_t(settings::ShadowScale());
+    }
+
+    // Whether the game draws anything larger than the title's sizes on this
+    // device, which is what its shaders depend on.
+    bool Scaled(VkPhysicalDevice physical)
+    {
+        return vk::shaders::ShadowScale(physical, AskedShadowScale(), vk::shaders::Scale(physical, AskedScale())) > 1;
+    }
+
     // MW2_CUSTOM_MAPS, the same way.
     bool AskedCustomMaps()
     {
@@ -106,9 +122,8 @@ namespace
         if (physical)
         {
             target.device = vk::pipeline::DeviceId(physical);
-            target.fingerprint = vk::shaders::Fingerprint(
-                physical, vk::shaders::Scale(static_cast<VkPhysicalDevice>(physical), AskedScale()), kGameFolder,
-                AskedCustomMaps());
+            target.fingerprint = vk::shaders::Fingerprint(physical, Scaled(static_cast<VkPhysicalDevice>(physical)),
+                                                          kGameFolder, AskedCustomMaps());
         }
         else if (error.empty()) error = "no graphics card here can draw the game";
         vkDestroyInstance(instance, nullptr);
@@ -150,6 +165,33 @@ precompile::Result precompile::Run(const std::string& asked, bool always, Progre
         result.error = "The shaders were not compiled: stopped.";
         return true;
     };
+
+    // ---- the device the game draws on, with its pipeline cache -------------
+    // First, so a device that cannot compile a shader on its own is known
+    // before the game's files are read for nothing.
+    fs::create_directories(fs::path(vk::shaders::kCacheFile).parent_path(), ec);
+    vk::pipeline::SetCachePath(vk::shaders::kCacheFile);
+    vk::pipeline::SetDevice(target.device);
+    if (!vk::pipeline::Initialise())
+    {
+        result.error = "The graphics card could not be started to compile the shaders on.";
+        return result;
+    }
+    result.device = vk::pipeline::DeviceName();
+    const VkPhysicalDevice physical = static_cast<VkPhysicalDevice>(vk::pipeline::PhysicalDevice());
+    if (!vk::pipeline::PipelineLibraries())
+    {
+        // Without pipeline libraries a shader is compiled only as part of a
+        // whole pipeline, which needs the state of a draw to make: the game
+        // compiles them as it meets them, and there is nothing to do here.
+        vk::pipeline::Shutdown();
+        result.noLibraries = true;
+        if (!vk::shaders::WriteMarker(target.fingerprint, 0, result.error)) return result;
+        result.ok = true;
+        return result;
+    }
+    // From here every return leaves the device to the next pass's Initialise.
+    struct Down { bool on = true; ~Down() { if (on) vk::pipeline::Shutdown(); } } down;
 
     // ---- every shader of the game, once ------------------------------------
     // A level's zone is up to 160 MB once inflated, so only a few are read at
@@ -223,71 +265,49 @@ precompile::Result precompile::Run(const std::string& asked, bool always, Progre
     result.shaders = uint32_t(all.size());
     progress.shaders = result.shaders;
 
-    // ---- the device the game draws on, with its pipeline cache -------------
-    fs::create_directories(fs::path(vk::shaders::kCacheFile).parent_path(), ec);
-    vk::pipeline::SetCachePath(vk::shaders::kCacheFile);
-    vk::pipeline::SetDevice(target.device);
-    if (!vk::pipeline::Initialise())
-    {
-        result.error = "The graphics card could not be started to compile the shaders on.";
-        return result;
-    }
-    result.device = vk::pipeline::DeviceName();
-    const VkPhysicalDevice physical = static_cast<VkPhysicalDevice>(vk::pipeline::PhysicalDevice());
-    if (!vk::pipeline::PipelineLibraries())
-    {
-        // Without pipeline libraries a shader is compiled only as part of a
-        // whole pipeline, which needs the state of a draw to make: the game
-        // compiles them as it meets them, and there is nothing to do here.
-        vk::pipeline::Shutdown();
-        result.noLibraries = true;
-        result.shaders = 0;
-    }
-    else
-    {
-        const VkFormat depth = vk::shaders::DepthFormat(physical);
-        const uint32_t scale = vk::shaders::Scale(physical, AskedScale());
+    const VkFormat depth = vk::shaders::DepthFormat(physical);
+    const bool scaled = Scaled(physical);
 
-        // ---- each built as the game builds it, on every core ---------------
-        const auto compileFrom = std::chrono::steady_clock::now();
-        std::vector<const zone::Shader*> work;
-        for (const auto& [key, s] : all) work.push_back(&s);
-        std::atomic<size_t> next{ 0 };
-        std::atomic<uint32_t> untranslated{ 0 }, refused{ 0 }, fromCache{ 0 };
-        std::vector<std::thread> compilers;
-        for (unsigned t = 0; t < cores; t++)
-            compilers.emplace_back([&] {
-                for (size_t i; !progress.cancel && (i = next++) < work.size();)
+    // ---- each built as the game builds it, on every core ---------------
+    const auto compileFrom = std::chrono::steady_clock::now();
+    std::vector<const zone::Shader*> work;
+    for (const auto& [key, s] : all) work.push_back(&s);
+    std::atomic<size_t> next{ 0 };
+    std::atomic<uint32_t> untranslated{ 0 }, refused{ 0 }, fromCache{ 0 };
+    std::vector<std::thread> compilers;
+    for (unsigned t = 0; t < cores; t++)
+        compilers.emplace_back([&] {
+            for (size_t i; !progress.cancel && (i = next++) < work.size();)
+            {
+                const zone::Shader& s = *work[i];
+                vk::shaders::Built built = vk::shaders::Build(s.pixel ? shader::Type::Pixel : shader::Type::Vertex,
+                                                              s.code.data(), s.code.size(), scaled, depth);
+                if (!built.translation.ok)
                 {
-                    const zone::Shader& s = *work[i];
-                    vk::shaders::Built built = vk::shaders::Build(s.pixel ? shader::Type::Pixel : shader::Type::Vertex,
-                                                                  s.code.data(), s.code.size(), scale, depth);
-                    if (!built.translation.ok)
-                    {
-                        untranslated++;
-                        std::lock_guard guard(lock);
-                        result.reasons[built.translation.error]++;
-                    }
-                    else if (!built.module || !built.library) refused++;
-                    else if (built.fromCache == 1) fromCache++;
-                    vk::shaders::Destroy(built);
-                    progress.compiled++;
+                    untranslated++;
+                    std::lock_guard guard(lock);
+                    result.reasons[built.translation.error]++;
                 }
-            });
-        for (std::thread& t : compilers) t.join();
-        result.compileSeconds = Since(compileFrom);
-        result.untranslated = untranslated;
-        result.refused = refused;
-        result.fromCache = fromCache;
+                else if (!built.module || !built.library) refused++;
+                else if (built.fromCache == 1) fromCache++;
+                vk::shaders::Destroy(built);
+                progress.compiled++;
+            }
+        });
+    for (std::thread& t : compilers) t.join();
+    result.compileSeconds = Since(compileFrom);
+    result.untranslated = untranslated;
+    result.refused = refused;
+    result.fromCache = fromCache;
 
-        vk::pipeline::Shutdown();   // writes the cache, if it got this far: what is compiled is kept
-        if (cancelled()) return result;
-        result.cacheBytes = fs::file_size(vk::shaders::kCacheFile, ec);
-        if (ec)
-        {
-            result.error = "The compiled shaders could not be written to " + std::string(vk::shaders::kCacheFile) + ".";
-            return result;
-        }
+    down.on = false;
+    vk::pipeline::Shutdown();   // writes the cache, if it got this far: what is compiled is kept
+    if (cancelled()) return result;
+    result.cacheBytes = fs::file_size(vk::shaders::kCacheFile, ec);
+    if (ec)
+    {
+        result.error = "The compiled shaders could not be written to " + std::string(vk::shaders::kCacheFile) + ".";
+        return result;
     }
     if (!vk::shaders::WriteMarker(target.fingerprint, result.shaders, result.error)) return result;
     result.ok = true;
