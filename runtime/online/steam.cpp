@@ -21,10 +21,26 @@
 // the friend's copy takes as an accepted Live invitation), or else the console
 // line of the system-link game it hosts ("connect", which the friend's copy
 // types).
+//
+// System Link is shared with every Steam player, as a local network is shared
+// with everyone on it. A player hosting a system-link game is listed, in an
+// invisible lobby of its own that searches return; a player whose title looks
+// for games (a broadcast) sends it to the friends' lobby and to every host
+// listed, worldwide. What a stranger can reach:
+//   - a host, while it hosts: its networking accepts their sessions, and its
+//     broadcasts -- the answers to a search -- reach them;
+//   - a player who searched, on the ports its searches went to: anyone can
+//     list a game, so a listed host is a stranger like any other;
+//   - a player who chose to join the stranger's game, as on a local network.
+// Everything else from a stranger is dropped as it arrives, so a player who
+// stops hosting is closed to the strangers it played with. Their sessions are
+// not closed, since a host's map change ends its game and starts the next one
+// at once. Every Xbox LIVE party and private match stays among friends.
 #include "service.h"
 #include "../env.h"
 #include "../log.h"
 #include "../signin.h"
+#include "../version.h"
 
 #include <algorithm>
 #include <atomic>
@@ -37,6 +53,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <set>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -115,23 +132,51 @@ namespace
     namespace matchmaking   // SteamMatchMaking009
     {
         constexpr int CreateLobby = 13, JoinLobby = 14, LeaveLobby = 15, MemberCount = 17,
-                      Member = 18, GetLobbyData = 19, SetLobbyData = 20, Owner = 35;
+                      Member = 18, GetLobbyData = 19, SetLobbyData = 20, Owner = 35,
+                      RequestLobbyList = 4, AddStringFilter = 5, AddDistanceFilter = 9,
+                      LobbyByIndex = 12, SetJoinable = 34;
     }
-    namespace messages { constexpr int Send = 0, Receive = 1, Accept = 2; }   // SteamNetworkingMessages002
+    namespace messages   // SteamNetworkingMessages002
+    {
+        constexpr int Send = 0, Receive = 1, Accept = 2, SessionInfo = 5;
+    }
 
     // Callback ids: the interface's base plus the structure's offset.
     constexpr int kCallCompleted = 703;          // SteamAPICallCompleted_t
     constexpr int kLobbyEnter = 504;             // LobbyEnter_t
     constexpr int kLobbyDataUpdate = 505;        // LobbyDataUpdate_t
     constexpr int kLobbyCreated = 513;           // LobbyCreated_t
+    constexpr int kLobbyMatchList = 510;         // LobbyMatchList_t
     constexpr int kLobbyJoinRequested = 333;     // GameLobbyJoinRequested_t
     constexpr int kPresenceJoinRequested = 337;  // GameRichPresenceJoinRequested_t
     constexpr int kSessionRequest = 1251;        // SteamNetworkingMessagesSessionRequest_t
 
     constexpr int kResultOK = 1;                 // EResult
     constexpr uint32_t kEnterSuccess = 1;        // EChatRoomEnterResponse
-    constexpr int kFriendsOnly = 1;              // ELobbyType
+    constexpr int kFriendsOnly = 1, kInvisible = 3;   // ELobbyType
     constexpr int kMaxMembers = 18;              // the title's own sv_maxclients
+    constexpr int kEqual = 0;                    // ELobbyComparison
+    constexpr int kWorldwide = 3;                // ELobbyDistanceFilter
+
+    // The public list of system-link games: lobbies with this key, whose value
+    // is the release's (version::Network()), so that only copies that can play
+    // together see each other. A listing's "host" is the
+    // SteamID that hosts. Nobody joins a listing, but a search never returns a
+    // full lobby, so it takes Steam's most members: a stranger cannot hide it
+    // by filling it.
+    constexpr const char* kListingKey = "mw2recomp";
+    constexpr int kListingMembers = 250;
+    // The disc version and the update do not play together either.
+#ifdef MW2_VERSION_TU0
+    std::string ListingVersion() { return std::to_string(version::Network()) + "-tu0"; }
+#else
+    std::string ListingVersion() { return std::to_string(version::Network()); }
+#endif
+    // A listing Steam would not make is asked for again this often.
+    constexpr auto kListAgainEvery = std::chrono::seconds(5);
+    // The title broadcasts a search every few seconds while its list is open;
+    // Steam is asked for the list at most this often.
+    constexpr auto kSearchEvery = std::chrono::seconds(2);
     // Unreliable, sent at once, and a session that broke is started again
     // rather than refused.
     constexpr int kSendFlags = 0 | 1 | 32;
@@ -187,6 +232,7 @@ namespace
     struct CallbackMsg { HSteamUser user; int32_t id; uint8_t* param; int32_t size; };
     struct CallCompleted { SteamAPICall call; int32_t id; uint32_t size; };
     struct LobbyCreated { int32_t result; uint64_t lobby; };
+    struct LobbyMatchList { uint32_t matching; };
     struct LobbyEnter { uint64_t lobby; uint32_t permissions; bool locked; uint32_t response; };
     struct LobbyDataUpdate { uint64_t lobby, member; uint8_t success; };
     struct LobbyJoinRequested { uint64_t lobby, friendId; };
@@ -348,6 +394,7 @@ namespace
             stopping_ = true;
             if (thread_.joinable()) thread_.join();
             if (lobby_) Call<void>(matchmaking_, matchmaking::LeaveLobby, lobby_.load());
+            if (listing_) Call<void>(matchmaking_, matchmaking::LeaveLobby, listing_);
             if (client_ && pipe_)
             {
                 if (user_) Call<void>(client_, client::ReleaseUser, pipe_, user_);
@@ -419,8 +466,20 @@ namespace
         uint64_t Account() override { return signin::First().id; }
         std::string LocalName() override { return name_; }
 
+        // A listed host this player sends to on its own -- the host of a game
+        // it joins -- may answer anywhere. A stranger who came to this
+        // player's game is answered, but stays a stranger.
         bool Send(uint64_t peer, uint16_t fromPort, uint16_t toPort,
                   const void* bytes, size_t size) override
+        {
+            {
+                std::lock_guard g(lock_);
+                if (searchedHosts_.contains(peer) && !strangers_.contains(peer)) contacted_.insert(peer);
+            }
+            return SendTo(peer, fromPort, toPort, bytes, size);
+        }
+
+        bool SendTo(uint64_t peer, uint16_t fromPort, uint16_t toPort, const void* bytes, size_t size)
         {
             // The sender's port ahead of the title's bytes; the channel is the port
             // it is for.
@@ -434,35 +493,60 @@ namespace
                              kSendFlags, int(toPort)) == kResultOK;
         }
 
+        // To the friends' lobby and, from a host, to the strangers it talks to
+        // or, from a player who hosts nothing, to every host listed. The title
+        // broadcasts only to look for system-link games and to answer such a
+        // search.
         bool Broadcast(uint16_t fromPort, uint16_t toPort, const void* bytes, size_t size) override
         {
-            const uint64_t lobby = lobby_;
-            if (!lobby) return false;
-            const int count = Call<int>(matchmaking_, matchmaking::MemberCount, lobby);
-            for (int i = 0; i < count; i++)
+            std::vector<uint64_t> to;
             {
-                const uint64_t member = CallSteamId(matchmaking_, matchmaking::Member, lobby, i);
-                if (member != self_) Send(member, fromPort, toPort, bytes, size);
+                std::lock_guard g(lock_);
+                if (advert_.empty())
+                {
+                    SearchLocked();
+                    to = hosts_;
+                    searchedHosts_.insert(hosts_.begin(), hosts_.end());
+                    if (!hosts_.empty()) searchPorts_.insert(toPort);
+                }
+                else
+                {
+                    std::erase_if(strangers_, [&](uint64_t stranger) { return !SessionOpen(stranger); });
+                    to.insert(to.end(), strangers_.begin(), strangers_.end());
+                }
             }
+            if (const uint64_t lobby = lobby_)
+            {
+                const int count = Call<int>(matchmaking_, matchmaking::MemberCount, lobby);
+                for (int i = 0; i < count; i++) to.push_back(CallSteamId(matchmaking_, matchmaking::Member, lobby, i));
+            }
+            std::sort(to.begin(), to.end());
+            to.erase(std::unique(to.begin(), to.end()), to.end());
+            for (const uint64_t peer : to)
+                if (peer != self_) SendTo(peer, fromPort, toPort, bytes, size);
             return true;
         }
 
         bool Receive(uint16_t port, online::Datagram& out) override
         {
-            Message* message = nullptr;
-            if (Call<int>(messages_, messages::Receive, int(port), &message, 1) < 1 || !message)
-                return false;
-            const auto* data = static_cast<const uint8_t*>(message->data);
-            const bool whole = message->size >= 2 && message->peer.type == 16;
-            if (whole)
+            for (;;)
             {
-                out.from = message->peer.steamId;
-                out.fromPort = uint16_t((data[0] << 8) | data[1]);
-                out.toPort = port;
-                out.bytes.assign(data + 2, data + message->size);
+                Message* message = nullptr;
+                if (Call<int>(messages_, messages::Receive, int(port), &message, 1) < 1 || !message)
+                    return false;
+                const auto* data = static_cast<const uint8_t*>(message->data);
+                const bool whole = message->size >= 2 && message->peer.type == 16 &&
+                                   Reaches(message->peer.steamId, port);
+                if (whole)
+                {
+                    out.from = message->peer.steamId;
+                    out.fromPort = uint16_t((data[0] << 8) | data[1]);
+                    out.toPort = port;
+                    out.bytes.assign(data + 2, data + message->size);
+                }
+                message->release(message);
+                if (whole) return true;
             }
-            message->release(message);
-            return whole;
         }
 
         void Advertise(const std::string& connect) override
@@ -470,6 +554,7 @@ namespace
             std::lock_guard g(lock_);
             advert_ = connect;
             PublishLocked();
+            ListLocked();
         }
 
         bool NextJoin(std::string& connect) override
@@ -529,6 +614,12 @@ namespace
                     Handle(message);
                     freeLastCallback_(pipe_);
                 }
+                if (const auto now = std::chrono::steady_clock::now(); now - listAsked_ >= kListAgainEvery)
+                {
+                    listAsked_ = now;
+                    std::lock_guard g(lock_);
+                    if (!listing_) ListLocked();
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
         }
@@ -559,6 +650,14 @@ namespace
                     else
                         LOGW("online: could not enter the friend's lobby (response %u)", entered.response);
                 }
+                else
+                {
+                    // Asked for on the title's thread, under the lock, so a call
+                    // is known here by the time it completes.
+                    std::lock_guard g(lock_);
+                    if (done.call == listingCall_) Listed(done.call);
+                    else if (done.call == searchCall_) Found(done.call);
+                }
                 break;
             }
             case kLobbyJoinRequested:
@@ -580,10 +679,21 @@ namespace
             }
             case kSessionRequest:
             {
-                // Only from someone in this player's lobby: Spacewar is everyone's.
+                // From someone in this player's lobby, or from anyone while this
+                // player hosts a system-link game: Spacewar is everyone's. A
+                // session this player opened, to a host it found, needs no
+                // request.
                 const auto& request = *reinterpret_cast<const SessionRequest*>(message.param);
-                if (request.remote.type == 16 && InLobby(request.remote.steamId))
-                    Call<bool>(messages_, messages::Accept, &request.remote);
+                if (request.remote.type != 16) break;
+                const uint64_t who = request.remote.steamId;
+                bool take = InLobby(who);
+                if (!take)
+                {
+                    std::lock_guard g(lock_);
+                    take = !advert_.empty();
+                    if (take) strangers_.insert(who);
+                }
+                if (take) Call<bool>(messages_, messages::Accept, &request.remote);
                 break;
             }
             default:
@@ -669,6 +779,95 @@ namespace
             Call<bool>(matchmaking_, matchmaking::SetLobbyData, lobby_.load(), "account", account);
         }
 
+        // The public list. A listing is made the first time this player hosts
+        // a system-link game and kept for the run, searchable only while it
+        // hosts one.
+        void ListLocked()
+        {
+            const bool hosting = !advert_.empty();
+            if (listing_)
+            {
+                if (Call<bool>(matchmaking_, matchmaking::SetJoinable, listing_, hosting) && hosting != listed_)
+                    LOGI("online: %s", hosting ? "this game is listed for every Steam player"
+                                               : "this game is no longer listed");
+                listed_ = hosting;
+            }
+            else if (hosting && !listingCall_)
+                listingCall_ = Call<SteamAPICall>(matchmaking_, matchmaking::CreateLobby, kInvisible, kListingMembers);
+        }
+
+        void Listed(SteamAPICall call)
+        {
+            listingCall_ = 0;
+            LobbyCreated created{};
+            bool failed = false;
+            if (!getCallResult_(pipe_, call, &created, sizeof created, kLobbyCreated, &failed) || failed ||
+                created.result != kResultOK)
+            {
+                LOGW("online: Steam would not list this game (result %d)", created.result);
+                return;
+            }
+            listing_ = created.lobby;
+            const std::string host = std::to_string(self_);
+            Call<bool>(matchmaking_, matchmaking::SetLobbyData, listing_, kListingKey, ListingVersion().c_str());
+            Call<bool>(matchmaking_, matchmaking::SetLobbyData, listing_, "host", host.c_str());
+            ListLocked();
+        }
+
+        // Asks Steam for the hosts listed, unless it is already asked or was
+        // asked a moment ago.
+        void SearchLocked()
+        {
+            const auto now = std::chrono::steady_clock::now();
+            if (searchCall_ || now - searched_ < kSearchEvery) return;
+            searched_ = now;
+            // The filters hold for the next request only.
+            Call<void>(matchmaking_, matchmaking::AddStringFilter, kListingKey, ListingVersion().c_str(), kEqual);
+            Call<void>(matchmaking_, matchmaking::AddDistanceFilter, kWorldwide);
+            searchCall_ = Call<SteamAPICall>(matchmaking_, matchmaking::RequestLobbyList);
+        }
+
+        void Found(SteamAPICall call)
+        {
+            searchCall_ = 0;
+            LobbyMatchList list{};
+            bool failed = false;
+            if (!getCallResult_(pipe_, call, &list, sizeof list, kLobbyMatchList, &failed) || failed) return;
+            std::vector<uint64_t> found;
+            for (uint32_t i = 0; i < list.matching; i++)
+            {
+                const uint64_t lobby = CallSteamId(matchmaking_, matchmaking::LobbyByIndex, int(i));
+                const char* host = Call<const char*>(matchmaking_, matchmaking::GetLobbyData, lobby, "host");
+                const uint64_t id = host ? std::strtoull(host, nullptr, 10) : 0;
+                if (id && id != self_) found.push_back(id);
+            }
+            if (found != hosts_) LOGI("online: %zu system-link game(s) listed on Steam", found.size());
+            hosts_ = std::move(found);
+        }
+
+        bool SessionOpen(uint64_t peer)
+        {
+            const Identity identity = SteamIdentity(peer);
+            const int state = Call<int>(messages_, messages::SessionInfo, &identity, nullptr, nullptr);
+            return state >= 1 && state <= 3;   // connecting, finding a route, connected
+        }
+
+        // Whether a datagram from this peer reaches the title. Steam opens a
+        // session only to someone this player accepted -- a lobby member, or
+        // a stranger while hosting -- or sent to first.
+        bool Reaches(uint64_t peer, uint16_t port)
+        {
+            {
+                std::lock_guard g(lock_);
+                if (contacted_.contains(peer)) return true;
+                const bool stranger = strangers_.contains(peer), listed = searchedHosts_.contains(peer);
+                if (!stranger && !listed) return true;   // a lobby member, or one that was
+                if (stranger && !advert_.empty()) return true;
+                if (listed && searchPorts_.contains(port)) return true;
+            }
+            return InLobby(peer);
+        }
+
         bool InLobby(uint64_t player)
         {
             const uint64_t lobby = lobby_;
@@ -702,6 +901,16 @@ namespace
         bool owner_ = false, followed_ = false;
         std::string advert_;
         std::string session_;   // what joins this player's Live party or lobby, in hex
+        uint64_t listing_ = 0;  // this player's entry in the public list
+        bool listed_ = false;   // and whether it shows
+        SteamAPICall listingCall_ = 0, searchCall_ = 0;
+        std::chrono::steady_clock::time_point searched_{};
+        std::vector<uint64_t> hosts_;           // the hosts listed when Steam was last asked
+        std::set<uint64_t> searchedHosts_;      // every listed host a search went to
+        std::set<uint16_t> searchPorts_;        // and the ports it went to
+        std::set<uint64_t> strangers_;          // not in the lobby, whose sessions this player accepted hosting
+        std::set<uint64_t> contacted_;          // listed hosts this player sent to on its own
+        std::chrono::steady_clock::time_point listAsked_{};   // the callback thread's
         std::deque<std::string> joins_;
         std::deque<online::Invite> invites_;
     };

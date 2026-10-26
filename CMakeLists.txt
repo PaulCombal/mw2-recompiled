@@ -56,13 +56,18 @@ endif()
 option(MW2_LTO "Optimise across files at the link (ThinLTO)" ON)
 option(MW2_PGO "Optimise with the recorded profile in pgo/, when there is one" ON)
 option(MW2_PGO_TRAINING "Build the executable that records a profile (tools/pgo_record.sh)" OFF)
+# Where the linker keeps what ThinLTO made of each module, for the next link to
+# reuse what did not change. A result taken from it is the one the linker would
+# have made, so a folder kept between builds (the release workflow's) only
+# makes the link faster.
+set(MW2_LTO_CACHE "${CMAKE_BINARY_DIR}/lto-cache" CACHE PATH "The ThinLTO cache folder")
 if(MW2_PGO_TRAINING)
     add_compile_options(-fprofile-instr-generate)
     add_link_options(-fprofile-instr-generate)
 else()
     if(MW2_LTO)
         add_compile_options(-flto=thin)
-        add_link_options(-flto=thin "-Wl,--thinlto-cache-dir=${CMAKE_BINARY_DIR}/lto-cache")
+        add_link_options(-flto=thin "-Wl,--thinlto-cache-dir=${MW2_LTO_CACHE}")
         if(NOT WIN32)
             # The system linker reads no LLVM bitcode; llvm-mingw's already is lld.
             add_link_options(-fuse-ld=lld)
@@ -163,6 +168,13 @@ set_source_files_properties("${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_build
 # kernel import the runtime lacks, a tracing hook for every D3D9 entry point --
 # lives beside that output, since it is different for each title.
 # ---- online service --------------------------------------------------------
+# What release this is: the release workflow gives the tag. The game plays only
+# with copies of the same release (runtime/version.cpp), and the launcher looks
+# for a newer one; a build without a tag plays with other such builds and does
+# not update.
+set(MW2_RELEASE_TAG "" CACHE STRING "The release tag this build is published as, e.g. v0.3.0")
+set_source_files_properties("${CMAKE_SOURCE_DIR}/runtime/version.cpp" PROPERTIES COMPILE_DEFINITIONS
+    "MW2_RELEASE_TAG=\"${MW2_RELEASE_TAG}\"")
 # What the title's network calls reach (runtime/online/service.h). Every build
 # has every backend, and the player chooses one as the game starts (MW2_NETWORK).
 set(MW2_ONLINE_SOURCES
@@ -454,9 +466,8 @@ if(MW2_USE_SDL)
         "${XENON}/thirdparty/libmspack/libmspack/mspack"
         "${XENON}/thirdparty/tiny-AES-c" "${XENON}/thirdparty/TinySHA1")
     target_compile_definitions(launcher PRIVATE ${MW2_HASH_DEFINITIONS} NOMINMAX)
-    # What release this is, for the launcher to look for a newer one: the
-    # release workflow gives the tag. A build without one does not update.
-    set(MW2_RELEASE_TAG "" CACHE STRING "The release tag this build is published as, e.g. v0.3.0")
+    # What release this is, for the launcher to look for a newer one (see
+    # MW2_RELEASE_TAG above). A build without one does not update.
     if(WIN32)
         set(MW2_RELEASE_KIND "windows")
     else()

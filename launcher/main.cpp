@@ -1228,7 +1228,8 @@ namespace
                 "\n\nLAN: SYSTEM LINK finds the games on your local network."
                 "\n\nSERVER: everyone on the same server sees each other's games in SYSTEM LINK, and can join each "
                 "other's private matches, wherever they are. Whoever runs the server gives you its address and password."
-                "\n\nSTEAM: invite your Steam friends to a private match. The game shows as Spacewar. Without Steam "
+                "\n\nSTEAM: invite your Steam friends to a private match. SYSTEM LINK lists the games every Steam "
+                "player hosts, and anyone on Steam can join yours. The game shows as Spacewar. Without Steam "
                 "running, it plays as LAN."
                 "\n\nPlayers can only meet on the same setting, so choose the one your friends use. Choose this "
                 "entry to switch to the next network. Restart the multiplayer for the change to take effect.");

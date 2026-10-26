@@ -77,15 +77,21 @@ jobs:
       - name: Restore the compiler cache
         uses: actions/cache@v5
         with:
-          path: .ccache
+          # ThinLTO's results beside the compiler's (MW2_LTO_CACHE).
+          path: |
+            .ccache
+            .lto-cache
           key: ccache-linux-${{ github.sha }}
           restore-keys: ccache-linux-
 
       - name: Build
         run: |
-          export CMAKE_EXTRA="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DFETCHCONTENT_BASE_DIR=$PWD/out/_deps"
+          export CMAKE_EXTRA="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DFETCHCONTENT_BASE_DIR=$PWD/out/_deps -DMW2_LTO_CACHE=$PWD/.lto-cache"
+          # The launcher is the same for both titles, and the tools are not shipped:
+          # the campaign's build makes the game and the launcher, the multiplayer's the game.
           for title in sp mp; do
-            TITLE=$title RELEASE=1 RELEASE_TAG=${{ inputs.version }} BUILD_DIR=out/$title ./build.sh
+            targets="mw2"; [ $title = sp ] && targets="mw2 launcher"
+            TITLE=$title RELEASE=1 RELEASE_TAG=${{ inputs.version }} BUILD_DIR=out/$title TARGETS="$targets" ./build.sh
           done
           ccache --show-stats
 
@@ -109,7 +115,7 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: linux
+          name: release-linux
           path: dist/*
 
   windows:
@@ -153,15 +159,21 @@ jobs:
       - name: Restore the compiler cache
         uses: actions/cache@v5
         with:
-          path: .ccache
+          # ThinLTO's results beside the compiler's (MW2_LTO_CACHE).
+          path: |
+            .ccache
+            .lto-cache
           key: ccache-windows-${{ github.sha }}
           restore-keys: ccache-windows-
 
       - name: Build
         run: |
-          export CMAKE_EXTRA="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DFETCHCONTENT_BASE_DIR=$PWD/out/_deps"
+          export CMAKE_EXTRA="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DFETCHCONTENT_BASE_DIR=$PWD/out/_deps -DMW2_LTO_CACHE=$PWD/.lto-cache"
+          # The launcher is the same for both titles, and the tools are not shipped:
+          # the campaign's build makes the game and the launcher, the multiplayer's the game.
           for title in sp mp; do
-            WINDOWS=1 TITLE=$title RELEASE=1 RELEASE_TAG=${{ inputs.version }} BUILD_DIR=out/$title ./build.sh
+            targets="mw2"; [ $title = sp ] && targets="mw2 launcher"
+            WINDOWS=1 TITLE=$title RELEASE=1 RELEASE_TAG=${{ inputs.version }} BUILD_DIR=out/$title TARGETS="$targets" ./build.sh
           done
           ccache --show-stats
 
@@ -184,7 +196,7 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: windows
+          name: release-windows
           path: dist/*
 
   relay:
@@ -215,7 +227,7 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: relay
+          name: release-relay
           path: dist/*
 
   release:
@@ -224,6 +236,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v7
         with:
+          # The release's files, not the other artifacts of the run.
+          pattern: release-*
           path: dist
           merge-multiple: true
 

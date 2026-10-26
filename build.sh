@@ -12,6 +12,7 @@
 #   build-release/ or build-mp-release/.
 #   WINDOWS=1 cross-compiles for Windows with llvm-mingw (LLVM_MINGW names its
 #   folder; cmake/mingw-w64.cmake) into a -win directory: build-win/, ...
+#   TARGETS="<target> ..." builds only those (mw2, launcher, ...) instead of all.
 #   BUILD_DIR=<dir> builds there instead. REGENERATE=0 keeps the recompiled
 #   tree already there, for a second build of the same title.
 #   The game is built from title update 6: the disc's executables go in
@@ -176,7 +177,7 @@ if [ "$BUILD" != build ]; then
 fi
 cmake -B $BUILD -G Ninja -DCMAKE_BUILD_TYPE=Release -DMW2_TITLE=$TITLE -DMW2_VERSION=$VERSION -DMW2_DIAGNOSTICS=$DIAGNOSTICS -DMW2_PORTABLE=$PORTABLE -DMW2_RELEASE_TAG=${RELEASE_TAG:-} $FETCHED $CMAKE_EXTRA \
       $TOOLCHAIN >/dev/null
-cmake --build $BUILD -j"$(nproc)"
+cmake --build $BUILD -j"$(nproc)" ${TARGETS:+--target $TARGETS}
 ls -la $BUILD/$EXE
 
 echo

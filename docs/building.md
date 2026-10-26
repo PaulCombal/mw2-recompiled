@@ -56,6 +56,7 @@ Everything under version control is hand-written or a patch.
 | `LLVM_MINGW=<dir>` | the unpacked [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) release, required by `WINDOWS=1` |
 | `ISO=<path>` | the disc image. Without one, `mw2/tu0/default.xex` and `mw2/tu0/default_mp.xex` are enough to build, and no game data is extracted |
 | `BUILD_DIR=<dir>` | builds there instead of the default directory |
+| `TARGETS="<target> ..."` | builds only those targets (`mw2`, `launcher`, ...) instead of all of them |
 | `REGENERATE=0` | keeps the recompiled tree already there (skips steps 5-7), for a second build of the same title, e.g. with another `ONLINE` |
 | `CMAKE_EXTRA` | passed to the configure step (a compiler launcher, `FETCHCONTENT_BASE_DIR`, ...) |
 
@@ -141,6 +142,7 @@ The switches are in [switches.md](switches.md).
 | `MW2_USE_SDL` | `ON` | SDL3 for the window, input and audio |
 | `MW2_X86_LEVEL` | `x86-64-v2` | the `-march` the game is compiled for. Below SSSE3 every big-endian vector load, store and permute of the recompiled code becomes sixteen byte moves; `runtime/cpu_level.cpp`, compiled for the baseline, tells a player whose processor lacks the level |
 | `MW2_LTO` | `ON` | ThinLTO: every target, the fetched libraries included, optimised across files at the link, with `lld` ([Optimisation](#optimisation)) |
+| `MW2_LTO_CACHE` | `<build>/lto-cache` | where the linker keeps ThinLTO's results for the next link |
 | `MW2_PGO` | `ON` | compiles with the recorded profile in `pgo/<title>.tar.xz` when there is one (`tu6` only) |
 | `MW2_PGO_TRAINING` | `OFF` | builds the executable with counters that a profile is recorded with (`tools/pgo_record.sh`); no LTO, no profile |
 
@@ -160,7 +162,9 @@ route it never ran.
 - **ThinLTO** (`MW2_LTO`). Every file is compiled to LLVM bitcode, and the
   link optimises across them: a runtime function inlined into another file's
   draw loop, code nothing calls dropped. A relink reuses the work of the
-  files that did not change (`lto-cache/` in the build folder).
+  files that did not change (`lto-cache/` in the build folder, or
+  `MW2_LTO_CACHE`): a result is keyed by everything that went into it, so one
+  taken from the cache is the one the link would have made.
 - **Profile-guided optimisation** (`MW2_PGO`). A build with counters plays a
   few routes and counts how often each branch went which way and each function
   was called; the real build reads those counts, lays the hot paths out
@@ -382,7 +386,11 @@ It needs Windows 10 1803 or later, for the placeholder mapping of guest memory.
 tag. It builds both titles of title update 6 for Linux (Ubuntu 22.04,
 so the binaries need glibc 2.35 at most, with Vulkan-Headers 1.3.275 installed
 over the system's) and for Windows (cross-compiled on Ubuntu with llvm-mingw),
-with ccache, then packages `mw2-sp` and `mw2-mp` with the README per platform,
+the campaign's build with the launcher and the multiplayer's with the game
+alone (`TARGETS`). ccache's and ThinLTO's caches (`.ccache`, `.lto-cache`) are
+kept between runs; each title's own PGO profile is part of a compile's key, so
+the two titles share little of the compiler's. It then packages `mw2-sp` and
+`mw2-mp` with the README per platform,
 and drafts a GitHub Release. A third job builds the relay's image
 ([relay.md](relay.md)) for amd64 and arm64, pushes it to
 `ghcr.io/<owner>/mw2-relay:<tag>` with the workflow's own token, and adds the

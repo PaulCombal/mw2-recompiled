@@ -14,7 +14,9 @@ Valid traffic passes untouched.
 The sender columns:
 
 - **anyone**: any machine that can reach the game. On the `lan` service that is
-  the whole local network; on `steam`, the members of your lobby.
+  the whole local network; on `steam`, the members of your lobby, any Steam
+  player while you host a System Link game, and any game listed in System Link
+  while you look for games there (on the search's ports).
 - **client**: a player connected to a game you host.
 - **host**: the host of a game or party you joined.
 - **partner**: the other player in a campaign co-op game.

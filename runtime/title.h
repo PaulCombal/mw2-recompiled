@@ -179,6 +179,11 @@
 #define T_CL_PacketEvent        82189A88
 #define T_CL_ConnectionlessPacket 82188DD0
 #define T_NET_CompareAdr        8228E5B0
+// The protocol number every version check compares, and the out-of-band print
+// that carries SV_DirectConnect's refusal; network_version.cpp makes the number
+// the release's and the refusal name it.
+#define T_ProtocolVersion       8230A3D8
+#define T_NET_OutOfBandPrint    8228EE28
 // A migrated game state's restore takes the file length from the save header
 // the server sent, and the segment opener the segment sizes from the file, with
 // neither compared with the buffer; migration_state_size.cpp refuses both with
@@ -467,6 +472,8 @@
 #define T_Dvar_RegisterInt     8230E2F8
 #define T_DATA_RenderTargets      0x83D33D80u
 #define T_PartyHost_HandleJoinPartyRequest 821A65C0
+#define T_ProtocolVersion      823098A0
+#define T_NET_OutOfBandPrint   8228E5E0
 #define T_atoi                 8241A118
 #define T_DATA_TimeStampBundlePtr 0x820007B4u
 #define T_DATA_DebugMonitorPtr    0x820007F4u

@@ -400,11 +400,15 @@ namespace
         uint32_t publicSlots = 0, privateSlots = 0;
         uint8_t nonce[8]{};
         uint64_t made = 0;
+        bool systemLink = false;   // a system-link game this machine hosts
+        bool on = false;           // and it is on: from its creation or start to its end
     };
     std::mutex g_sessionLock;
     std::map<uint32_t, Session> g_sessions;
     uint64_t g_sessionsMade = 0;
     std::array<uint8_t, 8> g_joinable{};   // the id of the session last handed to the service
+    std::mutex g_advertLock;               // held from choosing what to advertise to telling the service
+    std::string g_advert;                  // the connect line last told it
 
     // A new identity for a session this machine hosts, the way the console
     // makes one. The top bits of the id say what kind of session it is: clear
@@ -422,15 +426,37 @@ namespace
     // What another machine types to join a system-link game: the console
     // command the title's own server browser issues, with what the host's reply
     // to a search carries -- XNADDR, key and id in hex, the slots and the nonce.
-    void AdvertiseHosted(const Session& s)
+    std::string ConnectLine(const Session& s)
+    {
+        return "connect " + Hex(s.info.hostAddress, 36) + " " + Hex(s.info.keyExchangeKey, 16) + " " +
+               Hex(s.info.sessionId, 8) + " " + std::to_string(s.publicSlots) + " " +
+               std::to_string(s.privateSlots) + " " + Hex(s.nonce, 8);
+    }
+
+    // The system-link game this machine hosts: the newest such session that
+    // is on, from its creation (the server spawning a map) or start to its
+    // end (the server shutting down, or the map ending). Told to the service
+    // whenever the sessions change, under one lock from the choice to the
+    // telling, so that two threads cannot tell it in the other order.
+    void PublishHosted()
     {
         auto* service = online::Get();
         if (!service) return;
-        const std::string line = "connect " + Hex(s.info.hostAddress, 36) + " " +
-                                 Hex(s.info.keyExchangeKey, 16) + " " + Hex(s.info.sessionId, 8) + " " +
-                                 std::to_string(s.publicSlots) + " " + std::to_string(s.privateSlots) +
-                                 " " + Hex(s.nonce, 8);
-        LOGI("online: hosting; another machine joins with \"%s\"", line.c_str());
+        std::lock_guard a(g_advertLock);
+        std::string line;
+        {
+            std::lock_guard g(g_sessionLock);
+            const Session* best = nullptr;
+            for (const auto& [object, s] : g_sessions)
+                if (s.systemLink && s.on && (!best || s.made > best->made)) best = &s;
+            if (best) line = ConnectLine(*best);
+        }
+        if (line == g_advert) return;
+        g_advert = line;
+        if (line.empty())
+            LOGI("online: no longer hosting");
+        else
+            LOGI("online: hosting; another machine joins with \"%s\"", line.c_str());
         service->Advertise(line);
     }
 
@@ -501,14 +527,40 @@ namespace
         if (nonce) std::memcpy(s.nonce, nonce, 8);
         s.publicSlots = words[2];
         s.privateSlots = words[3];
+        s.systemLink = s.on = host && info && nonce && !live;
         {
             std::lock_guard g(g_sessionLock);
             s.made = ++g_sessionsMade;
             g_sessions[object] = s;
         }
         if (info) kernel::NoteSessionId(info->sessionId);
-        if (host && info && nonce && !live) AdvertiseHosted(s);
+        PublishHosted();
         PublishJoinable();
+        return {};
+    }
+
+    void SetOn(uint32_t object, bool on)
+    {
+        {
+            std::lock_guard g(g_sessionLock);
+            const auto it = g_sessions.find(object);
+            if (it == g_sessions.end()) return;
+            it->second.on = on;
+        }
+        PublishHosted();
+    }
+
+    // (session, flags, ...)
+    Reply XgiSessionStart(uint32_t buffer)
+    {
+        if (const auto* words = GuestPtr<be32>(buffer)) SetOn(words[0], true);
+        return {};
+    }
+
+    // (session, 0)
+    Reply XgiSessionEnd(uint32_t buffer)
+    {
+        if (const auto* words = GuestPtr<be32>(buffer)) SetOn(words[0], false);
         return {};
     }
 
@@ -520,6 +572,7 @@ namespace
             std::lock_guard g(g_sessionLock);
             g_sessions.erase(words[0]);
         }
+        PublishHosted();
         PublishJoinable();
         return {};
     }
@@ -542,6 +595,7 @@ namespace
                 it->second.privateSlots = words[3];
             }
         }
+        PublishHosted();   // the slots are in the connect line
         PublishJoinable();
         return {};
     }
@@ -784,7 +838,8 @@ namespace
     bool Handled(uint32_t app, uint32_t message)
     {
         if (app == kAppXGI)
-            return message == 0x000B0010 || message == 0x000B0011 || message == 0x000B0018;
+            return message == 0x000B0010 || message == 0x000B0011 || message == 0x000B0014 ||
+                   message == 0x000B0015 || message == 0x000B0018;
         if (app == kAppXLiveBase)
             return message == 0x00050009 || message == 0x0005000B || message == 0x00058004 ||
                    message == 0x00058006 ||
@@ -811,6 +866,8 @@ namespace
             {
             case 0x000B0010: return XgiSessionCreate(param1, param2);
             case 0x000B0011: return XgiSessionDelete(param1);
+            case 0x000B0014: return XgiSessionStart(param1);
+            case 0x000B0015: return XgiSessionEnd(param1);
             case 0x000B0018: return XgiSessionModify(param1, param2);
             }
         }

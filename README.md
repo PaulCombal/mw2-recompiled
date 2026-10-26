@@ -85,18 +85,19 @@ Not supported: public matchmaking and ranked playlists, which needed Activision'
 
 Everyone runs `mw2-mp` from the same release, with the same NETWORK chosen in the launcher.
 
-**Steam.** With Steam running, the game shows as *Spacewar*. Host PLAY ONLINE → PRIVATE MATCH and invite from Steam's friend list (or with `F6`, if you added `mw2-mp` to Steam as a non-Steam game). Your friend accepts while their game is running. Other players see your Steam name. Without Steam running, it plays as LAN.
+**Steam.** With Steam running, the game shows as *Spacewar*. SYSTEM LINK lists the games every Steam player hosts, worldwide, and anyone can join yours. For a game among friends, host PLAY ONLINE → PRIVATE MATCH and invite from Steam's friend list (or with `F6`, if you added `mw2-mp` to Steam as a non-Steam game). Your friend accepts while their game is running. Other players see your Steam name. Without Steam running, it plays as LAN.
 
 **Server.** Everyone on the same server sees each other's games in SYSTEM LINK and can join each other's private matches, from anywhere. Whoever hosts a match plays in it. Enter the server's address and password under NETWORK; nobody but the server's owner needs to open a port. To run one, see [docs/relay.md](docs/relay.md).
 
 **LAN.** SYSTEM LINK finds games on the network by itself. In a private match, the lobby's *Invite friends* invites everyone on the network; start the others with `MW2_LAN_ACCEPT=1`. Two copies of `mw2-mp` on one PC can play a system link match, each with the controller that chose SYSTEM LINK in it.
 
+Everyone must have the same release: the launcher updates it. Another release's games don't show in SYSTEM LINK, and joining one says *Server is a different version*.
+
 <a id="safety" href="#safety"><img src="docs/images/readme/h-safety.svg" alt="Playing online safely" height="56"></a>
 
 The known security bugs in the game's 2009 network code are fixed ([docs/security.md](docs/security.md)). It is still old code: play online only with people you trust.
 
-- There is no public matchmaking, so a stranger can't join your game.
-- **Steam**: only your Steam friends can join, and the game ignores traffic from anyone not in your lobby.
+- **Steam**: anyone on Steam can join a SYSTEM LINK game you host, and can reach your game while you host one. While you look for games in SYSTEM LINK, any game listed there can answer. Otherwise the game ignores traffic from anyone not in your lobby, and a private match is always among friends.
 - **Server**: anyone on the server can join your games. The server sees all the traffic; the other players don't see your address.
 - **LAN**: anyone on the same network can reach the game.
 

@@ -236,7 +236,31 @@ controller from a game Steam did not start.
 - Every player starts in a friends-only lobby of their own. The lobby is what
   the title's broadcasts reach, so a game a member hosts shows in every other
   member's System Link list. Networking sessions are accepted only from lobby
-  members, since Spacewar is shared by everyone.
+  members, since Spacewar is shared by everyone, except by a host (below).
+- System Link is also shared with every Steam player. A player hosting a
+  system-link game is listed: an invisible lobby of its own (`mw2recomp` = the
+  release's number (Versions, below), `host` = its SteamID; 250 members, since a search never
+  returns a full lobby). It is listed while the title's hosted session is on,
+  from its creation (SV_SpawnServer) or XSessionStart to its XSessionEnd or
+  XSessionDelete -- a map change ends one and creates the next. A broadcast
+  from a player who hosts nothing also goes to every host listed, worldwide;
+  Steam is asked for the list at most every 2 s (a listing Steam would not
+  make is asked for again every 5 s). The title broadcasts only to search for
+  system-link games and to answer a search. What a stranger reaches:
+  - a host, while it hosts: it accepts anyone's session, and its broadcasts
+    reach the strangers whose sessions are open;
+  - a player who searched, on the ports its searches went to, from a host it
+    found. Anyone can make a listing, with any `host`, so a listed host is a
+    stranger like any other; a stranger can also join a listing and, once its
+    host leaves, keep it listed under the host's id (there is no kick);
+  - a player who chose to join a listed host's game (sent to it on its own).
+  Everything else from a stranger is dropped as it arrives (`Reaches`), so a
+  player who stops hosting is closed to the strangers it played with. Their
+  sessions are not closed: a host's map change ends its game and starts the
+  next at once. Xbox LIVE parties and private matches stay among friends.
+- The advertised game is the newest hosted system-link session that is on;
+  `kernel/xam.cpp` (`PublishHosted`) chooses it and tells the service under one
+  lock, so threads ending one session and creating another cannot reorder it.
 - F6, or the Xbox LIVE lobby's "Invite friends", opens the overlay's
   invitation; a friend can also be invited from Steam's friend list. Accepting
   moves the friend into the host's lobby.
@@ -247,6 +271,29 @@ controller from a game Steam did not start.
   entered.
 - Steam cannot launch the game from an invitation (it would start Spacewar), so
   the friend must already be running it.
+
+## Versions
+
+Only copies of the same release play together, by the title's own check
+(`runtime/network_version.cpp`). Its protocol number (`sub_8230A3D8`, 136; 128
+on the disc) carries the console's online-update version in the high half;
+that update never runs here, so the high half carries the release instead:
+`version::Network()`, 15 bits of a hash of the release tag (`MW2_RELEASE_TAG`),
+or of `dev` for a build without one. The low half stays the title's.
+
+- System Link leaves a game of another protocol out of the list
+  (CL_ServerInfoPacket).
+- A host refuses a client of another protocol (SV_DirectConnect) with
+  `EXE_SERVER_IS_DIFFERENT_VER`, "Server is a different version: &&1". The
+  title fills in "1.4", every copy's build number; the runtime puts the host's
+  release there.
+- A party host refuses a member of another protocol
+  (PartyHost_HandleJoinPartyRequest); the member sees "Unable to join game
+  session", the one message the title has for any refused party join.
+- The Steam listing's `mw2recomp` value is the same number, with `-tu0` on the
+  disc version, so a search finds only games it can join.
+
+The campaign's co-op has no version check.
 
 ## Xbox LIVE private matches
 
