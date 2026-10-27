@@ -15,8 +15,10 @@
 // Each player sits in a friends-only lobby of their own from the start. The
 // lobby is the network the title's broadcasts reach, so a game one member
 // hosts shows up in every other member's System Link list. F6, or the Xbox
-// LIVE lobby's "Invite friends", opens the overlay's invitation; a friend who
-// accepts leaves their lobby for this one. The host's lobby carries what joins
+// LIVE lobby's "Invite friends", opens the friends screen (friends.h): the
+// friends running this game, whom Steam tells apart from Spacewar's own
+// players by a rich presence key of ours; a friend who accepts an invitation
+// leaves their lobby for this one. The host's lobby carries what joins
 // its game: the Xbox LIVE party or private match it is in ("xsession", which
 // the friend's copy takes as an accepted Live invitation), or else the console
 // line of the system-link game it hosts ("connect", which the friend's copy
@@ -43,6 +45,7 @@
 #include "../version.h"
 
 #include <algorithm>
+#include <cctype>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -51,6 +54,7 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <map>
 #include <fstream>
 #include <mutex>
 #include <set>
@@ -120,21 +124,22 @@ namespace
     namespace client     // SteamClient023
     {
         constexpr int CreateSteamPipe = 0, ReleaseSteamPipe = 1, ConnectToGlobalUser = 2,
-                      ReleaseUser = 4, GetUser = 5, GetFriends = 8, GetMatchmaking = 10,
+                      ReleaseUser = 4, GetUser = 5, GetFriends = 8, GetUtils = 9, GetMatchmaking = 10,
                       GetGeneric = 12;
     }
     namespace user { constexpr int LoggedOn = 1, GetSteamID = 2; }   // SteamUser023
     namespace friends    // SteamFriends018
     {
-        constexpr int GetPersonaName = 0, InviteDialog = 32, SetRichPresence = 41,
-                      ClearRichPresence = 42;
+        constexpr int GetPersonaName = 0, Count = 2, ByIndex = 3, PersonaState = 5, Name = 6,
+                      GamePlayed = 7, MediumAvatar = 34, SetRichPresence = 41, RichPresence = 43;
     }
+    namespace utils { constexpr int ImageSize = 5, ImageRGBA = 6; }   // SteamUtils011
     namespace matchmaking   // SteamMatchMaking009
     {
         constexpr int CreateLobby = 13, JoinLobby = 14, LeaveLobby = 15, MemberCount = 17,
                       Member = 18, GetLobbyData = 19, SetLobbyData = 20, Owner = 35,
                       RequestLobbyList = 4, AddStringFilter = 5, AddDistanceFilter = 9,
-                      LobbyByIndex = 12, SetJoinable = 34;
+                      LobbyByIndex = 12, InviteToLobby = 16, SetJoinable = 34;
     }
     namespace messages   // SteamNetworkingMessages002
     {
@@ -157,6 +162,8 @@ namespace
     constexpr int kMaxMembers = 18;              // the title's own sv_maxclients
     constexpr int kEqual = 0;                    // ELobbyComparison
     constexpr int kWorldwide = 3;                // ELobbyDistanceFilter
+    constexpr int kImmediate = 4;                // EFriendFlags: friends, not requests or groups
+    constexpr int kOffline = 0;                  // EPersonaState
 
     // The public list of system-link games: lobbies with this key, whose value
     // is the release's (version::Network()), so that only copies that can play
@@ -172,6 +179,27 @@ namespace
 #else
     std::string ListingVersion() { return std::to_string(version::Network()); }
 #endif
+    // The friends screen's list is built this often while it is asked for,
+    // and for this long after.
+    constexpr auto kFriendsEvery = std::chrono::seconds(1);
+    constexpr auto kFriendsWatched = std::chrono::seconds(3);
+    // What a copy says it plays, in its rich presence under kListingKey: the
+    // executable, whose invitations the other cannot take, and the release.
+#ifdef MW2_TITLE_MP
+    constexpr const char* kTitle = "mp";
+#else
+    constexpr const char* kTitle = "sp";
+#endif
+    std::string Playing() { return std::string(kTitle) + ":" + ListingVersion(); }
+    // Why a friend who plays `playing` cannot join this copy, or "".
+    std::string Elsewhere(const std::string& playing)
+    {
+        const size_t colon = playing.find(':');
+        const std::string title = playing.substr(0, colon);
+        if (colon == std::string::npos || (title != "mp" && title != "sp")) return "On another release";
+        if (title != kTitle) return title == "mp" ? "In multiplayer" : "In the campaign or Spec Ops";
+        return playing.substr(colon + 1) == ListingVersion() ? "" : "On another release";
+    }
     // A listing Steam would not make is asked for again this often.
     constexpr auto kListAgainEvery = std::chrono::seconds(5);
     // The title broadcasts a search every few seconds while its list is open;
@@ -238,10 +266,12 @@ namespace
     struct LobbyJoinRequested { uint64_t lobby, friendId; };
     struct PresenceJoinRequested { uint64_t friendId; char connect[256]; };
     struct SessionRequest { Identity remote; };
+    struct FriendGameInfo { uint64_t game; uint32_t ip; uint16_t port, queryPort; uint64_t lobby; };
 #pragma pack(pop)
     static_assert(offsetof(Message, peer) == 16 && offsetof(Message, release) == 184 &&
                   offsetof(Message, channel) == 192);
     static_assert(offsetof(CallbackMsg, param) == 8);
+    static_assert(offsetof(FriendGameInfo, lobby) == 16 && sizeof(FriendGameInfo) == 24);
 #ifdef _WIN32
     static_assert(sizeof(Message) == 216 && sizeof(CallbackMsg) == 24 && sizeof(CallCompleted) == 16 &&
                   offsetof(LobbyCreated, lobby) == 8 && sizeof(LobbyEnter) == 24 &&
@@ -434,12 +464,14 @@ namespace
 
             steamUser_ = Call<void*>(client_, client::GetUser, user_, pipe_, "SteamUser023");
             friends_ = Call<void*>(client_, client::GetFriends, user_, pipe_, "SteamFriends018");
+            utils_ = Call<void*>(client_, client::GetUtils, pipe_, "SteamUtils011");
             matchmaking_ = Call<void*>(client_, client::GetMatchmaking, user_, pipe_, "SteamMatchMaking009");
             messages_ = Call<void*>(client_, client::GetGeneric, user_, pipe_, "SteamNetworkingMessages002");
-            if (!steamUser_ || !friends_ || !matchmaking_ || !messages_)
+            if (!steamUser_ || !friends_ || !utils_ || !matchmaking_ || !messages_)
             {
-                LOGE("online: the Steam client lacks an interface this needs (user %p, friends %p,"
-                     " matchmaking %p, networking messages %p)", steamUser_, friends_, matchmaking_, messages_);
+                LOGE("online: the Steam client lacks an interface this needs (user %p, friends %p, utils %p,"
+                     " matchmaking %p, networking messages %p)", steamUser_, friends_, utils_, matchmaking_,
+                     messages_);
                 return false;
             }
             // The client tells SDL to pass over every physical controller, as it
@@ -449,12 +481,16 @@ namespace
             // top would leave the title with no controller at all.
             launched.Restore();
 
+            app_ = std::strtoull(app.c_str(), nullptr, 10);
             self_ = CallSteamId(steamUser_, user::GetSteamID);
             name_ = Call<const char*>(friends_, friends::GetPersonaName);
             LOGI("online: steam as \"%s\" (%016llx), app %s%s", name_.c_str(),
                  (unsigned long long)self_, app.c_str(),
                  Call<bool>(steamUser_, user::LoggedOn) ? "" : ", offline");
 
+            // What tells this game's players from Spacewar's in a friend list:
+            // Steam shares rich presence among friends running the same app.
+            Call<bool>(friends_, friends::SetRichPresence, kListingKey, Playing().c_str());
             createCall_ = Call<SteamAPICall>(matchmaking_, matchmaking::CreateLobby, kFriendsOnly, kMaxMembers);
             thread_ = std::thread([this] { Run(); });
             return true;
@@ -593,12 +629,24 @@ namespace
             return true;
         }
 
-        void InviteFriends() override
+        bool Friends(online::FriendList& list) override
         {
-            if (const uint64_t lobby = lobby_)
-                Call<void>(friends_, friends::InviteDialog, lobby);
-            else
-                LOGW("online: no lobby yet to invite anyone to");
+            friendsWanted_ = std::chrono::steady_clock::now().time_since_epoch().count();
+            std::lock_guard g(friendsLock_);
+            if (list.version != friendList_.version) list = friendList_;
+            return true;
+        }
+
+        // To this player's lobby, which carries their party or game: Steam's
+        // own invitation, shown in the friend's chat, which their copy hears
+        // of when they accept.
+        bool InviteFriend(uint64_t id) override
+        {
+            const uint64_t lobby = lobby_;
+            if (!lobby) { LOGW("online: no lobby yet to invite anyone to"); return false; }
+            const bool sent = Call<bool>(matchmaking_, matchmaking::InviteToLobby, lobby, id);
+            LOGI("online: invites %016llx%s", (unsigned long long)id, sent ? "" : ", which Steam refused");
+            return sent;
         }
 
     private:
@@ -613,6 +661,14 @@ namespace
                 {
                     Handle(message);
                     freeLastCallback_(pipe_);
+                }
+                const auto wanted = std::chrono::steady_clock::time_point(
+                    std::chrono::steady_clock::duration(friendsWanted_.load()));
+                if (const auto now = std::chrono::steady_clock::now();
+                    now - wanted < kFriendsWatched && now - friendsBuilt_ >= kFriendsEvery)
+                {
+                    friendsBuilt_ = now;
+                    BuildFriends();
                 }
                 if (const auto now = std::chrono::steady_clock::now(); now - listAsked_ >= kListAgainEvery)
                 {
@@ -845,6 +901,78 @@ namespace
             hosts_ = std::move(found);
         }
 
+        // The friends running this game, by the key Start sets, and how many
+        // others there are. Steam has all of it at hand: nothing here waits on
+        // the network.
+        void BuildFriends()
+        {
+            online::FriendList list;
+            const uint64_t lobby = lobby_;
+            const int count = Call<int>(friends_, friends::Count, kImmediate);
+            for (int i = 0; i < count; i++)
+            {
+                const uint64_t id = CallSteamId(friends_, friends::ByIndex, i, kImmediate);
+                FriendGameInfo game{};
+                // Copied at once: a string the client returns may be held in
+                // a buffer its next call reuses.
+                std::string marker;
+                if (Call<bool>(friends_, friends::GamePlayed, id, &game) && game.game == app_)
+                    if (const char* value = Call<const char*>(friends_, friends::RichPresence, id, kListingKey))
+                        marker = value;
+                if (marker.empty())
+                {
+                    (Call<int>(friends_, friends::PersonaState, id) == kOffline ? list.offline : list.online)++;
+                    continue;
+                }
+                online::Friend& one = list.playing.emplace_back();
+                one.id = id;
+                const char* name = Call<const char*>(friends_, friends::Name, id);
+                one.name = name ? name : "";
+                one.withYou = lobby && game.lobby == lobby;
+                one.elsewhere = Elsewhere(marker);
+                const Avatar& avatar = AvatarOf(id);
+                one.avatar = avatar.rgba;
+                one.avatarSide = avatar.side;
+            }
+            auto lower = [](std::string text) {
+                for (char& c : text) c = char(std::tolower(uint8_t(c)));
+                return text;
+            };
+            std::stable_sort(list.playing.begin(), list.playing.end(),
+                             [&](const online::Friend& a, const online::Friend& b) { return lower(a.name) < lower(b.name); });
+
+            auto same = [](const online::FriendList& a, const online::FriendList& b) {
+                return a.online == b.online && a.offline == b.offline &&
+                       std::equal(a.playing.begin(), a.playing.end(), b.playing.begin(), b.playing.end(),
+                                  [](const online::Friend& x, const online::Friend& y) {
+                                      return x.id == y.id && x.name == y.name && x.withYou == y.withYou &&
+                                             x.elsewhere == y.elsewhere && x.avatar == y.avatar;
+                                  });
+            };
+            std::lock_guard g(friendsLock_);
+            if (friendList_.version && same(list, friendList_)) return;
+            list.version = friendList_.version + 1;
+            friendList_ = std::move(list);
+        }
+
+        // A friend's 64-pixel picture, read again only when Steam has another.
+        // Steam answers -1 while it is still fetching one.
+        struct Avatar { int image = 0; std::vector<uint8_t> rgba; uint32_t side = 0; };
+        const Avatar& AvatarOf(uint64_t id)
+        {
+            Avatar& avatar = avatars_[id];
+            const int image = Call<int>(friends_, friends::MediumAvatar, id);
+            if (image <= 0 || image == avatar.image) return avatar;
+            uint32_t width = 0, height = 0;
+            if (!Call<bool>(utils_, utils::ImageSize, image, &width, &height) || width != height || !width ||
+                width > 256)
+                return avatar;
+            std::vector<uint8_t> rgba(size_t(width) * height * 4);
+            if (!Call<bool>(utils_, utils::ImageRGBA, image, rgba.data(), int(rgba.size()))) return avatar;
+            avatar = { image, std::move(rgba), width };
+            return avatar;
+        }
+
         bool SessionOpen(uint64_t peer)
         {
             const Identity identity = SteamIdentity(peer);
@@ -882,6 +1010,7 @@ namespace
         void* client_ = nullptr;
         void* steamUser_ = nullptr;
         void* friends_ = nullptr;
+        void* utils_ = nullptr;
         void* matchmaking_ = nullptr;
         void* messages_ = nullptr;
         GetCallbackFn getCallback_ = nullptr;
@@ -890,6 +1019,7 @@ namespace
         HSteamPipe pipe_ = 0;
         HSteamUser user_ = 0;
         uint64_t self_ = 0;
+        uint64_t app_ = 0;
         std::string name_;
 
         std::thread thread_;
@@ -913,6 +1043,13 @@ namespace
         std::chrono::steady_clock::time_point listAsked_{};   // the callback thread's
         std::deque<std::string> joins_;
         std::deque<online::Invite> invites_;
+
+        // The friends screen's list, built on the callback thread.
+        std::mutex friendsLock_;
+        online::FriendList friendList_;
+        std::atomic<std::chrono::steady_clock::rep> friendsWanted_{ 0 };   // when it was last asked for
+        std::chrono::steady_clock::time_point friendsBuilt_{};
+        std::map<uint64_t, Avatar> avatars_;
     };
 }
 

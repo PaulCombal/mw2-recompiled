@@ -43,6 +43,23 @@ namespace online
         bool fromInvite = false;   // an invitation, not the player choosing to join
     };
 
+    // A friend running this game, as the friends screen shows them.
+    struct Friend
+    {
+        uint64_t id = 0;
+        std::string name;
+        bool withYou = false;          // already in this player's party or game
+        std::string elsewhere;         // why they cannot join: "On another release"; empty if they can
+        std::vector<uint8_t> avatar;   // RGBA, avatarSide pixels square; may be empty
+        uint32_t avatarSide = 0;
+    };
+    struct FriendList
+    {
+        uint64_t version = 0;          // 0: not built yet
+        std::vector<Friend> playing;   // by name
+        int online = 0, offline = 0;   // the other friends, not running it
+    };
+
     class Service
     {
     public:
@@ -80,8 +97,17 @@ namespace online
         // hands such a line back when this player accepts an invitation.
         virtual void Advertise(const std::string& connect) { (void)connect; }
         virtual bool NextJoin(std::string& connect) { (void)connect; return false; }
-        // The service's own way to pick friends to invite, if it has one.
+        // Invites everyone this player could invite, for a service without
+        // friends to pick from.
         virtual void InviteFriends() {}
+
+        // Optional: friends to pick from, for the friends screen (friends.h).
+        // False when the service has none. The list is copied into `list` only
+        // when its version is not the one `list` holds; asking keeps it fresh
+        // for a while, and a service builds it off the caller's thread.
+        virtual bool Friends(FriendList& list) { (void)list; return false; }
+        // Invites one of them to this player's party or game.
+        virtual bool InviteFriend(uint64_t id) { (void)id; return false; }
 
         // Optional: Xbox LIVE parties and private matches. A service that says
         // yes here has the player signed in to Live, which opens the title's
@@ -113,6 +139,8 @@ namespace online
     // The service, started on first use: the first backend built in that
     // starts. Null when there is none or none could start.
     Service* Get();
+    // Its backend's name, "steam", "lan" or "server"; null without one.
+    const char* Name();
 
     // Once a frame on the title's main thread: types an accepted invitation's
     // console line, or hands an accepted Live invitation to the title.

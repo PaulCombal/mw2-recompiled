@@ -10,6 +10,8 @@
 #include "objects.h"
 #include "../guest.h"
 #include "../log.h"
+#include "../friends.h"
+#include "../presence.h"
 #include "../signin.h"
 #include "../online/service.h"
 
@@ -327,10 +329,10 @@ PPC_FUNC(__imp__XamShowDeviceSelectorUI)
     ctx.r3.u64 = X_ERROR_IO_PENDING;
 }
 PPC_FUNC(__imp__XamShowMessageBoxUIEx)     { ctx.r3.u64 = X_ERROR_NOT_FOUND; }
-// The lobby's "Invite friends": the service's own picker, where it has one.
+// The lobby's "Invite friends": the friends screen (friends.h).
 PPC_FUNC(__imp__XamShowFriendsUI)
 {
-    if (auto* service = online::Get()) service->InviteFriends();
+    friends::Ask();
     ctx.r3.u64 = X_ERROR_SUCCESS;
 }
 PPC_FUNC(__imp__XamShowGamerCardUIForXUID) { ctx.r3.u64 = X_ERROR_SUCCESS; }
@@ -835,10 +837,25 @@ namespace
         }
     }
 
+    // XUserSetContext: (user index, unused, XUID, context id, value). The
+    // player is the XUID's when there is one, as Xenia reads it.
+    Reply XgiUserSetContext(uint32_t buffer)
+    {
+        const auto* set = GuestPtr<be32>(buffer);
+        if (!set) return Result(0x80070057);
+        uint32_t user = set[0];
+        if (const uint64_t xuid = (uint64_t(uint32_t(set[2])) << 32) | uint32_t(set[3]))
+            for (uint32_t index = 0; index < 4; index++)
+                if (const Who who = WhoIs(index); who.state && (who.offline == xuid || who.online == xuid))
+                    user = index;
+        presence::SetContext(user, set[4], set[5]);
+        return {};
+    }
+
     bool Handled(uint32_t app, uint32_t message)
     {
         if (app == kAppXGI)
-            return message == 0x000B0010 || message == 0x000B0011 || message == 0x000B0014 ||
+            return message == 0x000B0006 || message == 0x000B0010 || message == 0x000B0011 || message == 0x000B0014 ||
                    message == 0x000B0015 || message == 0x000B0018;
         if (app == kAppXLiveBase)
             return message == 0x00050009 || message == 0x0005000B || message == 0x00058004 ||
@@ -864,6 +881,7 @@ namespace
         {
             switch (message)
             {
+            case 0x000B0006: return XgiUserSetContext(param1);
             case 0x000B0010: return XgiSessionCreate(param1, param2);
             case 0x000B0011: return XgiSessionDelete(param1);
             case 0x000B0014: return XgiSessionStart(param1);

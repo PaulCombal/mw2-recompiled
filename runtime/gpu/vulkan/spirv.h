@@ -62,7 +62,7 @@ namespace spirv
         Trunc = 3, FAbs = 4, Floor = 8, Fract = 10, Sin = 13, Cos = 14,
         Pow = 26, Exp2 = 29, Log2 = 30, Sqrt = 31, InverseSqrt = 32,
         SMin = 39, FMin = 37, SMax = 42, FMax = 40, FClamp = 43, SClamp = 45,
-        Fma = 50, Normalize = 69,
+        FMix = 46, Step = 48, SmoothStep = 49, Fma = 50, Length = 66, Normalize = 69,
         UnpackHalf2x16 = 62,
         NClamp = 81,
     };

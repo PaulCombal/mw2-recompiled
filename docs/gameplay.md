@@ -147,8 +147,18 @@ there, and that is not kept between runs.
 It is the console's screen, which a title asks for with `XamShowSigninUI` and
 never draws: the multiplayer asks from SIGN IN PROFILE and CHANGE PROFILE in
 split screen, and when a controller nobody is signed in at chooses SYSTEM
-LINK. The Guide button opens it too, as on the console, or Back and Start
-together where the system keeps that button.
+LINK. The Guide button at the second to fourth controllers opens it too, as on
+the console, or Back and Start together where the system keeps that button.
+
+At the first controller the Guide button (or the keyboard's Home) opens the
+guide (`guide.h`): the player's name, the time, what the title says they are
+doing, the network and the friends on it, then Resume, Invite friends and Quit
+to desktop, which asks once more. "What the title says" is its rich presence,
+as the console's guide showed it ("Playing Team Deathmatch in Afghan"): the
+title sets contexts with `XUserSetContext`, and the strings for each are in its
+XLAST, gzipped in the SPA resource of its image (`presence.h`). The system's
+screens are drawn over a blurred and darkened copy of the game
+(`gpu/vulkan/backdrop.h`).
 
 The console's screen also signs a guest in beside a player on Live. This one
 does not: the title's split screen is offline only, and its system link takes

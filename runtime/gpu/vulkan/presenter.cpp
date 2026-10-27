@@ -6,9 +6,11 @@
 #include "../../crash.h"
 #include "../../console.h"
 #include "../../stutters.h"
+#include "../../friends.h"
+#include "../../guide.h"
 #include "../../signin.h"
-#include "../../online/service.h"
 #include "../../render_size.h"
+#include "backdrop.h"
 
 #if !defined(MW2_HAVE_VULKAN) || !defined(MW2_USE_SDL)
 // Without a loader or a window system there is nothing to present to; the rest
@@ -50,6 +52,8 @@ namespace
 {
     constexpr uint32_t kWidth = 1280;
     constexpr uint32_t kHeight = 720;
+    // How long a screen takes to fade in or out, in seconds.
+    constexpr float kFade = 0.15f;
     constexpr uint32_t kFramesInFlight = 2;
 
     struct Frame
@@ -86,19 +90,27 @@ namespace
         Frame frames[kFramesInFlight]{};
         uint32_t frameIndex = 0;
 
-        // The sign-in screen (signin.h), laid over the frame while it is open:
-        // its picture, the image it is copied to and the buffer it goes by.
+        // The system's screens (screen.h), laid over the frame while one is
+        // open: their pictures, the image the one shown is copied to and the
+        // buffer it goes by.
         struct Overlay
         {
-            signin::Image picture;
+            screen::Image signin, friends, guide;
+            const screen::Image* shown = nullptr;   // the picture the image holds
+            float outline = 0;                      // and its outline's width
             VkImage image = VK_NULL_HANDLE;
             VkDeviceMemory imageMemory = VK_NULL_HANDLE;
+            VkImageView view = VK_NULL_HANDLE;
             VkBuffer staging = VK_NULL_HANDLE;
             VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
             void* mapped = nullptr;
             uint32_t width = 0, height = 0;
             uint64_t uploaded = 0;       // the picture's version the image holds
             bool everUploaded = false;
+            float fade = 0;              // 0 shut to 1 shown
+            bool layered = false;        // the image is laid out for the backdrop's shader
+            VkOffset3D frameFrom{}, frameTo{};   // where the last game frame was shown
+            std::chrono::steady_clock::time_point drawn{};
         } overlay;
 
         std::thread worker;
@@ -584,11 +596,12 @@ namespace
     void DestroyOverlay()
     {
         auto& o = g.overlay;
+        if (o.view) vkDestroyImageView(g.device, o.view, nullptr);
         if (o.image) vkDestroyImage(g.device, o.image, nullptr);
         if (o.imageMemory) vkFreeMemory(g.device, o.imageMemory, nullptr);
         if (o.staging) vkDestroyBuffer(g.device, o.staging, nullptr);
         if (o.stagingMemory) vkFreeMemory(g.device, o.stagingMemory, nullptr);
-        o.image = VK_NULL_HANDLE; o.imageMemory = VK_NULL_HANDLE;
+        o.image = VK_NULL_HANDLE; o.imageMemory = VK_NULL_HANDLE; o.view = VK_NULL_HANDLE;
         o.staging = VK_NULL_HANDLE; o.stagingMemory = VK_NULL_HANDLE;
         o.mapped = nullptr; o.width = o.height = 0; o.everUploaded = false;
     }
@@ -607,9 +620,9 @@ namespace
         image.arrayLayers = 1;
         image.samples = VK_SAMPLE_COUNT_1_BIT;
         image.tiling = VK_IMAGE_TILING_OPTIMAL;
-        image.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        image.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         image.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        if (!Check(vkCreateImage(g.device, &image, nullptr, &o.image), "the sign-in screen's image")) return false;
+        if (!Check(vkCreateImage(g.device, &image, nullptr, &o.image), "the screens' image")) return false;
         VkMemoryRequirements needs{};
         vkGetImageMemoryRequirements(g.device, o.image, &needs);
         VkMemoryAllocateInfo allocate{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
@@ -619,6 +632,12 @@ namespace
             !Check(vkAllocateMemory(g.device, &allocate, nullptr, &o.imageMemory), "the sign-in screen's memory") ||
             !Check(vkBindImageMemory(g.device, o.image, o.imageMemory, 0), "the sign-in screen's memory"))
             return false;
+        VkImageViewCreateInfo view{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+        view.image = o.image;
+        view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view.format = image.format;
+        view.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+        if (!Check(vkCreateImageView(g.device, &view, nullptr, &o.view), "the screens' view")) return false;
 
         VkBufferCreateInfo buffer{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
         buffer.size = VkDeviceSize(width) * height * 4;
@@ -638,43 +657,97 @@ namespace
         return true;
     }
 
-    // The sign-in screen over the middle of the swapchain image, which is in
-    // TRANSFER_DST layout. It is opaque, so a copy does it.
-    void DrawOverlay(const Frame& frame, VkImage target)
+    // The screen open over the middle of the swapchain image, which is in
+    // TRANSFER_DST layout: over a blur of the game, faded in and out
+    // (backdrop.h), or else copied over as it is.
+    void DrawOverlay(const Frame& frame, VkImage target, const Presenter::Queued& shown,
+                     VkOffset3D frameFrom, VkOffset3D frameTo)
     {
         auto& o = g.overlay;
-        if (!signin::Picture(g.extent.height, o.picture)) return;
-        const uint32_t width = o.picture.width, height = o.picture.height;
-        if (width > g.extent.width || height > g.extent.height) return;
+        const screen::Image* picture = signin::Picture(g.extent.height, o.signin)    ? &o.signin
+                                     : friends::Picture(g.extent.height, o.friends) ? &o.friends
+                                     : guide::Picture(g.extent.height, o.guide)     ? &o.guide
+                                                                                     : nullptr;
+        const bool layered = vk::backdrop::Create(g.device, g.physical, g.swapchainFormat);
+        // The fade goes on after the screen shuts, with the picture it last had.
+        const auto now = std::chrono::steady_clock::now();
+        const float step = std::min(std::chrono::duration<float>(now - o.drawn).count(), 1.0f / 30) / kFade;
+        o.drawn = now;
+        o.fade = layered ? std::clamp(o.fade + (picture ? step : -step), 0.0f, 1.0f) : picture ? 1.0f : 0.0f;
+        if (!picture && (o.fade <= 0 || !o.everUploaded)) return;
 
-        const bool resized = width != o.width || height != o.height;
-        if (resized || o.uploaded != o.picture.version || !o.everUploaded)
+        if (picture)
         {
-            // The other frames' commands may still be reading the image and
-            // the buffer; this happens at a press of a button, not per frame.
-            for (const Frame& other : g.frames)
-                if (&other != &frame) vkWaitForFences(g.device, 1, &other.inFlight, VK_TRUE, UINT64_MAX);
-            if (resized)
+            const uint32_t width = picture->width, height = picture->height;
+            if (width > g.extent.width || height > g.extent.height) return;
+            const bool resized = width != o.width || height != o.height;
+            if (resized || o.shown != picture || o.uploaded != picture->version || !o.everUploaded ||
+                o.layered != layered)
             {
-                DestroyOverlay();
-                if (!CreateOverlay(width, height)) { DestroyOverlay(); return; }
+                // The other frames' commands may still be reading the image and
+                // the buffer; this happens at a press of a button, not per frame.
+                for (const Frame& other : g.frames)
+                    if (&other != &frame) vkWaitForFences(g.device, 1, &other.inFlight, VK_TRUE, UINT64_MAX);
+                if (resized)
+                {
+                    DestroyOverlay();
+                    if (!CreateOverlay(width, height)) { DestroyOverlay(); return; }
+                }
+                std::memcpy(o.mapped, picture->pixels.data(), picture->pixels.size());
+                vk::util::Barrier(frame.commands, o.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                  VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                  0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                VkBufferImageCopy copy{};
+                copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+                copy.imageExtent = { width, height, 1 };
+                vkCmdCopyBufferToImage(frame.commands, o.staging, o.image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                vk::util::Barrier(frame.commands, o.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                  layered ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                          : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                  VK_ACCESS_TRANSFER_WRITE_BIT,
+                                  layered ? VK_ACCESS_SHADER_READ_BIT : VK_ACCESS_TRANSFER_READ_BIT,
+                                  VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                  layered ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT);
+                o.uploaded = picture->version;
+                o.shown = picture;
+                o.outline = picture->outline;
+                o.layered = layered;
+                o.everUploaded = true;
             }
-            std::memcpy(o.mapped, o.picture.pixels.data(), o.picture.pixels.size());
-            vk::util::Barrier(frame.commands, o.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                              VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                              0, VK_ACCESS_TRANSFER_WRITE_BIT,
-                              VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-            VkBufferImageCopy copy{};
-            copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-            copy.imageExtent = { width, height, 1 };
-            vkCmdCopyBufferToImage(frame.commands, o.staging, o.image,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-            vk::util::Barrier(frame.commands, o.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                              VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
-                              VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-            o.uploaded = o.picture.version;
-            o.everUploaded = true;
+        }
+        const int32_t left = int32_t(g.extent.width - o.width) / 2, top = int32_t(g.extent.height - o.height) / 2;
+
+        // A fade out with no picture any more can only go on as it was laid out.
+        if (o.layered != layered) return;
+        if (shown.image) { o.frameFrom = frameFrom; o.frameTo = frameTo; }
+
+        if (layered)
+        {
+            vk::backdrop::Draw draw{};
+            draw.commands = frame.commands;
+            draw.slot = g.frameIndex;
+            draw.target = target;
+            draw.extent = g.extent;
+            draw.frame = shown.image;
+            draw.frameWidth = shown.width;
+            draw.frameHeight = shown.height;
+            draw.frameFrom = { o.frameFrom.x, o.frameFrom.y };
+            draw.frameTo = { o.frameTo.x, o.frameTo.y };
+            draw.picture = o.view;
+            draw.pictureFrom = { left, top };
+            draw.pictureTo = { left + int32_t(o.width), top + int32_t(o.height) };
+            draw.outline = o.outline;
+            // Eased, so it settles rather than stops.
+            draw.shown = 1.0f - (1.0f - o.fade) * (1.0f - o.fade);
+            draw.settle = [&] {
+                for (const Frame& other : g.frames)
+                    if (&other != &frame) vkWaitForFences(g.device, 1, &other.inFlight, VK_TRUE, UINT64_MAX);
+            };
+            vk::backdrop::Record(draw);
+            return;
         }
 
         // The frame's blit wrote where this one writes.
@@ -684,11 +757,10 @@ namespace
                           VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
         VkImageBlit blit{};
         blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-        blit.srcOffsets[1] = { int32_t(width), int32_t(height), 1 };
+        blit.srcOffsets[1] = { int32_t(o.width), int32_t(o.height), 1 };
         blit.dstSubresource = blit.srcSubresource;
-        const int32_t left = int32_t(g.extent.width - width) / 2, top = int32_t(g.extent.height - height) / 2;
         blit.dstOffsets[0] = { left, top, 0 };
-        blit.dstOffsets[1] = { left + int32_t(width), top + int32_t(height), 1 };
+        blit.dstOffsets[1] = { left + int32_t(o.width), top + int32_t(o.height), 1 };
         vkCmdBlitImage(frame.commands, o.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
     }
@@ -751,6 +823,7 @@ namespace
                           0, VK_ACCESS_TRANSFER_WRITE_BIT,
                           VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
+        VkOffset3D frameFrom{}, frameTo{};
         if (shown.image && shown.width && shown.height)
         {
             // The renderer's frame, scaled to the window at its own proportions.
@@ -763,6 +836,8 @@ namespace
             blit.srcOffsets[1] = { int32_t(shown.width), int32_t(shown.height), 1 };
             blit.dstSubresource = blit.srcSubresource;
             Letterbox(shown.width, shown.height, blit.dstOffsets[0], blit.dstOffsets[1]);
+            frameFrom = blit.dstOffsets[0];
+            frameTo = blit.dstOffsets[1];
             const bool bars = blit.dstOffsets[0].x || blit.dstOffsets[0].y;
             if (bars)
             {
@@ -788,7 +863,7 @@ namespace
             VkImageSubresourceRange range{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
             vkCmdClearColorImage(frame.commands, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &colour, 1, &range);
         }
-        DrawOverlay(frame, image);
+        DrawOverlay(frame, image, shown, frameFrom, frameTo);
 
         vk::util::Barrier(frame.commands, image, VK_IMAGE_ASPECT_COLOR_BIT,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
@@ -863,6 +938,7 @@ namespace
         if (g.device)
         {
             vkDeviceWaitIdle(g.device);
+            vk::backdrop::Destroy();
             DestroyOverlay();
             for (auto& frame : g.frames)
             {
@@ -1002,12 +1078,11 @@ namespace
                     if (stutters::On()) stutters::Mark("F7");
                     else vk::renderer::FlashSeen("F7");
                 }
-                // F6 opens the online service's invitation, when it has one:
-                // Steam's overlay, with a friend list to pick from.
+                // F6 opens the friends screen, as the lobby's "Invite friends" does.
                 else if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
                          event.key.scancode == SDL_SCANCODE_F6)
                 {
-                    if (auto* service = online::Get()) service->InviteFriends();
+                    friends::Ask();
                 }
                 // F8 toggles fullscreen. The size change that follows arrives as
                 // an event like any other resize.

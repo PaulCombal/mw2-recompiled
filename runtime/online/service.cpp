@@ -38,6 +38,11 @@ bool online::EnterServiceNamespace(int& exitCode)
     return EnterSteamNamespace(exitCode);
 }
 
+namespace
+{
+    const char* g_name = nullptr;   // the backend that started
+}
+
 online::Service* online::Get()
 {
     static Service* const service = [] {
@@ -49,6 +54,7 @@ online::Service* online::Get()
             if (made->Start())
             {
                 LOGI("online: the service is %s", backend->name);
+                g_name = backend->name;
                 return made.get();
             }
             made.reset();
@@ -59,6 +65,12 @@ online::Service* online::Get()
         return static_cast<Service*>(nullptr);
     }();
     return service;
+}
+
+const char* online::Name()
+{
+    Get();
+    return g_name;
 }
 
 bool online::Live()

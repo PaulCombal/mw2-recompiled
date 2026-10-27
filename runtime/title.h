@@ -361,6 +361,11 @@
 #define T_CLIENT_ORIGIN           437312u       // x, y, z
 #define T_CLIENT_ANGLES           453512u       // pitch, yaw, roll
 
+// The title's SPA, its XEX resource named after the title id, as the image
+// holds it: the presence strings (presence.cpp).
+#define T_DATA_Spa                0x83DA0000u
+#define T_DATA_SpaSize            644933u
+
 #elif !defined(MW2_VERSION_TU0)
 
 #define MW2_TITLE_NAME  "campaign"
@@ -452,6 +457,11 @@
 #define T_CLIENT_ORIGIN           133188u       // x, y, z
 #define T_CLIENT_ANGLES           149388u       // pitch, yaw, roll
 
+// The title's SPA, its XEX resource named after the title id, as the image
+// holds it: the presence strings (presence.cpp).
+#define T_DATA_Spa                0x83E60000u
+#define T_DATA_SpaSize            644933u
+
 #elif defined(MW2_TITLE_MP)
 
 #define MW2_TITLE_NAME  "multiplayer, disc version"
@@ -485,6 +495,11 @@
 #define T_CLIENT_ORIGIN           437312u
 #define T_CLIENT_ANGLES           453512u
 
+// The title's SPA, its XEX resource named after the title id, as the image
+// holds it: the presence strings (presence.cpp).
+#define T_DATA_Spa                0x83D40000u
+#define T_DATA_SpaSize            625298u
+
 #else
 
 #define MW2_TITLE_NAME  "campaign, disc version"
@@ -513,6 +528,11 @@
 #define T_CLIENT_VALID            0u
 #define T_CLIENT_ORIGIN           0u
 #define T_CLIENT_ANGLES           0u
+
+// The title's SPA, its XEX resource named after the title id, as the image
+// holds it: the presence strings (presence.cpp).
+#define T_DATA_Spa                0x83E60000u
+#define T_DATA_SpaSize            625298u
 
 #endif
 

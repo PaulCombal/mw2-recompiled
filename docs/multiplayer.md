@@ -118,7 +118,8 @@ sockets, ports -- and asks the service only for what a service does:
 | `Account()` | who the player is, stable across runs; the XUIDs are built from it |
 | `LocalName()` | the name other players see (the title shows 15 characters) |
 | `Send`, `Broadcast`, `Receive` | unreliable datagrams, addressed by the title's own port numbers; broadcast reaches everyone who could join, never self |
-| `Advertise`, `NextJoin`, `InviteFriends` | optional: system-link invitations as the title's `connect` console line |
+| `Advertise`, `NextJoin` | optional: system-link invitations as the title's `connect` console line |
+| `Friends`, `InviteFriend`, `InviteFriends` | optional: the friends screen's list and one invitation; or, without a list, everyone invited at once |
 | `Lobbies`, `SetJoinable`, `NextInvite` | optional: Xbox LIVE parties and private matches |
 
     MW2_NETWORK=none     # default: system link on this machine
@@ -261,9 +262,22 @@ controller from a game Steam did not start.
 - The advertised game is the newest hosted system-link session that is on;
   `kernel/xam.cpp` (`PublishHosted`) chooses it and tells the service under one
   lock, so threads ending one session and creating another cannot reorder it.
-- F6, or the Xbox LIVE lobby's "Invite friends", opens the overlay's
-  invitation; a friend can also be invited from Steam's friend list. Accepting
-  moves the friend into the host's lobby.
+- F6, or the Xbox LIVE lobby's "Invite friends", opens the friends screen
+  (`friends.h`), drawn over the frame as the sign-in screen is, over a blurred
+  and darkened copy of the game (`gpu/vulkan/backdrop.h`): the friends
+  running this game, with their avatars, then how many others are online and
+  offline. A friend counts as running it when Steam says they play app 480 and
+  their rich presence has `mw2recomp`, which every copy sets to its executable
+  and release (`mp:<release>`, `sp:<release>`); the rest of Spacewar's players
+  have no such key. A friend in the other executable, or on another release,
+  is listed but cannot be invited: the campaign's Spec Ops invitations and the
+  multiplayer's do not carry into each other. Steam's overlay would need
+  Steam to have started the game. The list is built on the callback thread,
+  once a second while the screen asks for it, and A sends Steam's lobby
+  invitation (`InviteUserToLobby`), which the friend accepts in Steam's chat; a
+  friend can also be invited from Steam's own friend list. Accepting moves the
+  friend into the host's lobby. With another service the screen says that
+  choosing friends needs Steam; LAN still invites everyone on the network.
 - The host's lobby data carries what joins its game: `xsession`, the Xbox LIVE
   party or private match the host is in, which the friend's copy takes as an
   accepted Live invitation; otherwise `connect`, the host's system-link join

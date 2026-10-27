@@ -24,6 +24,8 @@
 // The screen is drawn here into a picture the presenter lays over the frame,
 // and is driven by the controller that asked for it, through the title's own
 // reads of the controllers: while it is open the title sees none pressed.
+#include "screen.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -55,13 +57,7 @@ namespace signin
     constexpr uint16_t kGuide = 0x0400;
     bool Input(uint32_t user, uint16_t buttons);
 
-    // The screen, for a window of this height: BGRA, opaque. False while it is
-    // shut. The pixels are only rewritten when `version` is not theirs.
-    struct Image
-    {
-        std::vector<uint8_t> pixels;
-        uint32_t width = 0, height = 0;
-        uint64_t version = 0;
-    };
+    // The screen, for a window of this height. False while it is shut.
+    using Image = screen::Image;
     bool Picture(uint32_t windowHeight, Image& image);
 }

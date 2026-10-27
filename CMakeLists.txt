@@ -385,11 +385,11 @@ if(MW2_USE_SDL)
                              "extern const unsigned kIconSize = ${icon_size};\n")
     file(GENERATE OUTPUT "${MW2_FONTS_SOURCE}" CONTENT "${fonts_text}")
 
-    # The game draws its sign-in screen (runtime/signin.cpp) with the same
+    # The game draws the system's screens (runtime/screen.cpp) with the same
     # fonts, rasterised by the stb_truetype that comes with Dear ImGui.
     target_sources(mw2 PRIVATE "${MW2_FONTS_SOURCE}")
     target_include_directories(mw2 PRIVATE "${imgui_SOURCE_DIR}")
-    target_compile_definitions(mw2 PRIVATE MW2_SIGNIN_PICTURE=1)
+    target_compile_definitions(mw2 PRIVATE MW2_SCREENS=1)
 
     # The fastfile reader (launcher/zone/): zlib for the zone's stream, and
     # the definitions it walks a zone by, embedded as the fonts are.
@@ -400,6 +400,9 @@ if(MW2_USE_SDL)
         EXCLUDE_FROM_ALL)
     set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(zlib)
+    # The game too: the title's XLAST is gzipped in its image (runtime/presence.cpp).
+    target_link_libraries(mw2 PRIVATE zlibstatic)
+    target_include_directories(mw2 PRIVATE "${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}")
     # The 360's under their own names, the PC game's (defs_pc/, read by the map
     # converter, launcher/mapport/) under pc/.
     set(MW2_ZONE_DEFS_SOURCE "${CMAKE_BINARY_DIR}/launcher_zone_defs.cpp")

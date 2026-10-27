@@ -79,13 +79,14 @@ Not supported: public matchmaking and ranked playlists, which needed Activision'
 | `Z` `X` `C` `V` | A B X Y |
 | `Q` `E` | bumpers |
 | `F8` | fullscreen |
-| `F6` | invite friends (Steam) |
+| `F6` | invite friends |
+| `Home` | the guide (the controller's Guide button): what you are playing, friends, quit |
 
 <a id="online" href="#online"><img src="docs/images/readme/h-online.svg" alt="Online" height="56"></a>
 
 Everyone runs `mw2-mp` from the same release, with the same NETWORK chosen in the launcher.
 
-**Steam.** With Steam running, the game shows as *Spacewar*. SYSTEM LINK lists the games every Steam player hosts, worldwide, and anyone can join yours. For a game among friends, host PLAY ONLINE → PRIVATE MATCH and invite from Steam's friend list (or with `F6`, if you added `mw2-mp` to Steam as a non-Steam game). Your friend accepts while their game is running. Other players see your Steam name. Without Steam running, it plays as LAN.
+**Steam.** With Steam running, the game shows as *Spacewar*. SYSTEM LINK lists the games every Steam player hosts, worldwide, and anyone can join yours. For a game among friends, host PLAY ONLINE → PRIVATE MATCH and choose *Invite friends* (or press `F6`): it lists your Steam friends who are playing. Your friend accepts in Steam's chat while their game is running. Other players see your Steam name. Without Steam running, it plays as LAN.
 
 **Server.** Everyone on the same server sees each other's games in SYSTEM LINK and can join each other's private matches, from anywhere. Whoever hosts a match plays in it. Enter the server's address and password under NETWORK; nobody but the server's owner needs to open a port. To run one, see [docs/relay.md](docs/relay.md).
 

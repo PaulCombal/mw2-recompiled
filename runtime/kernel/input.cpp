@@ -8,6 +8,8 @@
 #include "../console.h"
 #include "../online/service.h"
 #include "../player.h"
+#include "../friends.h"
+#include "../guide.h"
 #include "../signin.h"
 #include "../stutters.h"
 #include "../gpu/vulkan/renderer.h"
@@ -150,6 +152,7 @@ namespace
         { SDL_SCANCODE_Z, BTN_A },            { SDL_SCANCODE_X, BTN_B },
         { SDL_SCANCODE_C, BTN_X },            { SDL_SCANCODE_V, BTN_Y },
         { SDL_SCANCODE_Q, BTN_LB },           { SDL_SCANCODE_E, BTN_RB },
+        { SDL_SCANCODE_HOME, signin::kGuide },
     };
 
     uint16_t KeyboardButtons()
@@ -384,13 +387,18 @@ PPC_FUNC(__imp__XamInputGetState)
         // held: a script that says where to look means it.
         for (int i = 0; i < 4; i++) if (g_scriptAxisHeld[user][i]) axes[i] = g_scriptAxes[user][i];
 
-        // The sign-in screen takes the controllers while it is open, the left
-        // stick moving through it as the d-pad does.
-        // The Guide button opens it, or Back and Start together where the
-        // system keeps that button for itself.
+        // The system's screens take the controllers while one is open, the
+        // left stick moving through it as the d-pad does: the friends screen,
+        // the guide, then the sign-in screen, each reached only while none
+        // before it is open. The Guide button -- or Back and Start together,
+        // where the system keeps that button for itself, or Home -- opens the
+        // guide at the first controller and the sign-in screen at the others.
         const uint16_t stick = axes[1] > 16000 ? BTN_DPAD_UP : axes[1] < -16000 ? BTN_DPAD_DOWN : uint16_t(0);
         const bool guide = down(SDL_GAMEPAD_BUTTON_GUIDE) || (b & (BTN_BACK | BTN_START)) == (BTN_BACK | BTN_START);
-        const bool taken = signin::Input(user, uint16_t(b | stick | (guide ? signin::kGuide : 0)));
+        const uint16_t held = uint16_t(b | stick | (guide ? signin::kGuide : 0));
+        const bool picking = friends::Input(user, held);
+        const bool guided = guide::Input(user, picking ? uint16_t(0) : held) || picking;
+        const bool taken = signin::Input(user, guided ? uint16_t(0) : held) || guided;
         b &= uint16_t(~signin::kGuide);
         if (taken)
         {
@@ -421,6 +429,15 @@ PPC_FUNC(__imp__XamInputGetState)
         out->gamepad.thumbRY       = uint16_t(axes[3]);
         ctx.r3.u64 = X_ERROR_SUCCESS;
         return;
+    }
+    // Nothing is held at a controller that is not there -- the keyboard's
+    // with every key up: the screens hear it, so that their next press of a
+    // key counts as one.
+    if (user < 4)
+    {
+        friends::Input(user, 0);
+        guide::Input(user, 0);
+        signin::Input(user, 0);
     }
 #else
     (void)user;
