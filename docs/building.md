@@ -505,6 +505,24 @@ It packages `mw2-launcher` with them, and the fonts' licence.
     let the compiler drop the bounds check.
   - `mftb` reads `PPC_QUERY_TIMEBASE()`, a 50 MHz counter the runtime supplies,
     instead of `__rdtsc()`.
+- **`XenonRecomp/register_flow.cpp`** (new), with `recompiler.cpp` and
+  `recompiler.h`: the configs turn the `*_as_local` options on, so registers
+  are host locals, which the host compiler keeps in host registers, instead of
+  fields of `PPCContext` that every instruction loads and stores. A local
+  belongs to one function, which is only correct while no value crosses a call
+  in a register that becomes one, and MSVC's output does not always keep to
+  the calling convention: `__chkstk` takes its size in r12, exception handler
+  funclets take their parent's frame in r12 and read its non-volatile
+  registers, a function `setjmp` returns to twice resumes with the registers
+  the host `longjmp` restores from the context, and XenonAnalyse splits a few
+  functions in two that share registers. `register_flow.cpp` finds those
+  functions by data flow over every instruction, with what each reads and
+  writes taken from what `recompiler.cpp` emits for it, and what a call reads
+  and writes from the callee, to a fixed point over the call graph. They keep
+  every register in the context (about 140 of 28,000 in each executable; the
+  recompiler prints the count and why), and so do the register save/restore
+  helpers, which the other functions skip. `PPCContext` keeps every register:
+  the `PPC_CONFIG_*_AS_LOCAL` defines are no longer emitted.
 - **`XenonAnalyse/main.cpp`**: jump-table patterns for XDK 8276's instruction
   order, which schedules the index shift between the `lis` and the `addi`; the
   table and base address pairs are located by opcode rather than fixed offset,

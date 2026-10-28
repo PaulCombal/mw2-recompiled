@@ -160,6 +160,7 @@ rm -rf $PPC && mkdir -p $PPC
 ( cd config && ../XenonRecomp/build/XenonRecomp/XenonRecomp $TOML ../XenonRecomp/XenonUtils/ppc_context.h ) | tee /tmp/mw2_recomp.log | tail -1
 echo "    unrecognized instructions: $(grep -c 'Unrecognized instruction' /tmp/mw2_recomp.log || true)"
 echo "    switch-case errors:        $(grep -c 'trying to jump outside function' /tmp/mw2_recomp.log || true)"
+grep '^Registers stay in the context' /tmp/mw2_recomp.log | sed 's/^/    /' || true
 
 echo "==> 7. generate declarations + kernel import stubs (into $PPC/)"
 python3 tools/genshared.py

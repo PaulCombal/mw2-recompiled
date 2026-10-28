@@ -14,6 +14,7 @@
 #include "../runtime/gpu/vulkan/pipeline.h"
 #include "../runtime/gpu/vulkan/texture_formats.h"
 #include "../runtime/gpu/vulkan/texture_cache.h"
+#include "../runtime/report.h"
 #include "../runtime/stutters.h"
 
 #include <cstdio>
@@ -64,6 +65,9 @@ namespace stutters
     bool On() { return false; }
     void Add(Cost, uint64_t) {}
 }
+// Nor a bug report to time the uploads for.
+report::Timed::Timed(Time what) : time(what) {}
+report::Timed::~Timed() {}
 
 int main(int argc, char** argv)
 {

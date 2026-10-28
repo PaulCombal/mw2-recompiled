@@ -211,7 +211,9 @@ the recompiler emits host `setjmp`/`longjmp` there, saving the guest registers
 at the `setjmp` and restoring them when the `longjmp` lands. Recompiled as
 ordinary functions, the `longjmp` would return into the code that raised the
 error, which carries on in a state the title never expects: a client dropped at
-the end of a match hung in its error cleanup.
+the end of a match hung in its error cleanup. A function that calls `setjmp`
+keeps its registers in the context, where the host `longjmp` restores them,
+although the others keep theirs in locals ([building.md](building.md)).
 
 A host `longjmp` skips every host frame between the two, destructors included.
 Runtime code that calls back into guest code -- a hook's `GUEST_ORIG`, an APC,

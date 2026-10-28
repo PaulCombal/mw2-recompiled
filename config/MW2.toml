@@ -5,12 +5,16 @@ switch_table_file_path = "mw2_switch_tables.toml"
 
 skip_lr = false
 skip_msr = false
-ctr_as_local = false
-xer_as_local = false
-reserved_as_local = false
-cr_as_local = false
-non_argument_as_local = false
-non_volatile_as_local = false
+# Registers are host locals, which the compiler keeps in host registers,
+# rather than fields of the context in memory. The few functions a value
+# reaches or leaves in a register the calling convention does not carry keep
+# them in the context (register_flow.cpp, patches/xenonrecomp-mw2.patch).
+ctr_as_local = true
+xer_as_local = true
+reserved_as_local = true
+cr_as_local = true
+non_argument_as_local = true
+non_volatile_as_local = true
 
 restgprlr_14_address = 0x823DDF90
 savegprlr_14_address = 0x823DDF40

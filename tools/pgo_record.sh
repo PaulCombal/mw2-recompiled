@@ -35,7 +35,7 @@ rm -rf $WORK && mkdir -p $WORK pgo
 for TITLE in ${TITLES:-sp mp}; do
     BUILD=out/pgo-$TITLE
     echo "==> $TITLE: the executable with counters, in $BUILD"
-    TITLE=$TITLE BUILD_DIR=$BUILD REGENERATE=0 CMAKE_EXTRA="-DMW2_PGO_TRAINING=ON" ./build.sh > $WORK/$TITLE-build.log 2>&1 \
+    TITLE=$TITLE BUILD_DIR=$BUILD REGENERATE=0 TARGETS=mw2 CMAKE_EXTRA="-DMW2_PGO_TRAINING=ON" ./build.sh > $WORK/$TITLE-build.log 2>&1 \
         || { echo "the build failed; see $WORK/$TITLE-build.log"; exit 1; }
     echo "==> $TITLE: playing"
     if [ $TITLE = sp ]; then
