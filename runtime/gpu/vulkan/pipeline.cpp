@@ -19,6 +19,8 @@ uint32_t vk::pipeline::QueueFamily() { return 0; }
 bool     vk::pipeline::PreciseOcclusionQueries() { return false; }
 float    vk::pipeline::MaxAnisotropy() { return 1.0f; }
 bool     vk::pipeline::NonSeamlessCubes() { return false; }
+uint32_t vk::pipeline::MultiDraw() { return 0; }
+uint32_t vk::pipeline::Samplers() { return 0; }
 bool     vk::pipeline::PipelineLibraries() { return false; }
 std::mutex& vk::pipeline::QueueMutex() { static std::mutex m; return m; }
 void*    vk::pipeline::SetLayout(uint32_t) { return nullptr; }
@@ -59,7 +61,6 @@ void vk::pipeline::OnDeviceLost(void (*)(const char*)) {}
 namespace
 {
     namespace bindings = vk::bindings;
-    constexpr uint32_t kTextureSlots = bindings::kTextureSlots;
 
     struct State
     {
@@ -74,6 +75,8 @@ namespace
         bool preciseQueries = false;
         float maxAnisotropy = 1.0f;
         bool nonSeamlessCubes = false;
+        uint32_t multiDraw = 0;   // the most draws one vkCmdDrawMulti*EXT may make
+        uint32_t samplers = 0;    // the most samplers the texture cache may make
         bool pipelineLibraries = false, fastLinking = false;
         bool creationFeedback = false;
         bool cacheLoaded = false;
@@ -181,11 +184,14 @@ bool vk::pipeline::CreateDevice(void* physicalDevice, uint32_t family,
     // The title asks for anisotropic filtering on nearly every world texture
     // (2:1, once 4:1), and a sampler cannot give it unless the device enables it.
     enabled.samplerAnisotropy = supported.samplerAnisotropy;
-    if (supported.samplerAnisotropy)
     {
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(physical, &properties);
-        g.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
+        if (supported.samplerAnisotropy) g.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
+        // NVIDIA allows 4000 samplers in all, fewer than the set's slots; the
+        // backdrop makes one of its own.
+        g.samplers = std::min<uint32_t>(bindings::kSamplerCount,
+                                        properties.limits.maxSamplerAllocationCount - 16);
     }
 
     // The image format list lets a resolve destination carry an sRGB view beside
@@ -249,6 +255,69 @@ bool vk::pipeline::CreateDevice(void* physicalDevice, uint32_t family,
     }
     extensions.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
     extensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME);
+
+    // Every texture in one set that stays bound, written as textures are
+    // made, and a draw's record found through its base vertex and handed to
+    // the pixel stage (bindings.h). Vulkan 1.2 has all of it; every device
+    // with the dynamic rendering above does.
+    VkPhysicalDeviceDescriptorIndexingFeatures indexing{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES };
+    VkPhysicalDeviceShaderDrawParametersFeatures drawParameters{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES };
+    {
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(physical, &properties);
+        const bool core = properties.apiVersion >= VK_API_VERSION_1_2;
+        if (!core && DeviceHasExtension(physical, VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME))
+            extensions.push_back(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
+        indexing.pNext = &drawParameters;
+        VkPhysicalDeviceFeatures2 query{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+        query.pNext = &indexing;
+        vkGetPhysicalDeviceFeatures2(physical, &query);
+
+        VkPhysicalDeviceDescriptorIndexingProperties limits{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES };
+        VkPhysicalDeviceSubgroupProperties subgroup{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES };
+        limits.pNext = &subgroup;
+        VkPhysicalDeviceProperties2 properties2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+        properties2.pNext = &limits;
+        vkGetPhysicalDeviceProperties2(physical, &properties2);
+
+        constexpr uint32_t kImages = bindings::kImageCount * bindings::kImageKinds;
+        const char* missing =
+            properties.apiVersion < VK_API_VERSION_1_1 ? "Vulkan 1.1"
+            : !indexing.descriptorBindingSampledImageUpdateAfterBind ||
+              !indexing.descriptorBindingPartiallyBound ||
+              !indexing.descriptorBindingUpdateUnusedWhilePending ? "descriptor indexing"
+            : !supported.shaderSampledImageArrayDynamicIndexing ? "dynamically indexed textures"
+            : !drawParameters.shaderDrawParameters ? "shader draw parameters"
+            : !(subgroup.supportedStages & VK_SHADER_STAGE_FRAGMENT_BIT) ||
+              !(subgroup.supportedOperations & VK_SUBGROUP_FEATURE_BALLOT_BIT) ? "subgroup ballot in pixel shaders"
+            : limits.maxPerStageDescriptorUpdateAfterBindSampledImages < kImages ||
+              limits.maxDescriptorSetUpdateAfterBindSampledImages < kImages ||
+              limits.maxPerStageDescriptorUpdateAfterBindSamplers < bindings::kSamplerCount ||
+              limits.maxDescriptorSetUpdateAfterBindSamplers < bindings::kSamplerCount ||
+              limits.maxPerStageUpdateAfterBindResources < kImages + bindings::kSamplerCount
+                ? "room for every texture in one set"
+            : properties.limits.maxVertexOutputComponents < 4 * (bindings::kRecordLocation + 1) ||
+              properties.limits.maxFragmentInputComponents < 4 * (bindings::kRecordLocation + 1)
+                ? "seventeen interpolators"
+            : nullptr;
+        if (missing)
+        {
+            LOGW("vulkan: the device lacks %s, which the renderer needs", missing);
+            return false;
+        }
+        enabled.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
+        indexing = VkPhysicalDeviceDescriptorIndexingFeatures{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES };
+        indexing.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+        indexing.descriptorBindingPartiallyBound = VK_TRUE;
+        indexing.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+        indexing.pNext = &drawParameters;
+        drawParameters.shaderDrawParameters = VK_TRUE;
+    }
     g.pipelineLibraries =
         DeviceHasExtension(physical, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME) &&
         DeviceHasExtension(physical, VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME) &&
@@ -268,7 +337,33 @@ bool vk::pipeline::CreateDevice(void* physicalDevice, uint32_t family,
     dynamicRendering.pNext = &dynamicState;
     dynamicState.pNext = g.pipelineLibraries ? static_cast<void*>(&libraries) : features;
     libraries.pNext = features;
-    void* chain = &dynamicRendering;
+    // Draws in a row that change nothing between them are made with one call
+    // (renderer_draw.cpp); without it each is made on its own.
+    VkPhysicalDeviceMultiDrawFeaturesEXT multiDraw{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTI_DRAW_FEATURES_EXT };
+    g.multiDraw = 0;
+    if (DeviceHasExtension(physical, VK_EXT_MULTI_DRAW_EXTENSION_NAME))
+    {
+        VkPhysicalDeviceFeatures2 query{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+        query.pNext = &multiDraw;
+        vkGetPhysicalDeviceFeatures2(physical, &query);
+        VkPhysicalDeviceMultiDrawPropertiesEXT most{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTI_DRAW_PROPERTIES_EXT };
+        VkPhysicalDeviceProperties2 properties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+        properties.pNext = &most;
+        vkGetPhysicalDeviceProperties2(physical, &properties);
+        if (multiDraw.multiDraw && most.maxMultiDrawCount > 1)
+        {
+            extensions.push_back(VK_EXT_MULTI_DRAW_EXTENSION_NAME);
+            g.multiDraw = most.maxMultiDrawCount;
+        }
+    }
+    multiDraw = VkPhysicalDeviceMultiDrawFeaturesEXT{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTI_DRAW_FEATURES_EXT };
+    multiDraw.multiDraw = VK_TRUE;
+    multiDraw.pNext = &dynamicRendering;
+    drawParameters.pNext = g.multiDraw ? static_cast<void*>(&multiDraw) : &dynamicRendering;
+    void* chain = &indexing;
 
     VkDeviceCreateInfo info{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
     info.pNext = chain;
@@ -338,16 +433,28 @@ namespace
     {
         const VkShaderStageFlags both = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
-        // The layout declares every texture slot, so every shader -- each
-        // declaring only the slots it samples -- is compatible with it.
-        VkDescriptorSetLayoutBinding textures[kTextureSlots]{};
-        for (uint32_t i = 0; i < kTextureSlots; i++)
+        // Every texture and sampler the cache holds (bindings.h). Written while
+        // command buffers that bind the set are being recorded and run, each
+        // entry before the first draw that names it and never while one that
+        // names it is pending; most entries are empty.
+        VkDescriptorSetLayoutBinding textures[4]{};
+        VkDescriptorBindingFlags textureFlags[4]{};
+        for (uint32_t i = 0; i < 4; i++)
         {
             textures[i].binding = i;
-            textures[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            textures[i].descriptorCount = 1;
+            textures[i].descriptorType = i == bindings::kSamplers ? VK_DESCRIPTOR_TYPE_SAMPLER
+                                                                 : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            textures[i].descriptorCount = i == bindings::kSamplers ? bindings::kSamplerCount
+                                                                  : bindings::kImageCount;
             textures[i].stageFlags = both;
+            textureFlags[i] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
+                              VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT |
+                              VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
         }
+        VkDescriptorSetLayoutBindingFlagsCreateInfo textureBindingFlags{
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO };
+        textureBindingFlags.bindingCount = 4;
+        textureBindingFlags.pBindingFlags = textureFlags;
 
         VkDescriptorSetLayoutBinding memory[2]{};
         for (uint32_t i = 0; i < 2; i++)
@@ -361,13 +468,18 @@ namespace
         struct Set { const VkDescriptorSetLayoutBinding* bindings; uint32_t count; };
         Set sets[3];
         sets[bindings::kConstantSet] = { nullptr, 0 };    // the constants are in the arena
-        sets[bindings::kTextureSet] = { textures, kTextureSlots };
+        sets[bindings::kTextureSet] = { textures, 4 };
         sets[bindings::kArenaSet] = { memory, 2 };
         for (uint32_t i = 0; i < 3; i++)
         {
             VkDescriptorSetLayoutCreateInfo info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
             info.bindingCount = sets[i].count;
             info.pBindings = sets[i].bindings;
+            if (i == bindings::kTextureSet)
+            {
+                info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+                info.pNext = &textureBindingFlags;
+            }
             VkResult r = vkCreateDescriptorSetLayout(g.device, &info, nullptr, &g.sets[i]);
             if (r != VK_SUCCESS)
             {
@@ -376,23 +488,11 @@ namespace
             }
         }
 
-        // Register state, not shader state, so not part of a pipeline key.
-        // A stage has one range, so each runs on to the scaled slots and the
-        // constant offsets both read.
-        constexpr uint32_t kEnd = bindings::kConstantPushOffset + bindings::kConstantPushBytes;
-        VkPushConstantRange ranges[2]{};
-        ranges[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        ranges[0].offset = bindings::kPixelPushOffset;
-        ranges[0].size = kEnd - bindings::kPixelPushOffset;
-        ranges[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-        ranges[1].offset = bindings::kVertexPushOffset;
-        ranges[1].size = kEnd - bindings::kVertexPushOffset;
-
+        // No push constants: the register state a draw needs is in its record
+        // (bindings.h).
         VkPipelineLayoutCreateInfo info{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
         info.setLayoutCount = 3;
         info.pSetLayouts = g.sets;
-        info.pushConstantRangeCount = 2;
-        info.pPushConstantRanges = ranges;
         VkResult r = vkCreatePipelineLayout(g.device, &info, nullptr, &g.layout);
         if (r != VK_SUCCESS) { LOGW("pipeline: layout failed (%s)", Explain(r)); return false; }
         return true;
@@ -596,6 +696,8 @@ uint32_t vk::pipeline::QueueFamily() { return g.family; }
 bool     vk::pipeline::PreciseOcclusionQueries() { return g.preciseQueries; }
 float    vk::pipeline::MaxAnisotropy() { return g.maxAnisotropy; }
 bool     vk::pipeline::NonSeamlessCubes() { return g.nonSeamlessCubes; }
+uint32_t vk::pipeline::MultiDraw() { return g.multiDraw; }
+uint32_t vk::pipeline::Samplers() { return g.samplers; }
 // MW2_NO_PIPELINE_LIBRARIES=1 builds whole pipelines at the first draw instead.
 bool     vk::pipeline::PipelineLibraries()
 {

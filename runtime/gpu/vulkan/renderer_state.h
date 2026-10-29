@@ -26,6 +26,7 @@
 #include "../../words_hash.h"
 #include "../../shadow_resolution.h"
 
+#include <atomic>
 #include <chrono>
 #include <map>
 #include <string>
@@ -380,9 +381,11 @@ namespace vk::renderer::detail
         struct Bound
         {
             VkPipeline pipeline = VK_NULL_HANDLE;
-            VkDescriptorSet textureSet = VK_NULL_HANDLE;
-            uint32_t offsets[bindings::kConstantBlocks]{};    // the constant blocks', pushed
-            bool offsetsValid = false;
+            // The last draw's record, and where it is: the next draw names the
+            // same one when nothing in it differs.
+            uint32_t record[bindings::kRecordWords]{};
+            uint32_t recordWords = 0, recordAt = 0;
+            bool recordValid = false;
             VkViewport viewport{};
             VkRect2D scissor{};
             bool viewportValid = false, scissorValid = false;
@@ -394,12 +397,6 @@ namespace vk::renderer::detail
             bool facesValid = false;
             uint32_t depthControl = 0;   // RB_DEPTHCONTROL: the depth and stencil tests
             bool depthTestsValid = false;
-            uint32_t push[4]{};
-            bool pushValid = false;
-            float ndc[4]{};          // window -> clip, for a pre-transformed vertex
-            bool ndcValid = false;
-            uint32_t scaled[2]{};    // the slots bound to a resolve's copy at either scale
-            bool scaledValid = false;
             VkBuffer indexBuffer = VK_NULL_HANDLE;
             uint32_t indexOffset = 0;
             int indexType = -1;
@@ -441,7 +438,7 @@ namespace vk::renderer::detail
         uint64_t resolveEpoch = 0;     // moves on at every resolve: resolvedTo may have changed
 
         // The binding each texture slot got from the last draw that bound it,
-        // kept while neither epoch has moved (TextureSetFor).
+        // kept while neither epoch has moved (TexturesFor).
         struct TextureSlot
         {
             uint32_t fetch[6];
@@ -594,6 +591,9 @@ namespace vk::renderer::detail
         PFN_vkCmdSetDepthCompareOpEXT setDepthCompareOp = nullptr;
         PFN_vkCmdSetStencilTestEnableEXT setStencilTestEnable = nullptr;
         PFN_vkCmdSetStencilOpEXT setStencilOp = nullptr;
+        PFN_vkCmdDrawMultiEXT drawMulti = nullptr;   // null without VK_EXT_multi_draw
+        PFN_vkCmdDrawMultiIndexedEXT drawMultiIndexed = nullptr;
+        uint32_t multiDraw = 0;                      // the most one call may make
     };
     inline Dispatch dispatch;
 
@@ -695,6 +695,18 @@ namespace vk::renderer::detail
         bool ok;
     };
     uint32_t Allocate(uint32_t bytes, ArenaKind kind);
+    // On the recorder: makes the draws DrawOp held back (vk::record::Joining).
+    void MakeGatheredDraws();
+    // Written by the recorder alone, read by the report.
+    struct GatheredCounts
+    {
+        std::atomic<uint64_t> draws{ 0 }, alone{ 0 }, runs{ 0 }, inRuns{ 0 };
+        static void Add(std::atomic<uint64_t>& counter, uint64_t n = 1)
+        {
+            counter.store(counter.load(std::memory_order_relaxed) + n, std::memory_order_relaxed);
+        }
+    };
+    const GatheredCounts& Gathered();
     ConstantOffsets WriteConstants(const gpu::RegisterFile& r,
                                    const shader::Translation& program,
                                    const shader::Translation& pixelProgram,

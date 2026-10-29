@@ -106,7 +106,8 @@ namespace
         spirv::Module::Emit(m.Declarations(), Op::TypeFunction, { functionType, voidType });
         Id entry = m.Allocate();
 
-        m.EntryPoint(kExecutionModelGLCompute, entry, "main", { globalId, frame, table });
+        // Before SPIR-V 1.4 the interface lists only Input and Output variables.
+        m.EntryPoint(kExecutionModelGLCompute, entry, "main", { globalId });
         spirv::Module::Emit(m.ExecutionModes(), Op::ExecutionMode,
                             { entry, kExecutionModeLocalSize, kGroup, kGroup, 1 });
 

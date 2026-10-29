@@ -32,6 +32,7 @@ namespace vk::record::detail
 {
     bool threaded = false;
     VkCommandBuffer into = VK_NULL_HANDLE;
+    void (*settle)() = nullptr;
 }
 
 namespace
@@ -106,7 +107,11 @@ namespace
             while (at != end)
             {
                 Header* header = reinterpret_cast<Header*>(ring + (at & (kBytes - 1)));
-                if (header->run) header->run(header + 1, header->command);
+                if (header->run)
+                {
+                    if (!header->joins && vk::record::detail::settle) vk::record::detail::settle();
+                    header->run(header + 1, header->command);
+                }
                 at += header->bytes;
                 calls++;
                 q.made.store(at, std::memory_order_seq_cst);
@@ -175,7 +180,7 @@ void* vk::record::detail::Reserve(uint32_t bytes)
     }
     if (pad)
     {
-        new (q.ring + offset) Header{ nullptr, VK_NULL_HANDLE, uint32_t(pad) };
+        new (q.ring + offset) Header{ nullptr, VK_NULL_HANDLE, uint32_t(pad), 0 };
         at += pad;
         offset = 0;
     }
@@ -203,8 +208,9 @@ void vk::record::Flush()
     if (detail::threaded) Wake();
 }
 
-void vk::record::Start()
+void vk::record::Start(void (*settle)())
 {
+    detail::settle = settle;
     if (detail::threaded) return;
     static const bool off =
         diag::kOn && diag::Text("MW2_RECORD_THREAD") && !diag::Flag("MW2_RECORD_THREAD");

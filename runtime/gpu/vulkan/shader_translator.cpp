@@ -24,6 +24,10 @@ namespace
     constexpr uint32_t kSelectionControlNone = 0;
     constexpr uint32_t kLoopStackDepth = 4;      // what the sequencer provides
     constexpr uint32_t kCapabilityImageQuery = 50;
+    constexpr uint32_t kCapabilityGroupNonUniform = 61;
+    constexpr uint32_t kCapabilityGroupNonUniformBallot = 64;
+    constexpr uint32_t kCapabilityDrawParameters = 4427;
+    constexpr uint32_t kScopeSubgroup = 3;
     constexpr uint32_t kImageOperandBias = 0x1;
     constexpr uint32_t kImageOperandLod = 0x2;
 
@@ -43,7 +47,6 @@ namespace
         void DeclareInterface();
         Id DeclareArrayBlock(Id element, uint32_t count, uint32_t stride, uint32_t set,
                              uint32_t binding, const char* name);
-        Id DeclarePushBlock(std::initializer_list<Id> members, uint32_t offset, const char* name);
         Id GuestSize(Id size, uint32_t slot, uint32_t components);
         void EmitBody();
 
@@ -57,6 +60,8 @@ namespace
         Id SignedField(Id word, uint32_t offset, uint32_t count);
         Id CubeDirection(Id sc, Id tc, Id face);
         Id ConstantBlock(uint32_t block);
+        Id RecordWord(uint32_t index);
+        Id RecordFloat(uint32_t index);
         Id FetchConstantWord(uint32_t pair, uint32_t word);
         Id ArenaWord(Id dword);
         Id ArenaFloat4(Id vec4);
@@ -110,7 +115,7 @@ namespace
         const uint32_t* m_words;
         size_t m_count;
         // Whether the render targets may be larger than the title's
-        // (bindings::kScaledPushOffset).
+        // (bindings::kRecordScaled).
         bool m_scaled;
 
         Module m_module;
@@ -123,21 +128,23 @@ namespace
         // addressed relative to aL, which needs a computed index.
         Id m_temps = 0;
 
-        // { uint function, float reference } -- the alpha test, which Vulkan
-        // has no fixed-function form of.
-        Id m_alphaTest = 0;
-        Id m_ndc = 0;
-        Id m_pushBlock = 0;          // whichever of the two this stage has
-        uint32_t m_scaledMember = 0; // and where the scaled slots are in it
-        uint32_t m_offsetsMember = 0; // and the constant blocks' offsets
+        // Where the draw's record is (bindings.h): BaseVertex in a vertex
+        // shader, which passes it on through m_recordOutput, and that in a
+        // pixel shader. m_record is the dword offset itself, loaded in the
+        // entry block so every block can use it.
+        Id m_recordInput = 0;
+        Id m_recordOutput = 0;
+        Id m_record = 0;
         Id m_position = 0;
         Id m_vertexIndex = 0;         // the index the sequencer puts in r0.x
         Id m_interpolators[kInterpolatorCount]{};
         Id m_pointSize = 0;
         Id m_colours[4]{};
-        Id m_textures[32]{};
-        Id m_textureTypes[32]{};
-        Id m_textureImageTypes[32]{};   // the image behind the sampled image
+        bool m_textures[32]{};          // the slots sampled
+        Id m_textureTypes[32]{};        // the sampled image a slot's fetches go through
+        Id m_textureImageTypes[32]{};   // and the image behind it
+        Id m_imageArrays[bindings::kImageKinds]{};   // set 1's arrays, of the kinds sampled
+        Id m_samplers = 0;
         // A slot is only ever sampled at one dimensionality within one program.
         FetchDimension m_textureDimensions[32]{};
         Id m_arena = 0;               // the frame arena, as dwords
@@ -316,8 +323,8 @@ namespace
 
     // A block holding one array: `count` elements of `element`, `stride` bytes
     // apart. With `count` 0 the array is unsized and the block a read-only
-    // storage buffer, which SPIR-V 1.0 spells as a BufferBlock struct in the
-    // Uniform storage class -- the StorageBuffer class needs an extension.
+    // storage buffer, spelt as SPIR-V 1.0 spelt one -- a BufferBlock struct in
+    // the Uniform storage class -- which 1.3 still accepts.
     Id Translator::DeclareArrayBlock(Id element, uint32_t count, uint32_t stride, uint32_t set,
                                      uint32_t binding, const char* name)
     {
@@ -346,49 +353,6 @@ namespace
         return variable;
     }
 
-    // A push-constant block whose members start at `offset`, each four bytes
-    // after the last: scalars, or one vector.
-    Id Translator::DeclarePushBlock(std::initializer_list<Id> members, uint32_t offset,
-                                    const char* name)
-    {
-        Id block = m_module.Allocate();
-        std::vector<uint32_t> operands{ block };
-        operands.insert(operands.end(), members.begin(), members.end());
-        // Only a shader built for larger targets has the members, so one built
-        // for the title's own sizes is what it always was.
-        if (m_scaled)
-            for (Id member : { m_uint, m_uint, m_float, m_float }) operands.push_back(member);
-        m_offsetsMember = uint32_t(operands.size()) - 1;
-        for (uint32_t i = 0; i < bindings::kConstantBlocks; i++) operands.push_back(m_uint);
-        auto& declarations = m_module.Declarations();
-        declarations.push_back(Head(Op::TypeStruct, uint32_t(operands.size()) + 1));
-        declarations.insert(declarations.end(), operands.begin(), operands.end());
-        Module::Emit(m_module.Decorations(), Op::Decorate,
-                     { block, uint32_t(Decoration::Block) });
-        for (uint32_t i = 0; i < members.size(); i++)
-            Module::Emit(m_module.Decorations(), Op::MemberDecorate,
-                         { block, i, uint32_t(Decoration::Offset), offset + 4 * i });
-        if (m_scaled)
-        {
-            m_scaledMember = uint32_t(members.size());
-            for (uint32_t i = 0; i < 4; i++)
-                Module::Emit(m_module.Decorations(), Op::MemberDecorate,
-                             { block, m_scaledMember + i, uint32_t(Decoration::Offset),
-                               bindings::kScaledPushOffset + 4 * i });
-        }
-        for (uint32_t i = 0; i < bindings::kConstantBlocks; i++)
-            Module::Emit(m_module.Decorations(), Op::MemberDecorate,
-                         { block, m_offsetsMember + i, uint32_t(Decoration::Offset),
-                           bindings::kConstantPushOffset + 4 * i });
-        Id pointer = m_module.Pointer(StorageClass::PushConstant, block);
-        Id variable = m_module.Allocate();
-        Module::Emit(m_module.Declarations(), Op::Variable,
-                     { pointer, variable, uint32_t(StorageClass::PushConstant) });
-        Module::EmitString(m_module.Debug(), Op::Name, { variable }, name);
-        m_pushBlock = variable;
-        return variable;
-    }
-
     // The size the title gave a texture, from the size of the image bound for
     // it. They differ for a resolve's copy when the render targets are larger
     // than the title's: the copy is the frame's scale or the shadow maps'
@@ -398,9 +362,8 @@ namespace
     {
         if (!m_scaled) return size;
         auto member = [&](uint32_t i, Id type) {
-            return Emit(Op::Load, type,
-                        { Emit(Op::AccessChain, m_module.Pointer(StorageClass::PushConstant, type),
-                               { m_pushBlock, m_module.ConstantU(m_scaledMember + i) }) });
+            return type == m_float ? RecordFloat(bindings::kRecordScaled + i)
+                                   : RecordWord(bindings::kRecordScaled + i);
         };
         auto bound = [&](Id mask) {
             return Emit(Op::INotEqual, m_bool,
@@ -427,8 +390,8 @@ namespace
         const Id pointerInputFloat4 = m_module.Pointer(StorageClass::Input, m_float4);
         const Id pointerOutputFloat4 = m_module.Pointer(StorageClass::Output, m_float4);
 
-        // Every constant is read from the frame arena, at the offset the draw
-        // pushed for its block (bindings.h).
+        // Every constant is read from the frame arena, at the offset the draw's
+        // record holds for its block (bindings.h).
         m_arena = DeclareArrayBlock(m_uint, 0, 4, bindings::kArenaSet, bindings::kArenaBinding,
                                     "arena");
         m_arenaFloats = DeclareArrayBlock(m_float4, 0, 16, bindings::kArenaSet,
@@ -444,23 +407,58 @@ namespace
         // colouring nought and two samples of the 1228800 a frame holds.
         //
         // So the conversion happens here, as Xenia does it: the position is
-        // multiplied and offset on the way out by a transform the pipeline
-        // pushes. With the viewport transform on it is the identity and costs a
+        // multiplied and offset on the way out by a transform in the draw's
+        // record. With the viewport transform on it is the identity and costs a
         // multiply-add; with it off it is `ndc = 2 * window / size - 1`, scaled
         // by w so it survives the perspective divide.
-        if (m_type == shader::Type::Vertex)
-            m_ndc = DeclarePushBlock({ m_float4 }, bindings::kVertexPushOffset, "ndc");
-
+        //
         // The alpha test is fixed-function on the console and does not exist in
         // Vulkan at all, so the comparison has to be in the shader. Its function
         // and reference are register state, not shader state -- the same program
-        // is drawn with the test on and off -- so they arrive as push constants
+        // is drawn with the test on and off -- so they are in the record too,
         // rather than making a pipeline of their own for every reference value.
         // Then two to the power of RB_COLOR_INFO's exponent bias, and non-zero
         // when the colour target is 8_8_8_8_GAMMA.
-        if (m_type == shader::Type::Pixel)
-            m_alphaTest = DeclarePushBlock({ m_uint, m_float, m_float, m_uint },
-                                           bindings::kPixelPushOffset, "alpha_test");
+        //
+        // The record is found through the draw's base vertex, which the
+        // vertex stage passes on flat (bindings.h).
+        {
+            const Id pointerUint = m_module.Pointer(
+                m_type == shader::Type::Vertex ? StorageClass::Output : StorageClass::Input, m_uint);
+            auto flat = [&](Id variable, bool input) {
+                Module::Emit(m_module.Declarations(), Op::Variable,
+                             { pointerUint, variable,
+                               uint32_t(input ? StorageClass::Input : StorageClass::Output) });
+                Module::Emit(m_module.Decorations(), Op::Decorate,
+                             { variable, uint32_t(Decoration::Location), bindings::kRecordLocation });
+                Module::Emit(m_module.Decorations(), Op::Decorate,
+                             { variable, uint32_t(Decoration::Flat) });
+                Module::EmitString(m_module.Debug(), Op::Name, { variable }, "record");
+                m_entryInterface.push_back(variable);
+            };
+            if (m_type == shader::Type::Vertex)
+            {
+                m_module.RequireCapability(kCapabilityDrawParameters);
+                m_recordInput = m_module.Allocate();
+                Module::Emit(m_module.Declarations(), Op::Variable,
+                             { m_module.Pointer(StorageClass::Input, m_int), m_recordInput,
+                               uint32_t(StorageClass::Input) });
+                Module::Emit(m_module.Decorations(), Op::Decorate,
+                             { m_recordInput, uint32_t(Decoration::BuiltIn),
+                               uint32_t(BuiltIn::BaseVertex) });
+                Module::EmitString(m_module.Debug(), Op::Name, { m_recordInput }, "base_vertex");
+                m_entryInterface.push_back(m_recordInput);
+                m_recordOutput = m_module.Allocate();
+                flat(m_recordOutput, false);
+            }
+            else
+            {
+                m_module.RequireCapability(kCapabilityGroupNonUniform);
+                m_module.RequireCapability(kCapabilityGroupNonUniformBallot);
+                m_recordInput = m_module.Allocate();
+                flat(m_recordInput, true);
+            }
+        }
 
         for (uint32_t slot = 0; slot < 32; slot++)
         {
@@ -478,20 +476,33 @@ namespace
             case FetchDimension::Cube: dim = 3; break;
             default:                   dim = 1; break;
             }
-            m_result.textureKinds[slot] = dim == 2 ? 2 : dim == 3 ? 1 : 0;
+            const uint32_t kind = dim == 2 ? 2 : dim == 3 ? 1 : 0;
+            m_result.textureKinds[slot] = uint8_t(kind);
             Id image = m_module.Image(m_float, dim, false);
-            Id sampled = m_module.SampledImage(image);
             m_textureImageTypes[slot] = image;
-            Id pointer = m_module.Pointer(StorageClass::UniformConstant, sampled);
-            Id variable = m_module.Allocate();
-            Module::Emit(m_module.Declarations(), Op::Variable,
-                         { pointer, variable, uint32_t(StorageClass::UniformConstant) });
-            Module::Emit(m_module.Decorations(), Op::Decorate,
-                         { variable, uint32_t(Decoration::DescriptorSet), bindings::kTextureSet });
-            Module::Emit(m_module.Decorations(), Op::Decorate,
-                         { variable, uint32_t(Decoration::Binding), slot });
-            m_textures[slot] = variable;
-            m_textureTypes[slot] = sampled;
+            m_textureTypes[slot] = m_module.SampledImage(image);
+            m_textures[slot] = true;
+            // Set 1's array of this kind, and the samplers (bindings.h). The
+            // kind is the binding.
+            auto declare = [&](Id element, uint32_t count, uint32_t binding, const char* name) {
+                Id pointer = m_module.Pointer(StorageClass::UniformConstant,
+                                              m_module.ArrayOf(element, count));
+                Id variable = m_module.Allocate();
+                Module::Emit(m_module.Declarations(), Op::Variable,
+                             { pointer, variable, uint32_t(StorageClass::UniformConstant) });
+                Module::Emit(m_module.Decorations(), Op::Decorate,
+                             { variable, uint32_t(Decoration::DescriptorSet), bindings::kTextureSet });
+                Module::Emit(m_module.Decorations(), Op::Decorate,
+                             { variable, uint32_t(Decoration::Binding), binding });
+                Module::EmitString(m_module.Debug(), Op::Name, { variable }, name);
+                return variable;
+            };
+            if (!m_imageArrays[kind])
+                m_imageArrays[kind] = declare(image, bindings::kImageCount, kind,
+                                              kind == 2 ? "volumes" : kind == 1 ? "cubes" : "images");
+            if (!m_samplers)
+                m_samplers = declare(m_module.Sampler(), bindings::kSamplerCount,
+                                     bindings::kSamplers, "samplers");
             // Before SPIR-V 1.4 the entry point's interface lists only Input and
             // Output variables.
         }
@@ -618,12 +629,21 @@ namespace
     }
 
     // Where constant block `block` (bindings.h) is in the arena, in dwords, as
-    // the draw pushed it.
+    // the draw's record says.
     Id Translator::ConstantBlock(uint32_t block)
     {
-        return Emit(Op::Load, m_uint,
-                    { Emit(Op::AccessChain, m_module.Pointer(StorageClass::PushConstant, m_uint),
-                           { m_pushBlock, m_module.ConstantU(m_offsetsMember + block) }) });
+        return RecordWord(bindings::kRecordOffsets + block);
+    }
+
+    // Word `index` of the draw's record.
+    Id Translator::RecordWord(uint32_t index)
+    {
+        return ArenaWord(Emit(Op::IAdd, m_uint, { m_record, m_module.ConstantU(index) }));
+    }
+
+    Id Translator::RecordFloat(uint32_t index)
+    {
+        return Emit(Op::Bitcast, m_float, { RecordWord(index) });
     }
 
     Id Translator::ArenaWord(Id dword)
@@ -1542,8 +1562,22 @@ namespace
         // The size of level 0, in texels: offsets are in half texels of it, and
         // unnormalised coordinates are texels of it.
         m_module.RequireCapability(kCapabilityImageQuery);
-        Id sampler = Emit(Op::Load, m_textureTypes[slot], { m_textures[slot] });
-        Id bare = Emit(Op::Image, m_textureImageTypes[slot], { sampler });
+        // The slot's image and sampler, by the indices the record holds for it.
+        Id handle = RecordWord(bindings::kRecordTextures + slot);
+        Id imageIndex = Emit(Op::BitwiseAnd, m_uint,
+                             { handle, m_module.ConstantU((1u << bindings::kHandleImageBits) - 1) });
+        Id samplerIndex = Emit(Op::ShiftRightLogical, m_uint,
+                               { handle, m_module.ConstantU(bindings::kHandleImageBits) });
+        const uint32_t kind = m_result.textureKinds[slot];
+        Id bare = Emit(Op::Load, m_textureImageTypes[slot],
+                       { Emit(Op::AccessChain,
+                              m_module.Pointer(StorageClass::UniformConstant, m_textureImageTypes[slot]),
+                              { m_imageArrays[kind], imageIndex }) });
+        Id samplerObject = Emit(Op::Load, m_module.Sampler(),
+                                { Emit(Op::AccessChain,
+                                       m_module.Pointer(StorageClass::UniformConstant, m_module.Sampler()),
+                                       { m_samplers, samplerIndex }) });
+        Id sampler = Emit(Op::SampledImage, m_textureTypes[slot], { bare, samplerObject });
         const uint32_t sizeCount = dimension == FetchDimension::D3 ? 3 : 2;
         Id size = Emit(Op::ConvertSToF, sizeCount == 3 ? m_module.Float3() : m_module.Float2(),
                        { Emit(Op::ImageQuerySizeLod, m_module.IntVector(sizeCount),
@@ -1975,9 +2009,28 @@ namespace
 
         EmitSequencerState();
 
+        // The record's offset, for every block below. The pixel stage's comes
+        // in as a flat value, the same for every invocation of the draw, which
+        // the compiler cannot know: taken from the first invocation, it is one
+        // scalar register again rather than one per pixel, and so is every
+        // address computed from it.
+        Id baseVertex = 0;
+        if (m_type == shader::Type::Vertex)
+        {
+            baseVertex = Emit(Op::Load, m_int, { m_recordInput });
+            m_record = Emit(Op::Bitcast, m_uint, { baseVertex });
+            Module::Emit(m_module.Code(), Op::Store, { m_recordOutput, m_record });
+        }
+        else
+            m_record = Emit(Op::GroupNonUniformBroadcastFirst, m_uint,
+                            { m_module.ConstantU(kScopeSubgroup),
+                              Emit(Op::Load, m_uint, { m_recordInput }) });
+
         if (m_type == shader::Type::Vertex && m_vertexIndex)
         {
-            Id index = Emit(Op::Load, m_int, { m_vertexIndex });
+            // Less the base vertex, which is the record's offset and not the
+            // title's: the index the title's draw names.
+            Id index = Emit(Op::ISub, m_int, { Emit(Op::Load, m_int, { m_vertexIndex }), baseVertex });
             Id asFloat = Emit(Op::ConvertSToF, m_float, { index });
             Id zero = m_module.ConstantF(0.0f);
             Id value = Emit(Op::CompositeConstruct, m_float4, { asFloat, zero, zero, zero });
@@ -2101,17 +2154,11 @@ namespace
         // results are exactly the bits of the console's compare function --
         // 001 less, 010 equal, 100 greater -- so the whole test is one mask and
         // one and, with `never` and `always` falling out of it for free.
-        if (m_type == shader::Type::Pixel && m_alphaTest && m_colours[0])
+        if (m_type == shader::Type::Pixel && m_colours[0])
         {
             Id uint32 = m_module.Int(false);
-            Id functionPointer = m_module.Pointer(StorageClass::PushConstant, uint32);
-            Id referencePointer = m_module.Pointer(StorageClass::PushConstant, m_float);
-            Id function = Emit(Op::Load, uint32,
-                               { Emit(Op::AccessChain, functionPointer,
-                                      { m_alphaTest, m_module.ConstantU(0) }) });
-            Id reference = Emit(Op::Load, m_float,
-                                { Emit(Op::AccessChain, referencePointer,
-                                       { m_alphaTest, m_module.ConstantU(1) }) });
+            Id function = RecordWord(bindings::kRecordPixel);
+            Id reference = RecordFloat(bindings::kRecordPixel + 1);
             Id alpha = Emit(Op::CompositeExtract, m_float,
                             { Emit(Op::Load, m_float4, { m_colours[0] }), 3 });
             Id zero = m_module.ConstantU(0);
@@ -2147,12 +2194,9 @@ namespace
         // colour the screen gets, and ignoring it left every lit surface a
         // fixed fraction of its brightness. After the alpha test, which the
         // hardware runs on the unbiased alpha.
-        if (m_type == shader::Type::Pixel && m_alphaTest)
+        if (m_type == shader::Type::Pixel)
         {
-            Id scalePointer = m_module.Pointer(StorageClass::PushConstant, m_float);
-            Id scale = Emit(Op::Load, m_float,
-                            { Emit(Op::AccessChain, scalePointer,
-                                   { m_alphaTest, m_module.ConstantU(2) }) });
+            Id scale = RecordFloat(bindings::kRecordPixel + 2);
             for (Id colour : m_colours)
             {
                 if (!colour) continue;
@@ -2172,13 +2216,10 @@ namespace
         // SpirvShaderTranslator::LinearToPWLGamma (BSD-3). Alpha is not
         // converted, and neither is anything drawn into a target that is not
         // the gamma form.
-        if (m_type == shader::Type::Pixel && m_alphaTest)
+        if (m_type == shader::Type::Pixel)
         {
             Id uint32 = m_module.Int(false);
-            Id flagPointer = m_module.Pointer(StorageClass::PushConstant, uint32);
-            Id flag = Emit(Op::Load, uint32,
-                           { Emit(Op::AccessChain, flagPointer,
-                                  { m_alphaTest, m_module.ConstantU(3) }) });
+            Id flag = RecordWord(bindings::kRecordPixel + 3);
             Id wanted = Emit(Op::INotEqual, m_bool, { flag, m_module.ConstantU(0) });
             Id float3 = m_module.Float3();
             Id bool3 = m_module.Vector(m_module.Bool(), 3);
@@ -2228,15 +2269,13 @@ namespace
             }
         }
 
-        // Window coordinates to clip space, from the transform the pipeline
-        // pushed: xy = xy * scale + offset * w. The identity when the viewport
+        // Window coordinates to clip space, from the transform in the draw's
+        // record: xy = xy * scale + offset * w. The identity when the viewport
         // transform is on, which is every draw but the EDRAM clears.
-        if (m_type == shader::Type::Vertex && m_ndc && m_position)
+        if (m_type == shader::Type::Vertex && m_position)
         {
-            Id pointer = m_module.Pointer(StorageClass::PushConstant, m_float4);
-            Id ndc = Emit(Op::Load, m_float4,
-                          { Emit(Op::AccessChain, pointer,
-                                 { m_ndc, m_module.ConstantU(0) }) });
+            Id ndc = BuildVector(RecordFloat(bindings::kRecordNdc), RecordFloat(bindings::kRecordNdc + 1),
+                                 RecordFloat(bindings::kRecordNdc + 2), RecordFloat(bindings::kRecordNdc + 3));
             Id value = Emit(Op::Load, m_float4, { m_position });
             Id w = Emit(Op::CompositeExtract, m_float, { value, 3 });
             auto term = [&](uint32_t component) {

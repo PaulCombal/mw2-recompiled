@@ -8,7 +8,7 @@ would sample at the moment a draw executes.
 |---|---|
 | Fetch constant, tiling, level layout, untiling | `runtime/gpu/texture.{h,cpp}` |
 | Xenos to Vulkan formats and swizzles | `runtime/gpu/vulkan/texture_formats.{h,cpp}` |
-| Images, samplers, descriptor sets, re-reads | `runtime/gpu/vulkan/texture_cache.{h,cpp}` |
+| Images, samplers, the texture set, re-reads | `runtime/gpu/vulkan/texture_cache.{h,cpp}` |
 | The images' memory, in blocks | `runtime/gpu/vulkan/image_memory.{h,cpp}` |
 | Write watch on guest pages | `runtime/gpu/memory_watch.{h,cpp}` |
 | The image pool's block copy | `runtime/image_move.{h,cpp}` |
@@ -145,12 +145,19 @@ swizzle is composed through that (`ComposeSwizzle`).
 `vk::textures::Upload(fetch)` returns an id for the texture the fetch constant
 describes, uploading it the first time it is seen.
 
+- **One set for everything.** Set 1 holds every image the cache has, in the
+  array of its kind at its id, and every sampler at its own slot
+  ([shaders.md](shaders.md#the-module-interface)). An entry is written when
+  the image is made, or when a resolve's copy lends a new view, and the set
+  stays bound: a draw only names, per slot, an image and a sampler
+  (`Handle`). An id is given to another image only once the old one has been
+  unbound for 600 frames, so no pending draw reads an entry being rewritten,
+  and a resolve's copies are replaced only with the device idle.
 - **Kinds.** 1D textures are 2D images one row tall (the translator samples
-  every 1D fetch as 2D). Cubes are cube images, volumes 3D images. A
-  descriptor's view must match the kind the shader declares; where the title
-  binds a 2D texture to a slot the program reads as a cube or volume, a
-  fallback image of the declared kind is bound instead. Unbound slots get a
-  1x1 image, since the layout declares all thirty-two.
+  every 1D fetch as 2D). Cubes are cube images, volumes 3D images. A view
+  must match the kind the shader declares; where the title binds a 2D texture
+  to a slot the program reads as a cube or volume, element 0 of the declared
+  kind's array, a 1x1 stand-in, is named instead. So are unbound slots.
 - **Size limit.** An extent beyond `maxImageDimension2D` is rejected before
   anything is created: creating one is undefined behaviour, not an error, and
   a misparsed fetch constant can describe one. Failures are cached per fetch
@@ -181,7 +188,7 @@ describes, uploading it the first time it is seen.
   texture where one was, the old one is gone. `NewFrame` looks over the cache
   once every 64 frames, a slice of the images a frame:
   - An image is *idle* once unbound for 600 frames, which is past any
-    submission still running, plus one round of the sweep.
+    submission still running.
   - An idle image whose pages the write watch saw written, and whose bytes
     then sign differently, is released. Bound again it would have had to be
     read again anyway. This is what keeps the cache near what the level is
@@ -190,9 +197,6 @@ describes, uploading it the first time it is seen.
   - Past the budget (half the device-local memory, or
     `MW2_TEXTURE_BUDGET_MB`) the idle images bound longest ago go, down to
     three quarters of it.
-  - A descriptor set not handed out for 600 frames is freed back to its pool.
-    A set is used no later than its images are bound, so an idle image has no
-    set left.
   - Released images are destroyed a few a frame (half a millisecond's worth).
   Nothing here waits for the device.
 

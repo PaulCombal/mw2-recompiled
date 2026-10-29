@@ -71,6 +71,12 @@ namespace vk::pipeline
     float    MaxAnisotropy();
     // Whether a sampler may filter a cube's faces apart, as Direct3D 9 does.
     bool     NonSeamlessCubes();
+    // The most draws one vkCmdDrawMulti*EXT call may make; 0 without
+    // VK_EXT_multi_draw.
+    uint32_t MultiDraw();
+    // The most samplers the texture cache may make: the set's slots or the
+    // device's allocation limit, whichever is lower.
+    uint32_t Samplers();
     // Whether shaders can be compiled on their own as pipeline libraries and
     // linked quickly (VK_EXT_graphics_pipeline_library with fast linking).
     bool     PipelineLibraries();

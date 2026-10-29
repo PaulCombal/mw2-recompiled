@@ -55,6 +55,7 @@ namespace spirv
         LoopMerge = 246, SelectionMerge = 247,
         Label = 248, Branch = 249, BranchConditional = 250, Switch = 251, Kill = 252,
         Return = 253, Unreachable = 255,
+        GroupNonUniformBroadcastFirst = 338,
     };
 
     enum class Glsl : uint32_t
@@ -75,7 +76,7 @@ namespace spirv
 
     enum class Decoration : uint32_t
     {
-        Block = 2, BufferBlock = 3, ArrayStride = 6, BuiltIn = 11,
+        Block = 2, BufferBlock = 3, ArrayStride = 6, BuiltIn = 11, Flat = 14,
         NonWritable = 24, Location = 30, Binding = 33, DescriptorSet = 34,
         Offset = 35,
     };
@@ -84,7 +85,7 @@ namespace spirv
     {
         Position = 0, PointSize = 1, FragCoord = 15, FragDepth = 22,
         GlobalInvocationId = 28,
-        VertexIndex = 42, InstanceIndex = 43,
+        VertexIndex = 42, InstanceIndex = 43, BaseVertex = 4424,
     };
 
     class Module
@@ -111,7 +112,7 @@ namespace spirv
                                std::initializer_list<uint32_t> before,
                                const std::string& text);
         // OpEntryPoint: the execution model, the function, its name, and the
-        // Input and Output variables it uses (all that SPIR-V 1.0 lists).
+        // Input and Output variables it uses (all that SPIR-V before 1.4 lists).
         void EntryPoint(uint32_t model, Id function, const std::string& name,
                         const std::vector<Id>& interface);
 
@@ -166,6 +167,7 @@ namespace spirv
         // SPIR-V ImageFormat -- 4 is Rgba8, which is the only one used here.
         Id StorageImage(Id sampledType, uint32_t dim, uint32_t format);
         Id SampledImage(Id image);
+        Id Sampler();
     };
 
     inline uint32_t Head(Op op, uint32_t words) { return (words << 16) | uint32_t(op); }

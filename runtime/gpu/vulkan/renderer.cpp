@@ -293,6 +293,12 @@ bool vk::renderer::Initialise()
     dispatch.setDepthCompareOp = PFN_vkCmdSetDepthCompareOpEXT(command("vkCmdSetDepthCompareOpEXT"));
     dispatch.setStencilTestEnable = PFN_vkCmdSetStencilTestEnableEXT(command("vkCmdSetStencilTestEnableEXT"));
     dispatch.setStencilOp = PFN_vkCmdSetStencilOpEXT(command("vkCmdSetStencilOpEXT"));
+    if ((dispatch.multiDraw = vk::pipeline::MultiDraw()))
+    {
+        dispatch.drawMulti = PFN_vkCmdDrawMultiEXT(command("vkCmdDrawMultiEXT"));
+        dispatch.drawMultiIndexed = PFN_vkCmdDrawMultiIndexedEXT(command("vkCmdDrawMultiIndexedEXT"));
+        if (!dispatch.drawMulti || !dispatch.drawMultiIndexed) dispatch.multiDraw = 0;
+    }
     if (!dispatch.beginRendering || !dispatch.endRendering || !dispatch.setCullMode ||
         !dispatch.setStencilOp)
     {
@@ -352,7 +358,7 @@ bool vk::renderer::Initialise()
     PrewarmFromCache();
     // A lost device ends the run, the way closing the window does.
     vk::pipeline::OnDeviceLost(crash::RequestExit);
-    vk::record::Start();
+    vk::record::Start(MakeGatheredDraws);
     return true;
 }
 

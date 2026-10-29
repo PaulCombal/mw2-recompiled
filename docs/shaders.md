@@ -116,29 +116,57 @@ shader and nothing is reflected at bind time.
 
 ```
 set 0  nothing
-set 1  binding N  combined image sampler per texture fetch slot (32)
+set 1  binding 0  texture2D[65536]    every 2D texture the cache holds, at its id
+       binding 1  textureCube[65536]  every cube map
+       binding 2  texture3D[65536]    every volume
+       binding 3  sampler[4096]       every sampler state
+       element 0 of each image array is a 1x1 stand-in
 set 2  binding 0  uint[]   the frame arena, as dwords
        binding 1  vec4[]   the same, as vec4
-push constants
-  pixel  (offset 0, 16 B)   alpha function, alpha reference, colour scale, gamma-target flag
-  vertex (offset 16, 16 B)  float2 scale, float2 offset: window to clip space
-  both   (offset 32, 16 B)  a bit per texture slot bound to a resolve's copy at the
-                            frame's scale, the same at the shadow maps' scale, and the
-                            reciprocal of each scale; only in shaders built under
-                            MW2_SCALE or MW2_SHADOW_SCALE
-  both   (offset 48, 20 B)  where each constant block is in the arena, in dwords:
-                            0  the vertex constant table
-                            1  vertex fetch constants (96 pairs of dwords, each padded to four)
-                            2  256 boolean constants, packed bits (8 dwords)
-                            3  32 loop constants
-                            4  pixel float constants, 256 vec4 from SQ_PS_CONST's base
+no push constants
+the draw's record, in the arena at the dword the draw passes as its base vertex
+(vertexOffset, or firstVertex for a draw without indices):
+  0   (5 words)  where each constant block is in the arena, in dwords:
+                   0  the vertex constant table
+                   1  vertex fetch constants (96 pairs of dwords, each padded to four)
+                   2  256 boolean constants, packed bits (8 dwords)
+                   3  32 loop constants
+                   4  pixel float constants, 256 vec4 from SQ_PS_CONST's base
+  5   (4)        vertex: float2 scale, float2 offset, window to clip space
+  9   (4)        pixel: alpha function, alpha reference, colour scale, gamma-target flag
+  13  (4)        both: a bit per texture slot bound to a resolve's copy at the frame's
+                 scale, the same at the shadow maps' scale, and the reciprocal of each
+                 scale; read only by shaders built under MW2_SCALE or MW2_SHADOW_SCALE
+  17  (1 a slot) both: per fetch slot up to the highest sampled, the image's index
+                 (low 16 bits) and the sampler's (high 16)
 ```
 
+- **Finding the record.** The vertex shader reads `BaseVertex`, the same for
+  the whole draw, which the GPU keeps in one scalar register, and takes it
+  away from `VertexIndex` before `r0.x` is made from it. It passes the value
+  to the pixel shader as a flat output at location 16, after the sixteen
+  interpolators. The base vertex rather than the first instance, because a run
+  of draws made with one `vkCmdDrawMultiIndexedEXT` shares its first instance
+  but not its vertex offsets. The compiler cannot know a flat input is the same
+  in every pixel, so the pixel shader takes it from the subgroup's first
+  invocation (`OpGroupNonUniformBroadcastFirst`). Without that, every
+  constant read in a pixel shader would be a load per pixel. A subgroup never
+  spans two draws: a texture index without `NonUniform` already relies on
+  that.
+- **Why no push constants.** RADV places push constants per draw by reading
+  each bound shader's description, a cache miss on every draw, which was a
+  third of the recorder thread's time; binding a texture set per draw was
+  another tenth. Both are gone: the two sets are bound once a command buffer,
+  and a draw is a pipeline when it changes, the dynamic state that changed,
+  and the draw.
+- **Modules are SPIR-V 1.3**, the first version with `BaseVertex` and the
+  subgroup operations in the core. Before 1.4 an entry point lists only its
+  Input and Output variables.
+
 - Every constant is in the frame arena, copied there from the register file,
-  and found by the offset the draw pushes for its block. Pushing five words
-  costs the driver little; binding five dynamic uniform blocks at every draw,
-  as the runtime did before, cost a descriptor upload each time, and nearly
-  every draw moves one of them.
+  and found by the offset the draw's record holds for its block. Binding five
+  dynamic uniform blocks at every draw, as the runtime once did, cost a
+  descriptor upload each time, and nearly every draw moves one of them.
 - The hardware constant file holds 512 vec4; `SQ_VS_CONST` and `SQ_PS_CONST`
   give each stage a window into it (D3D9 gives vertex the low half, pixel the
   high half).
@@ -257,7 +285,7 @@ Xenos has no vertex input stage. The sequencer writes the vertex index into
 pipeline declares no vertex input state and the shader does the same
 computation:
 
-- `r0.x` is `gl_VertexIndex`, converted to float at entry.
+- `r0.x` is `gl_VertexIndex - gl_BaseVertex`, converted to float at entry.
 - A full `vfetch` reads its fetch constant from binding 1: dword 0 is the
   buffer address in dwords with a two-bit type below it (`>> 2`), dword 1's low
   two bits are the endianness. The address is
@@ -326,9 +354,9 @@ the sampler comes from the fetch constant alone.
 ### Fixed-function state in the shader
 
 - **Alpha test.** The console's alpha test is fixed-function and Vulkan has
-  none, so the pixel shader compares against the pushed function and
-  reference. The compare-function bits (001 less, 010 equal, 100 greater) are
-  a mask over the three comparison results.
+  none, so the pixel shader compares against the function and reference in
+  the draw's record. The compare-function bits (001 less, 010 equal, 100
+  greater) are a mask over the three comparison results.
 - **Colour exponent bias.** The console scales a pixel shader's output by
   2^`RB_COLOR_INFO` exponent bias on the way into EDRAM; the title renders the
   world with a bias. Applied after the alpha test, which runs on the unbiased
@@ -338,7 +366,7 @@ the sampler comes from the fetch constant alone.
   converted.
 - **Pre-transformed vertices.** With the viewport transform off, a program
   emits window coordinates (D3D9 XYZRHW); Vulkan would clip those away. The
-  vertex shader applies `xy = xy * scale + offset * w` from push constants —
+  vertex shader applies `xy = xy * scale + offset * w` from the draw's record —
   the identity when the viewport transform is on, `2 * window / size - 1`
   otherwise. MW2's EDRAM clears depend on this.
 

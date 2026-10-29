@@ -66,11 +66,11 @@ namespace vk::renderer::detail
         // slot and the buffer being recorded may still name the image being
         // replaced.
         if (into.image) RetireBeforeDestroy();
-        // The texture cache has built sets on these views. Its own check -- the
-        // view behind an id changed -- misses a replacement that gets the old
-        // handle back, and a set on the freed image is a texture read of unbacked
+        // The texture cache's set holds these views. Its own check -- the view
+        // behind an id changed -- misses a replacement that gets the old handle
+        // back, and an entry on the freed image is a texture read of unbacked
         // memory: the TCP page faults that hung the GPU in play and under capture.
-        if (into.image) vk::textures::ForgetSets();
+        if (into.image) vk::textures::ForgetViews();
         if (into.view) vkDestroyImageView(g.device, into.view, nullptr);
         if (into.gammaView) vkDestroyImageView(g.device, into.gammaView, nullptr);
         if (into.image) vkDestroyImage(g.device, into.image, nullptr);

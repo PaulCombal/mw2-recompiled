@@ -33,8 +33,9 @@ uint64_t vk::textures::UploadData(const gpu::TextureData&, uint32_t, const char*
     return kNone;
 }
 uint64_t vk::textures::Adopt(uint64_t, void*, const gpu::TextureFetch&) { return kNone; }
-void vk::textures::ForgetSets() {}
-void* vk::textures::DescriptorSet(const uint64_t*, const uint8_t*) { return nullptr; }
+void vk::textures::ForgetViews() {}
+uint32_t vk::textures::Handle(uint64_t, uint8_t) { return 0; }
+void* vk::textures::Set() { return nullptr; }
 bool  vk::textures::Readback(uint64_t, std::vector<uint8_t>&, const char** error)
 {
     if (error) *error = "built without Vulkan";
@@ -84,8 +85,12 @@ namespace
         vk::imagememory::Range memory;
         VkImageView view = VK_NULL_HANDLE;
         // Borrowed from the sampler cache; what an id that names no sampler
-        // of its own is sampled with.
+        // of its own is sampled with, and its place in the bindless set.
         VkSampler sampler = VK_NULL_HANDLE;
+        uint32_t samplerSlot = 0;
+        // The view the bindless set holds at this id; null when it holds none
+        // that is still good.
+        VkImageView written = VK_NULL_HANDLE;
         VkFormat format = VK_FORMAT_UNDEFINED;
         uint32_t width = 0, height = 0;
         uint32_t blocksWide = 0, blocksHigh = 0, bytesPerBlock = 0;
@@ -191,9 +196,9 @@ namespace
         UploadSlot uploadSlots[vk::textures::kUploadSlots];
         UploadSlot* open = nullptr;   // uploads open between BeginUploads and EndSubmission
         uint64_t uploadsBatched = 0, uploadsAlone = 0, stagingOverflows = 0;
-        // One pool fills up; a level binds far more distinct combinations of
-        // textures than the menu, so pools are added as they are needed.
-        std::vector<VkDescriptorPool> descriptors;
+        // Set 1: every image at its id, every sampler at its slot (bindings.h).
+        VkDescriptorPool bindlessPool = VK_NULL_HANDLE;
+        VkDescriptorSet bindless = VK_NULL_HANDLE;
 
         uint64_t frame = 0;
         uint64_t refreshed = 0, resigned = 0, invalidatedByWrites = 0;
@@ -238,29 +243,20 @@ namespace
         std::unordered_map<std::array<uint32_t, 6>, uint64_t, WordsHash> byFetch;
         std::unordered_map<std::array<uint32_t, 6>, uint64_t, WordsHash> byContent;
         std::vector<uint64_t> freeIds;                // slots of g.images to use again
-        std::vector<VkSampler> samplerList;           // an id's sampler, by its index less one
+        // A sampler and its slot in the bindless set.
+        struct Sampler { VkSampler sampler = VK_NULL_HANDLE; uint32_t slot = 0; };
+        std::vector<Sampler> samplerList;             // an id's sampler, by its index less one
         std::map<uint64_t, uint32_t> samplerIndex;    // sampler key -> that index
         std::map<uint64_t, uint64_t> adopted;         // caller's key -> id
-        std::map<uint64_t, VkSampler> samplers;
-        // A set, the pool it came from and the frame it was last handed out
-        // in: one nothing has bound for kUnusedFrames goes back to its pool.
-        struct Set { VkDescriptorSet set; uint32_t pool; uint64_t lastUsed; };
-        std::unordered_map<std::array<uint64_t, vk::textures::kSlots>, Set, WordsHash> sets;
-        // The last one DescriptorSet answered with, and its key: draws come in
-        // runs with the same textures. Null whenever a set leaves the map.
-        std::array<uint64_t, vk::textures::kSlots> lastSetKey{};
-        Set* lastSet = nullptr;
-        // Sets dropped from the cache all at once, which commands not yet run
-        // may still bind: freed when they are that old too.
-        std::vector<Set> retiredSets;
-        uint32_t allocPool = 0;   // the pool the last set came from
+        std::map<uint64_t, Sampler> samplers;
         // Images nothing names any more, waiting to be destroyed a few a frame.
         std::deque<Image> doomed;
         Image fallback;
         Image fallbackCube, fallback3D;   // for slots declared as a cube map, a volume
         uint64_t kindMismatches = 0;
 
-        uint32_t uploads = 0, failures = 0, descriptorSets = 0;
+        uint32_t uploads = 0, failures = 0;
+        uint64_t descriptorsWritten = 0;
         uint64_t uploadedBytes = 0;
         uint64_t liveBytes = 0, budget = 0;   // what the uploaded images hold, and may
         uint64_t evicted = 0, evictedBytes = 0, evictionPasses = 0;
@@ -608,12 +604,39 @@ namespace
         return filter == gpu::TextureFilter::Point ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
     }
 
+    // The kind a view was made as, in shader::Translation::textureKinds' terms.
+    uint8_t KindOf(const Image& image)
+    {
+        return image.volume ? 2 : image.layers > 1 ? 1 : 0;
+    }
+
+    // The bindless set's entry for `id`: its view, in the array of its kind.
+    void WriteImage(uint64_t id, Image& image)
+    {
+        VkDescriptorImageInfo info{ VK_NULL_HANDLE, image.view,
+                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = g.bindless;
+        write.dstBinding = KindOf(image);
+        write.dstArrayElement = uint32_t(id);
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        write.pImageInfo = &info;
+        vkUpdateDescriptorSets(g.device, 1, &write, 0, nullptr);
+        image.written = image.view;
+        g.descriptorsWritten++;
+    }
+
     // One sampler per distinct state, keyed on the fetch constant's own bits
-    // and the lowest level the texture may be sampled at.
-    VkSampler SamplerFor(uint64_t key)
+    // and the lowest level the texture may be sampled at. Its slot in the
+    // bindless set is written as it is made; a sampler is never destroyed
+    // before the cache is, so the slot holds it for good.
+    State::Sampler SamplerFor(uint64_t key)
     {
         auto found = g.samplers.find(key);
         if (found != g.samplers.end()) return found->second;
+        const uint32_t slot = uint32_t(g.samplers.size());
+        if (slot >= vk::pipeline::Samplers()) return {};
 
         VkSamplerCreateInfo info{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
         info.magFilter = FilterOf(gpu::TextureFilter((key >> 0) & 3));
@@ -653,9 +676,17 @@ namespace
         }
 
         VkSampler sampler = VK_NULL_HANDLE;
-        if (vkCreateSampler(g.device, &info, nullptr, &sampler) != VK_SUCCESS) return VK_NULL_HANDLE;
-        g.samplers[key] = sampler;
-        return sampler;
+        if (vkCreateSampler(g.device, &info, nullptr, &sampler) != VK_SUCCESS) return {};
+        VkDescriptorImageInfo image{ sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED };
+        VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = g.bindless;
+        write.dstBinding = vk::bindings::kSamplers;
+        write.dstArrayElement = slot;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+        write.pImageInfo = &image;
+        vkUpdateDescriptorSets(g.device, 1, &write, 0, nullptr);
+        return g.samplers[key] = { sampler, slot };
     }
 
     // The sampler's place in an id, making it on first sight; zero when it
@@ -664,8 +695,8 @@ namespace
     {
         auto found = g.samplerIndex.find(key);
         if (found != g.samplerIndex.end()) return found->second;
-        VkSampler sampler = SamplerFor(key);
-        if (!sampler) return 0;
+        const State::Sampler sampler = SamplerFor(key);
+        if (!sampler.sampler) return 0;
         g.samplerList.push_back(sampler);
         return g.samplerIndex[key] = uint32_t(g.samplerList.size());
     }
@@ -686,12 +717,11 @@ namespace
                (uint64_t(fetch.Dimension() == gpu::TextureDimension::Cube) << 24);
     }
 
-    // Set 1 declares thirty-two combined image samplers whatever the shader
-    // samples, and a descriptor a shader never reads still has to be valid.
-    // One per kind a shader can declare a slot as -- 2D, a cube map, a volume --
-    // because a descriptor whose view is not of the kind the module declares is
-    // invalid, and the title does bind a 2D texture where a program fetches a
-    // volume, and a 2D one where it fetches a cube.
+    // Element 0 of each of set 1's image arrays, for a slot with nothing bound
+    // and for one bound to a texture of another kind than the module declares:
+    // a view of the wrong kind is invalid, and the title does bind a 2D
+    // texture where a program fetches a volume, and a 2D one where it fetches
+    // a cube.
     bool MakeFallbackOf(Image& out, uint32_t layers, bool volume)
     {
         out.format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -704,8 +734,12 @@ namespace
         if (!MakeImage(out, nullptr)) return false;
         const std::vector<uint8_t> texels(4 * layers, 0);
         if (!StageInto(out, texels.data(), texels.size(), nullptr)) return false;
-        out.sampler = SamplerFor(0);
-        return out.sampler != VK_NULL_HANDLE;
+        const State::Sampler sampler = SamplerFor(0);
+        out.sampler = sampler.sampler;
+        out.samplerSlot = sampler.slot;
+        if (!out.sampler) return false;
+        WriteImage(0, out);
+        return true;
     }
 
     bool MakeFallback()
@@ -713,12 +747,6 @@ namespace
         return MakeFallbackOf(g.fallback, 1, false) &&
                MakeFallbackOf(g.fallbackCube, 6, false) &&
                MakeFallbackOf(g.fallback3D, 1, true);
-    }
-
-    // The kind a view was made as, in shader::Translation::textureKinds' terms.
-    uint8_t KindOf(const Image& image)
-    {
-        return image.volume ? 2 : image.layers > 1 ? 1 : 0;
     }
 
     const Image& FallbackOf(uint8_t kind)
@@ -736,19 +764,25 @@ namespace
             g.freeIds.pop_back();
             return id;
         }
+        // An id is also the image's place in the bindless set, which has
+        // room for so many.
+        if (g.images.size() + 1 >= vk::bindings::kImageCount) return 0;
         g.images.emplace_back();
         return uint64_t(g.images.size());
     }
 
     uint64_t Store(Image& image)
     {
+        const uint64_t id = NewSlot();
+        if (!id) return vk::textures::kNone;
         image.lastBound = g.frame;
         image.boundSegment = g.segment;
         g.uploads++;
         g.uploadedBytes += image.bytes;
         g.liveBytes += image.bytes;
-        const uint64_t id = NewSlot();
-        g.images[size_t(id - 1)] = image;
+        Image& stored = g.images[size_t(id - 1)];
+        stored = image;
+        WriteImage(id, stored);
         return id;
     }
 
@@ -764,10 +798,12 @@ namespace
         return &g.images[size_t(id - 1)];
     }
 
-    VkSampler SamplerOf(uint64_t id, const Image& image)
+    // The bindless slot of the sampler an id is bound with.
+    uint32_t SamplerSlotOf(uint64_t id, const Image& image)
     {
         const uint32_t index = uint32_t(id >> kSamplerShift) & 0x3FFFFFFFu;
-        return index && index <= g.samplerList.size() ? g.samplerList[index - 1] : image.sampler;
+        return index && index <= g.samplerList.size() ? g.samplerList[index - 1].slot
+                                                       : image.samplerSlot;
     }
 
     // Every byte of the texture's memory, four lanes wide to keep the multiplies
@@ -866,39 +902,47 @@ namespace
             DestroyImage(image);
             return vk::textures::kNone;
         }
-        image.sampler = SamplerFor(samplerKey);
+        const State::Sampler sampler = SamplerFor(samplerKey);
+        image.sampler = sampler.sampler;
+        image.samplerSlot = sampler.slot;
         if (!image.sampler)
         {
             DestroyImage(image);
             Fail("no sampler", error);
             return vk::textures::kNone;
         }
-        return Store(image);
+        const uint64_t id = Store(image);
+        if (!id)
+        {
+            DestroyImage(image);
+            Fail("no room in the bindless set", error);
+        }
+        return id;
     }
 }
 
 namespace
 {
-    // A set per distinct combination of bound textures. The menu needs a couple of
-    // hundred; a level needs thousands at once, so the answer is another pool
-    // rather than a bigger one.
-    constexpr uint32_t kSetsPerPool = 1024;
-
-    bool AddDescriptorPool()
+    // The one set every draw samples through (bindings.h).
+    bool MakeBindlessSet()
     {
-        VkDescriptorPoolSize size{};
-        size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        size.descriptorCount = kSetsPerPool * vk::textures::kSlots;
+        const VkDescriptorPoolSize sizes[2] = {
+            { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, vk::bindings::kImageCount * vk::bindings::kImageKinds },
+            { VK_DESCRIPTOR_TYPE_SAMPLER, vk::bindings::kSamplerCount } };
         VkDescriptorPoolCreateInfo info{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-        // A set nothing binds any more is freed on its own (SweepSets).
-        info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        info.maxSets = kSetsPerPool;
-        info.poolSizeCount = 1;
-        info.pPoolSizes = &size;
-        VkDescriptorPool pool = VK_NULL_HANDLE;
-        if (vkCreateDescriptorPool(g.device, &info, nullptr, &pool) != VK_SUCCESS) return false;
-        g.descriptors.push_back(pool);
-        return true;
+        info.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+        info.maxSets = 1;
+        info.poolSizeCount = 2;
+        info.pPoolSizes = sizes;
+        if (vkCreateDescriptorPool(g.device, &info, nullptr, &g.bindlessPool) != VK_SUCCESS)
+            return false;
+        VkDescriptorSetLayout layout =
+            static_cast<VkDescriptorSetLayout>(vk::pipeline::SetLayout(vk::bindings::kTextureSet));
+        VkDescriptorSetAllocateInfo allocate{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+        allocate.descriptorPool = g.bindlessPool;
+        allocate.descriptorSetCount = 1;
+        allocate.pSetLayouts = &layout;
+        return layout && vkAllocateDescriptorSets(g.device, &allocate, &g.bindless) == VK_SUCCESS;
     }
 }
 
@@ -968,9 +1012,9 @@ bool vk::textures::Initialise()
         }
     }
 
-    if (!AddDescriptorPool())
+    if (!MakeBindlessSet())
     {
-        LOGW("textures: no descriptor pool");
+        LOGW("textures: no descriptor set for the textures");
         Shutdown();
         return false;
     }
@@ -997,18 +1041,16 @@ void vk::textures::Shutdown()
     g.freeIds.clear();
     g.byFetch.clear();
     g.byContent.clear();
-    g.sets.clear();
-    g.lastSet = nullptr;
-    g.retiredSets.clear();
     g.samplerList.clear();
     g.samplerIndex.clear();
     DestroyImage(g.fallback);
     DestroyImage(g.fallbackCube);
     DestroyImage(g.fallback3D);
-    for (auto& [key, sampler] : g.samplers) vkDestroySampler(g.device, sampler, nullptr);
+    for (auto& [key, sampler] : g.samplers) vkDestroySampler(g.device, sampler.sampler, nullptr);
     g.samplers.clear();
-    for (VkDescriptorPool pool : g.descriptors) vkDestroyDescriptorPool(g.device, pool, nullptr);
-    g.descriptors.clear();
+    if (g.bindlessPool) vkDestroyDescriptorPool(g.device, g.bindlessPool, nullptr);
+    g.bindlessPool = VK_NULL_HANDLE;
+    g.bindless = VK_NULL_HANDLE;
     vk::imagememory::Shutdown(g.device);
     g.open = nullptr;
     for (UploadSlot& slot : g.uploadSlots)
@@ -1224,54 +1266,21 @@ void vk::textures::MemoryWritten(uint32_t physicalAddress, uint32_t size)
 
 namespace
 {
-    // How long an image or a set goes unbound before it may be let go: ten
-    // seconds of frames, far past any submission still running or any command
-    // the recorder thread has yet to make.
+    // How long an image goes unbound before it may be let go: ten seconds of
+    // frames, far past any submission still running or any command the
+    // recorder thread has yet to make -- which is what lets its id, and its
+    // entry in the bindless set, be given to another image.
     constexpr uint64_t kUnusedFrames = 600;
-    // The cache is looked over once in this many frames: the sets in one go at
-    // the start of the round, the images a slice a frame.
+    // The cache is looked over once in this many frames, the images a slice a
+    // frame.
     constexpr uint64_t kSweepFrames = 64;
 
-    void FreeSet(const State::Set& entry)
-    {
-        vkFreeDescriptorSets(g.device, g.descriptors[entry.pool], 1, &entry.set);
-    }
-
-    // Every cached set at once, for a view that changed under an id. Commands
-    // not yet run may still bind them, so they are freed with the unused.
-    void RetireSets()
-    {
-        for (const auto& [key, entry] : g.sets)
-            g.retiredSets.push_back({ entry.set, entry.pool, g.frame });
-        g.sets.clear();
-        g.lastSet = nullptr;
-    }
-
-    void SweepSets()
-    {
-        g.lastSet = nullptr;
-        for (auto entry = g.sets.begin(); entry != g.sets.end();)
-        {
-            if (g.frame - entry->second.lastUsed < kUnusedFrames) { ++entry; continue; }
-            FreeSet(entry->second);
-            entry = g.sets.erase(entry);
-        }
-        size_t kept = 0;
-        for (const State::Set& entry : g.retiredSets)
-        {
-            if (g.frame - entry.lastUsed < kUnusedFrames) g.retiredSets[kept++] = entry;
-            else FreeSet(entry);
-        }
-        g.retiredSets.resize(kept);
-    }
-
     // Whether an image can be let go: one of the cache's own, and unbound for
-    // so long that the sweep of sets since has freed every set that held it
-    // -- a set is used no later than the images in it are bound.
+    // that long.
     bool Idle(const Image& image)
     {
         return image.image && !image.borrowed && !image.pinned &&
-               g.frame - image.lastBound >= kUnusedFrames + kSweepFrames;
+               g.frame - image.lastBound >= kUnusedFrames;
     }
 
     // The image stops existing for the cache now; its Vulkan objects are
@@ -1401,17 +1410,13 @@ void vk::textures::NewFrame()
             }
             const vk::imagememory::Totals memory = vk::imagememory::Held();
             LOGI("textures: %llu held (%llu MB), %llu of them bound in the last 600 frames (%llu MB);"
-                 " %llu blocks of memory (%llu MB), %zu descriptor sets",
+                 " %llu blocks of memory (%llu MB), %zu ids",
                  (unsigned long long)held, (unsigned long long)(g.liveBytes >> 20),
                  (unsigned long long)recent, (unsigned long long)(recentBytes >> 20),
                  (unsigned long long)memory.blocks, (unsigned long long)(memory.blockBytes >> 20),
-                 g.sets.size());
+                 g.images.size());
         }
-    if (g.frame % kSweepFrames == 0)
-    {
-        SweepSets();
-        if (g.liveBytes > g.budget) Evict();
-    }
+    if (g.frame % kSweepFrames == 0 && g.liveBytes > g.budget) Evict();
     SweepImages();
     DestroyDoomed();
 }
@@ -1732,99 +1737,33 @@ uint64_t vk::textures::Adopt(uint64_t key, void* view, const gpu::TextureFetch& 
 
     auto found = g.adopted.find(key);
     const uint64_t id = found != g.adopted.end() ? found->second : NewSlot();
+    if (!id) return kNone;
     if (found == g.adopted.end()) g.adopted[key] = id;
     Image& image = g.images[size_t(id - 1)];
-    // The sets cache is keyed on ids, so an id whose view changed would hand back
-    // a set pointing at the old one.
-    if (image.view != static_cast<VkImageView>(view) && image.view) RetireSets();
     image.borrowed = true;
     image.view = static_cast<VkImageView>(view);
+    // A copy's view changes only once the GPU is done with the old one
+    // (ForgetViews), so nothing pending reads the entry being rewritten.
+    if (image.written != image.view) WriteImage(id, image);
     return id | (uint64_t(sampler) << kSamplerShift);
 }
 
-void vk::textures::ForgetSets() { RetireSets(); }
-
-void* vk::textures::DescriptorSet(const uint64_t ids[kSlots], const uint8_t* kinds)
+void vk::textures::ForgetViews()
 {
-    if (!g.device) return nullptr;
-
-    // The declared kind is part of the key: the same textures bound for a
-    // program that reads a slot as a volume need a different set.
-    std::array<uint64_t, kSlots> key{};
-    for (uint32_t i = 0; i < kSlots; i++)
-        key[i] = ids[i] | (uint64_t(kinds ? kinds[i] : 0) << 62);
-    if (g.lastSet && key == g.lastSetKey)
-    {
-        g.lastSet->lastUsed = g.frame;
-        return g.lastSet->set;
-    }
-    auto found = g.sets.find(key);
-    if (found != g.sets.end())
-    {
-        found->second.lastUsed = g.frame;
-        g.lastSetKey = key;
-        g.lastSet = &found->second;
-        return found->second.set;
-    }
-
-    VkDescriptorSetLayout layout =
-        static_cast<VkDescriptorSetLayout>(vk::pipeline::SetLayout(1));
-    if (!layout) return nullptr;
-
-    VkDescriptorSetAllocateInfo allocate{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
-    allocate.descriptorSetCount = 1;
-    allocate.pSetLayouts = &layout;
-    VkDescriptorSet set = VK_NULL_HANDLE;
-    // A full pool is not an error: another may have room since sets were
-    // freed from it, and when none has, it is the signal to open one more.
-    VkResult r = VK_ERROR_OUT_OF_POOL_MEMORY;
-    const uint32_t pools = uint32_t(g.descriptors.size());
-    for (uint32_t n = 0; n < pools && r != VK_SUCCESS; n++)
-    {
-        const uint32_t pool = (g.allocPool + n) % pools;
-        allocate.descriptorPool = g.descriptors[pool];
-        r = vkAllocateDescriptorSets(g.device, &allocate, &set);
-        if (r == VK_SUCCESS) g.allocPool = pool;
-        else if (r != VK_ERROR_OUT_OF_POOL_MEMORY && r != VK_ERROR_FRAGMENTED_POOL) break;
-    }
-    if (r == VK_ERROR_OUT_OF_POOL_MEMORY || r == VK_ERROR_FRAGMENTED_POOL)
-    {
-        if (!AddDescriptorPool()) { Fail("no descriptor pool", nullptr); return nullptr; }
-        g.allocPool = uint32_t(g.descriptors.size()) - 1;
-        allocate.descriptorPool = g.descriptors.back();
-        r = vkAllocateDescriptorSets(g.device, &allocate, &set);
-    }
-    if (r != VK_SUCCESS)
-    {
-        Fail(Explain(r), nullptr);
-        return nullptr;
-    }
-
-    VkDescriptorImageInfo images[kSlots]{};
-    VkWriteDescriptorSet writes[kSlots]{};
-    for (uint32_t i = 0; i < kSlots; i++)
-    {
-        const uint8_t want = kinds ? kinds[i] : 0;
-        const Image* image = Find(ids[i]);
-        if (image && !image->view) image = nullptr;   // released
-        if (image && KindOf(*image) != want) { image = nullptr; g.kindMismatches++; }
-        if (!image) image = &FallbackOf(want);
-        images[i].imageView = image->view;
-        images[i].sampler = SamplerOf(ids[i], *image);
-        images[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = set;
-        writes[i].dstBinding = i;
-        writes[i].descriptorCount = 1;
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[i].pImageInfo = &images[i];
-    }
-    vkUpdateDescriptorSets(g.device, kSlots, writes, 0, nullptr);
-    g.sets[key] = { set, g.allocPool, g.frame };
-    g.descriptorSets++;
-    return set;
+    for (Image& image : g.images)
+        if (image.borrowed) image.written = VK_NULL_HANDLE;
 }
+
+uint32_t vk::textures::Handle(uint64_t id, uint8_t kind)
+{
+    const Image* image = Find(id);
+    if (image && !image->written) image = nullptr;   // released
+    if (image && KindOf(*image) != kind) { image = nullptr; g.kindMismatches++; }
+    const uint32_t sampler = SamplerSlotOf(id, image ? *image : FallbackOf(kind));
+    return (image ? uint32_t(id & kImageBits) : 0u) | (sampler << vk::bindings::kHandleImageBits);
+}
+
+void* vk::textures::Set() { return g.bindless; }
 
 bool vk::textures::Readback(uint64_t id, std::vector<uint8_t>& bytes, const char** error)
 {
@@ -1880,10 +1819,10 @@ void vk::textures::Report()
 {
     if constexpr (!diag::kOn) return;
     if (!g.uploads && !g.failures) return;
-    LOGI("textures: %u uploaded (%llu KB), %u failed, %u descriptor sets, %llu bound as"
+    LOGI("textures: %u uploaded (%llu KB), %u failed, %llu descriptors written, %llu bound as"
          " a fallback because the shader declares another kind",
          g.uploads, (unsigned long long)(g.uploadedBytes / 1024), g.failures,
-         g.descriptorSets, (unsigned long long)g.kindMismatches);
+         (unsigned long long)g.descriptorsWritten, (unsigned long long)g.kindMismatches);
     for (const auto& [reason, count] : g.failureReasons)
         LOGI("textures:   %6u  %s", count, reason.c_str());
     if (g.linearisedRefused)

@@ -767,6 +767,11 @@ void vk::renderer::Report()
          (unsigned long long)g.frames, (unsigned long long)g.drawsRecorded,
          (unsigned long long)g.draws, (unsigned long long)g.resolves,
          (unsigned long long)g.depthResolves, g.pipelineCount, g.shaderCount);
+    if (const GatheredCounts& made = Gathered(); made.draws)
+        LOGI("renderer: %llu draws made, %llu of them in %llu runs made with one call each,"
+             " %llu on their own", (unsigned long long)made.draws.load(),
+             (unsigned long long)made.inRuns.load(), (unsigned long long)made.runs.load(),
+             (unsigned long long)made.alone.load());
     if (g.textureSlotsKept || g.textureSlotsLookedUp)
         LOGI("renderer: texture slots bound: %llu kept from the draw before, %llu looked up",
              (unsigned long long)g.textureSlotsKept, (unsigned long long)g.textureSlotsLookedUp);

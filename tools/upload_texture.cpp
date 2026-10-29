@@ -97,6 +97,7 @@ int main(int argc, char** argv)
     std::printf("device: %s, %ux%u\n\n", vk::pipeline::DeviceName(), width, height);
 
     uint32_t tried = 0, matched = 0, skipped = 0, failed = 0;
+    std::vector<uint64_t> uploaded;
     for (uint32_t format = 0; format < 64; format++)
     {
         if (only >= 0 && format != uint32_t(only)) continue;
@@ -128,6 +129,7 @@ int main(int argc, char** argv)
             failed++;
             continue;
         }
+        uploaded.push_back(id);
 
         std::vector<uint8_t> back;
         if (!vk::textures::Readback(id, back, &error))
@@ -152,15 +154,16 @@ int main(int argc, char** argv)
             std::printf("%-20s   %zu of %zu bytes differ\n", "", differing, data.bytes.size());
     }
 
-    // A descriptor set over the uploads, which is the other half of the path:
-    // an image nothing can bind is not uploaded, it is leaked.
-    uint64_t slots[vk::textures::kSlots]{};
-    for (uint32_t i = 0; i < vk::textures::kSlots && i < tried; i++) slots[i] = i + 1;
-    const bool bound = vk::textures::DescriptorSet(slots) != nullptr;
+    // Each upload's place in the texture set, which is the other half of the
+    // path: an image nothing can bind is not uploaded, it is leaked.
+    bool bound = vk::textures::Set() != nullptr;
+    for (uint64_t id : uploaded)
+        bound = bound && (vk::textures::Handle(id, 0) &
+                          ((1u << vk::bindings::kHandleImageBits) - 1)) == id;
 
     std::printf("\n%u formats: %u exact, %u wrong, %u with no Vulkan equivalent\n",
                 tried, matched, failed, skipped);
-    std::printf("descriptor set over %u slots: %s\n", vk::textures::kSlots,
+    std::printf("texture set entries for %zu uploads: %s\n", uploaded.size(),
                 bound ? "written" : "FAILED");
     vk::textures::Report();
     vk::textures::Shutdown();

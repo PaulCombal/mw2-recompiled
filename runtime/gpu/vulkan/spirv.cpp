@@ -7,9 +7,12 @@ using namespace spirv;
 
 namespace
 {
-    // 1.0 is what Vulkan 1.0 requires and every driver accepts.
+    // 1.3 is Vulkan 1.1's, the first with BaseVertex and subgroup operations
+    // in the core, which the translated shaders read a draw's record with
+    // (bindings.h). Still before 1.4, so an entry point lists only its Input
+    // and Output variables.
     constexpr uint32_t kMagic = 0x07230203u;
-    constexpr uint32_t kVersion = 0x00010000u;
+    constexpr uint32_t kVersion = 0x00010300u;
     // Registered generator ids are handed out by Khronos; 0 is "unknown".
     constexpr uint32_t kGenerator = 0u;
 
@@ -92,6 +95,8 @@ Id Module::StorageImage(Id sampledType, uint32_t dim, uint32_t format)
     return Cached({ uint32_t(Op::TypeImage) | 0x10000u, sampledType, dim | (format << 8) },
                   Op::TypeImage, 0, { sampledType, dim, 0, 0, 0, 2, format });
 }
+
+Id Module::Sampler() { return Cached({ uint32_t(Op::TypeSampler), 0, 0 }, Op::TypeSampler, 0, {}); }
 
 Id Module::SampledImage(Id image)
 {

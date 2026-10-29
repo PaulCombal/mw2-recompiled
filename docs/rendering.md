@@ -71,9 +71,12 @@ dependencies.
 `Draw` resolves the topology, both shaders (by microcode hash) and the scissor,
 and handles the clear idiom. It finds the targets and opens a rendering
 instance if they changed. It writes indices, constants and vertex data into the
-arena, builds the pipeline and texture set, and queues a `DrawOp` holding only
-the state that differs from what the command buffer has bound. Draws that
-cannot be made are counted by reason (`Skip`).
+arena, builds the pipeline, finds each sampled texture's place in the texture
+set, and writes the draw's record: where its constants are, its textures, and
+the register state its shaders apply. It queues a `DrawOp` holding only the
+dynamic state that differs from what the command buffer has bound, and the
+draw, which names its record as its base vertex. Draws that cannot be made
+are counted by reason (`Skip`).
 
 Primitives 1-6 map to Vulkan's point, line and triangle topologies, and 12 (line
 loop) to a line strip. 8 (rectangle list) becomes triangles `a b c a c d`, with
@@ -88,7 +91,7 @@ float except where all three corners agree (packed colours).
 | stencil ref and masks | `RB_STENCILREFMASK(_BF)` | dynamic |
 | depth bias | `PA_SU_POLY_OFFSET_*` | dynamic |
 | viewport, scissor | `PA_CL_VPORT_*`, `PA_CL_VTE_CNTL`, `PA_SC_WINDOW_SCISSOR_*` | dynamic |
-| alpha test | `RB_COLORCONTROL`, `RB_ALPHA_REF` | pixel push constant |
+| alpha test | `RB_COLORCONTROL`, `RB_ALPHA_REF` | the draw's record |
 
 - **Viewport.** The Vulkan viewport is `height = 2 * scale`, `y = offset -
   scale`, **with signs kept**. Xenos expresses +Y up as a negative Y scale.
@@ -97,8 +100,8 @@ float except where all three corners agree (packed colours).
   `GetViewportInfo`).
 - **Pre-transformed vertices.** With the X/Y scale off, the shader has emitted
   window coordinates (D3D9's `XYZRHW`), which Vulkan would clip away. The
-  vertex epilogue applies `(2 / guest pitch, 2 / height, -1, -1)` from push
-  constants over a whole-target viewport, and the identity for other draws.
+  vertex epilogue applies `(2 / guest pitch, 2 / height, -1, -1)` from the
+  draw's record over a whole-target viewport, and the identity for other draws.
 - **Depth bias** uses Xenia's conversion. The offset is scaled by 2^24
   (`D24FS8`) or 2^24 - 1 (`D24S8`), and the slope is divided by 16.
 - **Alpha test** runs in the pixel shader, and is forced to `ALWAYS` in
@@ -126,11 +129,12 @@ arena held, which nothing reads.
 | Set | Contents |
 |---|---|
 | 0 | nothing |
-| 1 | textures |
+| 1 | every texture and sampler, bound once per command buffer |
 | 2 | the arena as dwords and as vec4, bound once per command buffer |
 
-A draw pushes where each of its five constant blocks is in the arena
-([shaders.md](shaders.md#the-module-interface)).
+A draw's record says where each of its five constant blocks is in the arena
+([shaders.md](shaders.md#the-module-interface)). Consecutive draws whose
+records would be the same share one.
 
 - **Float constants.** Each stage reads 256 from its `SQ_VS_CONST` /
   `SQ_PS_CONST` base. A pixel program's window is copied as far as the shader
@@ -218,8 +222,8 @@ A resolve does not end the submission unless the slot's arena share is half used
 
 - **Encode on write.** Xenos applies a piecewise-linear gamma curve to RGB
   written into an `8_8_8_8_GAMMA` target, where MW2 draws the world. The pixel
-  shader does the same (Xenia's `LinearToPWLGamma`) when its push-constant flag
-  is set.
+  shader does the same (Xenia's `LinearToPWLGamma`) when the flag in the
+  draw's record is set.
 - **Linearise on read.** A fetch whose component signs say `gamma` samples
   through an sRGB view or format, which matches the Xenos curve to within a
   code value.
@@ -429,6 +433,20 @@ microseconds and the recorder is faster than that, so a recorder that spun
 until the next one never slept, and held a core; one that waited on the queue
 position itself woke at every call, because the wait spins first.
 
+Draws are made in runs. A draw that changes no state since the last one is
+held back, and a run of them is made with one `vkCmdDrawMultiIndexedEXT` (or
+`vkCmdDrawMultiEXT`), each with its record as its own vertex offset: the
+driver checks and emits the state once a run, and each draw is then a base
+vertex and a draw packet. A run ends at a draw that changes any state, and at
+any other call: the recorder runs `MakeGatheredDraws` before every call not
+queued as `Joining`. With four players in split screen 97% of draws are made
+this way, about thirty to a call. Without `VK_EXT_multi_draw` each draw is
+made on its own.
+
+An indirect draw over commands the consumer writes into the arena does as much
+for the recorder, but it puts twenty more bytes a draw on the consumer, which
+is what four players wait on; the multi-draw keeps all of it on the recorder.
+
 - A queued call must copy what it uses. It must never point at a local or read
   `g.`, which will have moved on by the time the call runs.
 - A slot's fence means nothing until the recorder has submitted to it.
@@ -508,7 +526,12 @@ end record must eventually be written**, or the title hangs.
 `PipelineKey` holds the two shader hashes, the attachment formats, the
 topology, `RB_BLENDCONTROL0`, `RB_COLOR_MASK` and the sample count. Culling and
 the depth and stencil tests are dynamic state. Dynamic rendering and extended
-dynamic state are required.
+dynamic state are required, and so are what the module interface is built on
+([shaders.md](shaders.md#the-module-interface)): descriptor indexing with
+update-after-bind and partially bound sampled images, room for 196,608 of them
+and 4,096 samplers in one set, shader draw parameters, subgroup ballot in
+pixel shaders and seventeen interpolators. A device without one says which at
+the start. `VK_EXT_multi_draw` is used where there is one.
 
 On the console a shader is ready as soon as it is loaded. With
 `VK_EXT_graphics_pipeline_library` the runtime compiles it at that point too

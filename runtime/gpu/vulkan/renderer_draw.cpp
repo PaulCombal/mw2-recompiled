@@ -77,14 +77,14 @@ namespace vk::renderer::detail
         return uint32_t(h >> 58);
     }
 
-    // Slots neither shader names are left empty: the layout declares all
-    // thirty-two, but a shader cannot read what it did not declare.
+    // What the draw's record holds for each slot either shader samples
+    // (vk::textures::Handle); slots neither names are left as they are.
     //
     // `scaled` gets a bit for each slot bound to a resolve's copy, whose image
     // is a whole number of times the size the title gave it: [0] for the
     // frame's scale, [1] for the shadow maps' where it differs.
-    VkDescriptorSet TextureSetFor(const gpu::RegisterFile& r, uint32_t mask, const uint8_t* kinds,
-                                  uint32_t (&scaled)[2])
+    void TexturesFor(const gpu::RegisterFile& r, uint32_t mask, const uint8_t* kinds,
+                     uint32_t* handles, uint32_t (&scaled)[2])
     {
         scaled[0] = scaled[1] = 0;
         const auto note = [&](uint32_t slot, uint32_t copyScale) {
@@ -167,12 +167,12 @@ namespace vk::renderer::detail
                              "made %u wide from the next resolve", fetch.BaseAddress(), learned, newest->width, learned);
                     }
                 }
-                // The key names the copy, not just the guest address: the texture
-                // cache keys descriptor sets on ids and drops them all when the
-                // view behind an id changes, and with a copy per frame slot that
-                // would be every frame. The fetch says whether the sampler
-                // linearises, and the two views of one copy are different
-                // resources to the set cache, so that is part of the key too.
+                // The key names the copy, not just the guest address: an id's
+                // bindless entry is rewritten only once the GPU is done with the
+                // view behind it (ForgetViews), and with a copy per frame slot a
+                // shared id would change view every frame. The fetch says
+                // whether the sampler linearises, and the two views of one copy
+                // are different entries, so that is part of the key too.
                 const bool linearise = !newest->depth && fetch.Linearises() && newest->gammaView;
                 const uint64_t key = fetch.BaseAddress() |
                                      (uint64_t(found->second.newest + 1) << 32) |
@@ -197,55 +197,74 @@ namespace vk::renderer::detail
                     ids[slot] = vk::textures::NoteDrawnInWorld(ids[slot]);
             if (g.drawRecord) NoteDrawTexture(slot, fetch, ids[slot], false);
         }
-        return static_cast<VkDescriptorSet>(vk::textures::DescriptorSet(ids, kinds));
+        for (uint32_t bits = mask; bits; bits &= bits - 1)
+        {
+            const uint32_t slot = uint32_t(std::countr_zero(bits));
+            handles[slot] = vk::textures::Handle(ids[slot], kinds[slot]);
+        }
     }
+
+    // The draws the recorder holds back, to be made with one call; on the
+    // recorder thread only. Whichever of the two arrays the run's kind uses.
+    // A call makes fewer draws than maxMultiDrawCount, never as many.
+    constexpr uint32_t kLongestRun = 2048;   // RADV's maxMultiDrawCount
+    struct Gathering
+    {
+        VkCommandBuffer command = VK_NULL_HANDLE;
+        uint32_t count = 0;
+        bool indexed = false;
+        VkMultiDrawIndexedInfoEXT indexedDraws[kLongestRun];
+        VkMultiDrawInfoEXT draws[kLongestRun];
+        GatheredCounts counts;
+    };
+    Gathering gathering;
 
     // A draw as the recorder thread makes it: the state that changed since the
     // last draw in the command buffer, and the draw. Which state changed is
-    // decided here, on the consumer, against State::Bound.
+    // decided here, on the consumer, against State::Bound. Everything else the
+    // draw needs is in its record (bindings.h), which it names as its base
+    // vertex.
+    //
+    // The draw itself is held back while the draws after it change nothing,
+    // and a run of them is made with one vkCmdDrawMulti(Indexed)EXT: the
+    // driver checks and emits the state once for the run, and then each draw
+    // is its base vertex and its draw packet. A run ends at a draw that changes
+    // any state and at any other call (MakeGatheredDraws, vk::record::Joining).
     struct DrawOp
     {
         enum : uint32_t
         {
-            kNdc = 1, kPipeline = 2, kViewport = 4, kScissor = 8, kDepthBias = 16,
-            kStencil = 32, kConstants = 64, kTextures = 128, kAlphaTest = 256,
-            kIndexBuffer = 512, kIndexed = 1024, kFaces = 2048, kDepthTests = 4096,
-            kScaled = 8192,
+            kPipeline = 1, kViewport = 2, kScissor = 4, kDepthBias = 8, kStencil = 16,
+            kIndexBuffer = 32, kIndexed = 64, kFaces = 128, kDepthTests = 256,
         };
-        // bindings::kScaledPushOffset's block.
-        struct ScaledCopies { uint32_t slots[2]; float factors[2]; };
-        static_assert(sizeof(ScaledCopies) == bindings::kScaledPushBytes);
         uint32_t set = 0;
-        VkPipelineLayout layout = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
         VkViewport viewport{};
         VkRect2D scissor{};
-        float ndc[4]{};
         float depthBias[2]{};
         uint32_t stencil[2]{};
-        uint32_t push[4]{};
-        ScaledCopies scaled{};
         VkCullModeFlags cullMode = 0;
         VkFrontFace frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         DepthTests depthTests{};
-        VkDescriptorSet textureSet = VK_NULL_HANDLE;
-        uint32_t offsets[bindings::kConstantBlocks]{};
         VkBuffer indexBuffer = VK_NULL_HANDLE;
         VkIndexType indexType = VK_INDEX_TYPE_UINT16;
-        uint32_t count = 0, firstIndex = 0;
+        uint32_t count = 0, firstIndex = 0, record = 0;
 
         void operator()(VkCommandBuffer command) const
         {
-            // The pixel stage's range runs over these bytes on its way to the
-            // scaled slots, so a write of them names both stages.
-            constexpr VkShaderStageFlags kBoth = VK_SHADER_STAGE_VERTEX_BIT |
-                                                 VK_SHADER_STAGE_FRAGMENT_BIT;
-            if (set & kNdc)
-                vkCmdPushConstants(command, layout, kBoth,
-                                   bindings::kVertexPushOffset, sizeof ndc, ndc);
-            if (set & kScaled)
-                vkCmdPushConstants(command, layout, kBoth,
-                                   bindings::kScaledPushOffset, sizeof scaled, &scaled);
+            Gathering& run = gathering;
+            const bool indexed = set & kIndexed;
+            GatheredCounts::Add(run.counts.draws);
+            // A draw that changes no state joins the run before it. The draws
+            // held back before one that does were made under the state before
+            // its own.
+            if (!(set & ~uint32_t(kIndexed)) && run.count && run.command == command &&
+                run.indexed == indexed && run.count + 1 < std::min(dispatch.multiDraw, kLongestRun))
+            {
+                Join(run);
+                return;
+            }
+            MakeGatheredDraws();
             if (set & kPipeline)
                 vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
             if (set & kViewport) vkCmdSetViewport(command, 0, 1, &viewport);
@@ -280,21 +299,51 @@ namespace vk::renderer::detail
                     vkCmdSetStencilReference(command, faces[i], state.Reference());
                 }
             }
-            if (set & kConstants)
-                vkCmdPushConstants(command, layout, kBoth, bindings::kConstantPushOffset,
-                                   sizeof offsets, offsets);
-            if (set & kTextures)
-                vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
-                                        bindings::kTextureSet, 1, &textureSet, 0, nullptr);
-            if (set & kAlphaTest)
-                vkCmdPushConstants(command, layout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                                   bindings::kPixelPushOffset, sizeof push, push);
             if (set & kIndexBuffer) vkCmdBindIndexBuffer(command, indexBuffer, 0, indexType);
-            if (set & kIndexed) vkCmdDrawIndexed(command, count, 1, firstIndex, 0, 0);
-            else vkCmdDraw(command, count, 1, 0, 0);
+            run.command = command;
+            run.indexed = indexed;
+            Join(run);
+        }
+
+        void Join(Gathering& run) const
+        {
+            // The record goes in as the base vertex, which the vertex shader
+            // takes away from the vertex index again.
+            if (run.indexed) run.indexedDraws[run.count] = { firstIndex, count, int32_t(record) };
+            else             run.draws[run.count] = { record, count };
+            run.count++;
         }
     };
 }
+
+void vk::renderer::detail::MakeGatheredDraws()
+{
+    Gathering& run = gathering;
+    if (!run.count) return;
+    if (run.count == 1)
+    {
+        GatheredCounts::Add(run.counts.alone);
+        if (run.indexed)
+        {
+            const VkMultiDrawIndexedInfoEXT& draw = run.indexedDraws[0];
+            vkCmdDrawIndexed(run.command, draw.indexCount, 1, draw.firstIndex, draw.vertexOffset, 0);
+        }
+        else vkCmdDraw(run.command, run.draws[0].vertexCount, 1, run.draws[0].firstVertex, 0);
+    }
+    else
+    {
+        GatheredCounts::Add(run.counts.runs);
+        GatheredCounts::Add(run.counts.inRuns, run.count);
+        if (run.indexed)
+            dispatch.drawMultiIndexed(run.command, run.count, run.indexedDraws, 1, 0,
+                                      sizeof(VkMultiDrawIndexedInfoEXT), nullptr);
+        else
+            dispatch.drawMulti(run.command, run.count, run.draws, 1, 0, sizeof(VkMultiDrawInfoEXT));
+    }
+    run.count = 0;
+}
+
+const vk::renderer::detail::GatheredCounts& vk::renderer::detail::Gathered() { return gathering.counts; }
 
 using namespace vk::renderer::detail;
 
@@ -462,7 +511,7 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
                                     lowestVertex, highestVertex, rectangles); }();
     if (!constants.ok) { Skip("frame arena full"); return; }
     // From here to the first command recorded: the pipeline key, the texture
-    // descriptor set and the viewport.
+    // handles and the viewport.
     const auto stateFrom = Timing() ? std::chrono::steady_clock::now()
                                     : std::chrono::steady_clock::time_point{};
 
@@ -587,19 +636,24 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
                                key.colourMask, modeCntl, key.samples });
 
     // What each slot is declared as, so a texture of another kind is not bound
-    // there. The two stages share the set; where both sample a slot the pixel
-    // shader's reading wins, and the title has not been seen to disagree.
+    // there. The two stages share the handle; where both sample a slot as
+    // different kinds, either would index an array the image was never
+    // written into, so the slot gets the stand-in (Handle counts it). The
+    // title has not been seen to disagree.
     uint8_t kinds[vk::textures::kSlots];
     std::memcpy(kinds, vertex->translation.textureKinds, sizeof kinds);
     for (uint32_t bits = pixel->translation.textureMask; bits; bits &= bits - 1)
     {
         const uint32_t s = uint32_t(std::countr_zero(bits));
-        kinds[s] = pixel->translation.textureKinds[s];
+        const uint8_t kind = pixel->translation.textureKinds[s];
+        kinds[s] = (vertex->translation.textureMask >> s & 1) && kinds[s] != kind ? 0xFF : kind;
     }
+    // The draw's record (bindings.h), filled from here on and written into
+    // the arena just before the draw.
+    uint32_t values[bindings::kRecordWords]{};
+    const uint32_t textureMask = vertex->translation.textureMask | pixel->translation.textureMask;
     uint32_t scaledSlots[2]{};
-    VkDescriptorSet textureSet = TextureSetFor(
-        r, vertex->translation.textureMask | pixel->translation.textureMask, kinds, scaledSlots);
-    if (!textureSet) { Skip("no texture descriptor set"); return; }
+    TexturesFor(r, textureMask, kinds, values + bindings::kRecordTextures, scaledSlots);
 
     VkViewport viewport{};
     ViewportOf(r, scissor, viewport);
@@ -610,7 +664,6 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
 
     State::Bound& bound = g.bound;
     DrawOp op;
-    op.layout = static_cast<VkPipelineLayout>(vk::pipeline::Layout());
 
     // Window coordinates to clip space, which the translated vertex epilogue
     // applies from these four floats. The identity for every ordinary draw.
@@ -640,13 +693,65 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
             viewport.width = float(g.currentWidth);
             viewport.height = float(g.currentHeight);
         }
-        if (!bound.ndcValid || std::memcmp(bound.ndc, ndc, sizeof ndc))
+        std::memcpy(values + bindings::kRecordNdc, ndc, sizeof ndc);
+    }
+
+    if (g.scale > 1 || g.shadowScale > 1)
+    {
+        const struct { uint32_t slots[2]; float factors[2]; } scaled{
+            { scaledSlots[0], scaledSlots[1] },
+            { 1.0f / float(g.scale), 1.0f / float(g.shadowScale) } };
+        std::memcpy(values + bindings::kRecordScaled, &scaled, sizeof scaled);
+    }
+
+    // In dwords, in the order bindings.h numbers the blocks.
+    const uint32_t offsets[bindings::kConstantBlocks] = {
+        constants.vertexFloats / 4, constants.fetch / 4, constants.booleans / 4, constants.loops / 4,
+        constants.pixelFloats / 4 };
+    std::memcpy(values + bindings::kRecordOffsets, offsets, sizeof offsets);
+
+    // The alpha test. Vulkan has no fixed-function form, so the translated pixel
+    // shader does the comparison and these are what it compares with; `always`
+    // when the title has the test off, which the shader's mask makes free.
+    //
+    // Also `always` in depth-only mode, where the console does not run the pixel
+    // shader at all (Xenia's reading too), so nothing it computes can discard.
+    // The sun shadow casters depend on it: their technique has no pixel shader,
+    // for which D3D9 loads nothing, and the draws run under whatever shader the
+    // command stream loaded last.
+    {
+        const bool pixelShaderRuns = edramMode != gpu::EdramMode::DepthOnly;
+        const gpu::ColorControl control{ r[gpu::RB_COLORCONTROL] };
+        // Two to the power of the target's exponent bias, built by moving the
+        // exponent of 1.0f rather than by calling powf on the draw path.
+        const int32_t bias = std::clamp(colour.ExpBias(), -31, 31);
+        const float scale = std::bit_cast<float>(uint32_t(0x3F800000) + (bias << 23));
+        const bool gammaTarget = colour.Format() == 1;
+        struct { uint32_t function; float reference; float scale; uint32_t gamma; } test{
+            (control.AlphaTest() && pixelShaderRuns) ? control.AlphaFunc() : 7u,
+            std::bit_cast<float>(r[gpu::RB_ALPHA_REF]),
+            scale,
+            gammaTarget ? 1u : 0u };
+        std::memcpy(values + bindings::kRecordPixel, &test, sizeof test);
+    }
+
+    // The record, as far as the highest slot sampled. Draws come in runs with
+    // the same state, and a run shares one.
+    {
+        const uint32_t words = bindings::kRecordTextures +
+                               (textureMask ? 32 - uint32_t(std::countl_zero(textureMask)) : 0);
+        if (!bound.recordValid || bound.recordWords != words ||
+            std::memcmp(bound.record, values, words * 4))
         {
-            op.set |= DrawOp::kNdc;
-            std::memcpy(op.ndc, ndc, sizeof ndc);
-            std::memcpy(bound.ndc, ndc, sizeof ndc);
-            bound.ndcValid = true;
+            const uint32_t at = Allocate(words * 4, kArenaConstants);
+            if (at == UINT32_MAX) { Skip("frame arena full"); return; }
+            std::memcpy(g.arenaMapped + at, values, words * 4);
+            std::memcpy(bound.record, values, words * 4);
+            bound.recordWords = words;
+            bound.recordAt = at / 4;
+            bound.recordValid = true;
         }
+        op.record = bound.recordAt;
     }
 
     if (Timing())
@@ -667,16 +772,6 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
     viewport.width *= float(passScale);
     viewport.height *= float(passScale);
     scissor = { Scaled(scissor.offset, passScale), Scaled(scissor.extent, passScale) };
-
-    if ((g.scale > 1 || g.shadowScale > 1) &&
-        (!bound.scaledValid || std::memcmp(bound.scaled, scaledSlots, sizeof scaledSlots)))
-    {
-        op.set |= DrawOp::kScaled;
-        op.scaled = { { scaledSlots[0], scaledSlots[1] },
-                      { 1.0f / float(g.scale), 1.0f / float(g.shadowScale) } };
-        std::memcpy(bound.scaled, scaledSlots, sizeof scaledSlots);
-        bound.scaledValid = true;
-    }
 
     if (!bound.viewportValid || std::memcmp(&bound.viewport, &viewport, sizeof viewport))
     {
@@ -779,58 +874,6 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
         }
     }
 
-    // In dwords, in the order bindings.h numbers the blocks.
-    const uint32_t offsets[bindings::kConstantBlocks] = {
-        constants.vertexFloats / 4, constants.fetch / 4, constants.booleans / 4, constants.loops / 4,
-        constants.pixelFloats / 4 };
-    if (!bound.offsetsValid || std::memcmp(bound.offsets, offsets, sizeof offsets))
-    {
-        op.set |= DrawOp::kConstants;
-        std::memcpy(op.offsets, offsets, sizeof offsets);
-        std::memcpy(bound.offsets, offsets, sizeof offsets);
-        bound.offsetsValid = true;
-    }
-
-    if (bound.textureSet != textureSet)
-    {
-        op.set |= DrawOp::kTextures;
-        op.textureSet = textureSet;
-        bound.textureSet = textureSet;
-    }
-    // Set 2 is bound once in BeginFrame; it is the same for every draw.
-
-    // The alpha test. Vulkan has no fixed-function form, so the translated pixel
-    // shader does the comparison and these are what it compares with; `always`
-    // when the title has the test off, which the shader's mask makes free.
-    //
-    // Also `always` in depth-only mode, where the console does not run the pixel
-    // shader at all (Xenia's reading too), so nothing it computes can discard.
-    // The sun shadow casters depend on it: their technique has no pixel shader,
-    // for which D3D9 loads nothing, and the draws run under whatever shader the
-    // command stream loaded last.
-    {
-        const bool pixelShaderRuns = edramMode != gpu::EdramMode::DepthOnly;
-        const gpu::ColorControl control{ r[gpu::RB_COLORCONTROL] };
-        // Two to the power of the target's exponent bias, built by moving the
-        // exponent of 1.0f rather than by calling powf on the draw path.
-        const int32_t bias = std::clamp(colour.ExpBias(), -31, 31);
-        const float scale = std::bit_cast<float>(uint32_t(0x3F800000) + (bias << 23));
-        const bool gammaTarget = colour.Format() == 1;
-        struct { uint32_t function; float reference; float scale; uint32_t gamma; } test{
-            (control.AlphaTest() && pixelShaderRuns) ? control.AlphaFunc() : 7u,
-            std::bit_cast<float>(r[gpu::RB_ALPHA_REF]),
-            scale,
-            gammaTarget ? 1u : 0u };
-        static_assert(sizeof test == sizeof g.bound.push);
-        if (!bound.pushValid || std::memcmp(bound.push, &test, sizeof test))
-        {
-            op.set |= DrawOp::kAlphaTest;
-            std::memcpy(op.push, &test, sizeof test);
-            std::memcpy(bound.push, &test, sizeof test);
-            bound.pushValid = true;
-        }
-    }
-
     if (call.indexed || rectangles)
     {
         // The whole arena is bound once per index size and each draw names
@@ -854,7 +897,7 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
         op.firstIndex = indexOffset / (wide ? 4 : 2);
     }
     else op.count = call.indexCount;
-    Record(op);
+    vk::record::Joining(op);
     colourTarget->draws++;
     // The depth target too, so a dump can tell a depth buffer some pass is
     // testing against from one no pass has ever bound.

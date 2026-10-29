@@ -66,20 +66,22 @@ namespace vk::renderer::detail
         return true;
     }
 
-    // Begins g.command. Set 2 is the arena as dwords and is the same for every
-    // draw in the frame, so it is bound once a command buffer instead of eight
-    // million times.
+    // Begins g.command. Sets 1 and 2 -- every texture, and the arena -- are
+    // the same for every draw, so they are bound once a command buffer
+    // instead of eight million times (bindings.h).
     void BeginSegmentBuffer()
     {
         const VkPipelineLayout layout = static_cast<VkPipelineLayout>(vk::pipeline::Layout());
-        const VkDescriptorSet memorySet = g.memorySet;
+        static_assert(bindings::kArenaSet == bindings::kTextureSet + 1);
+        const VkDescriptorSet sets[2] = { static_cast<VkDescriptorSet>(vk::textures::Set()),
+                                          g.memorySet };
         Record([=](VkCommandBuffer command) {
             VkCommandBufferBeginInfo begin{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
             begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             if (vkBeginCommandBuffer(command, &begin) != VK_SUCCESS)
                 LOGW("renderer: a frame's command buffer would not begin");
             vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
-                                    bindings::kArenaSet, 1, &memorySet, 0, nullptr);
+                                    bindings::kTextureSet, 2, sets, 0, nullptr);
         });
         // A fresh command buffer remembers nothing.
         g.bound = State::Bound{};

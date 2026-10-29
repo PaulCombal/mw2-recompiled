@@ -8,7 +8,8 @@ namespace gpu { struct TextureFetch; struct TextureData; }
 
 // Guest textures as Vulkan images: `gpu::ReadTexture`'s linear, host-endian
 // buffer staged into a VkImage, with a view and a sampler built from the same
-// fetch constant, written into set 1 of the pipeline layout.
+// fetch constant, each written once into set 1 of the pipeline layout, which
+// holds every texture the cache has (bindings.h).
 //
 // The block formats go across untouched, so a readback returns exactly the
 // bytes that went in -- which is what makes the round trip a test.
@@ -33,9 +34,8 @@ namespace vk::textures
     // Called by the renderer once per presented frame, between submissions: a
     // cached texture is signed at most once per frame however many draws bind
     // it. This is also where the cache lets go: of images idle for ten seconds
-    // whose memory the title has rewritten, of the longest idle past the
-    // memory budget -- half the device's own memory, or MW2_TEXTURE_BUDGET_MB
-    // -- and of descriptor sets nothing has bound for as long.
+    // whose memory the title has rewritten, and of the longest idle past the
+    // memory budget -- half the device's own memory, or MW2_TEXTURE_BUDGET_MB.
     void NewFrame();
     // The count NewFrame keeps, which the texture log lines are numbered by.
     uint64_t FrameNumber();
@@ -63,27 +63,28 @@ namespace vk::textures
 
     // A render target the title resolved out to memory and samples back. The
     // image belongs to the caller, so the entry only borrows its view; `key`
-    // names the copy, so an id survives across frames and the descriptor sets
-    // built from it stay valid.
+    // names the copy, so an id survives across frames, and so does its entry
+    // in the set.
     uint64_t Adopt(uint64_t key, void* view, const gpu::TextureFetch& fetch);
 
-    // The caller is destroying a view it lent to Adopt. Every cached set is
-    // dropped, because the replacement view can come back with the very same
-    // handle -- Adopt's comparison then sees no change, and the set it hands
-    // out still holds the freed image's address.
-    void ForgetSets();
+    // The caller is destroying views it lent to Adopt, with the GPU idle. Each
+    // adopted entry is written again at its next Adopt, because a replacement
+    // view can come back with the very same handle -- Adopt's comparison then
+    // sees no change, and the entry still holds the freed image's address.
+    void ForgetViews();
 
     // Already in the guest's block layout, with a default sampler and no caching:
     // the path tools/upload_texture.cpp tests, where there is no fetch constant.
     uint64_t UploadData(const gpu::TextureData& data, uint32_t xenosFormat,
                         const char** error);
 
-    // One combined image sampler per fetch slot, with a 1x1 image standing in for
-    // every unbound slot, because the layout declares all thirty-two whatever the
-    // shader samples. `kinds`, when given, says what the shaders declare each
-    // slot as (see shader::Translation::textureKinds); a texture of another kind
-    // is bound as a fallback of the declared one instead.
-    void* DescriptorSet(const uint64_t ids[kSlots], const uint8_t* kinds = nullptr);
+    // What a draw's record holds for a slot bound to `id` (bindings.h): the
+    // image's place in set 1 and its sampler's. `kind` is what the shaders
+    // declare the slot as (shader::Translation::textureKinds); nothing, or a
+    // texture of another kind, is the declared kind's 1x1 stand-in.
+    uint32_t Handle(uint64_t id, uint8_t kind);
+    // Set 1, a VkDescriptorSet: bound once a command buffer.
+    void* Set();
 
     bool Readback(uint64_t id, std::vector<uint8_t>& bytes, const char** error);
 
