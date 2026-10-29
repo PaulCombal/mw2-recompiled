@@ -359,10 +359,16 @@ namespace vk::renderer::detail
     Target* EnsureTarget(const TargetKey& key, uint32_t width, uint32_t height,
                          uint32_t guestFormat)
     {
+        State::LastTarget& last = g.lastTargets[key.depth];
+        if (last.target && last.key == key && last.target->width >= width && last.target->height >= height)
+            return last.target;
         auto found = g.targets.find(key);
         if (found != g.targets.end() &&
             found->second.width >= width && found->second.height >= height)
+        {
+            last = { key, &found->second };
             return &found->second;
+        }
 
         if (found != g.targets.end())
         {
@@ -372,6 +378,7 @@ namespace vk::renderer::detail
             width = std::max(width, found->second.width);
             height = std::max(height, found->second.height);
             g.targets.erase(found);
+            g.lastTargets[0] = g.lastTargets[1] = {};
         }
 
         Target target;

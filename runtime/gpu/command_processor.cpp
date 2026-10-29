@@ -16,6 +16,7 @@
 #include "vulkan/renderer.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -70,7 +71,7 @@ namespace
         PM4_XE_SWAP             = 0x64,
     };
 
-    const char* OpcodeName(uint32_t op)
+    constexpr const char* OpcodeName(uint32_t op)
     {
         switch (op)
         {
@@ -110,6 +111,14 @@ namespace
         default:                      return nullptr;
         }
     }
+
+    // Which opcodes OpcodeName knows, looked up once a packet rather than
+    // through the switch.
+    constexpr auto kKnownOpcodes = [] {
+        std::array<bool, 128> known{};
+        for (uint32_t op = 0; op < 128; op++) known[op] = OpcodeName(op) != nullptr;
+        return known;
+    }();
 
     // The five constant windows SET_CONSTANT and LOAD_ALU_CONSTANT name by type.
     constexpr uint32_t kConstantWindows[5] = {
@@ -213,25 +222,42 @@ namespace
         // Set when the buffer produced a packet that cannot be one: the rest of
         // it is not read, as Xenia's command processor ends a buffer there.
         bool lostStep = false;
+        // Where `base` is, and what an index is masked with: all ones for a
+        // linear buffer. A dword is read for every one the title wrote, so
+        // reading one is a mask and a load, with no branch.
+        const uint32_t* words = nullptr;
+        uint32_t indexMask = ~0u;
+
+        Source(uint32_t base, uint32_t index, uint32_t wrapMask, uint32_t remaining)
+            : base(base), index(index), wrapMask(wrapMask), remaining(remaining),
+              words(GuestPtr<uint32_t>(base)), indexMask(wrapMask ? wrapMask : ~0u) {}
 
         uint32_t Next()
         {
-            const uint32_t i = wrapMask ? (index & wrapMask) : index;
-            index++;
-            if (remaining) remaining--;
-            return *GuestPtr<be32>(base + i * 4);
+            const uint32_t word = words[index++ & indexMask];
+            remaining -= remaining != 0;
+            return __builtin_bswap32(word);
         }
-        void Skip(uint32_t n) { for (uint32_t i = 0; i < n && remaining; i++) Next(); }
-        // The next `n` dwords, as Next would give them, into `out`.
-        void Take(uint32_t* out, uint32_t n)
+        void Skip(uint32_t n)
         {
-            const be32* words = GuestPtr<be32>(base);
-            if (!wrapMask)
-                for (uint32_t i = 0; i < n; i++) out[i] = words[index + i];
-            else
-                for (uint32_t i = 0; i < n; i++) out[i] = words[(index + i) & wrapMask];
+            n = std::min(n, remaining);
+            index += n;
+            remaining -= n;
+        }
+        // The next `n` dwords as the guest holds them, big-endian, and past
+        // them: where they lie in one piece, in place; where they wrap round
+        // the ring, gathered into `room`.
+        const uint32_t* Take(uint32_t* room, uint32_t n)
+        {
+            const uint32_t* taken = words + (index & indexMask);
+            if (wrapMask && (index & wrapMask) + n > wrapMask + 1)
+            {
+                for (uint32_t i = 0; i < n; i++) room[i] = words[(index + i) & wrapMask];
+                taken = room;
+            }
             index += n;
             remaining -= std::min(remaining, n);
+            return taken;
         }
         uint32_t AddressOf(uint32_t at) const
         {
@@ -309,12 +335,11 @@ namespace
             for (uint32_t i = 0; i < count; i++) WriteRegister(first + i, s.Next());
             return;
         }
-        uint32_t values[256];
+        uint32_t room[256];
         while (count)
         {
             const uint32_t n = std::min<uint32_t>(count, 256);
-            s.Take(values, n);
-            g.registers.WriteRun(first, values, n);
+            g.registers.WriteRun(first, s.Take(room, n), n);
             first += n;
             count -= n;
         }
@@ -590,7 +615,7 @@ namespace
         const uint32_t opcode = (header >> 8) & 0x7F;
         g.opcodeCount[opcode]++;
 
-        if (!OpcodeName(opcode))
+        if (!kKnownOpcodes[opcode])
         {
             if (g.unknownOpcodes++ < 32)
                 LOGW("pm4: unknown type-3 opcode 0x%02X, %u dwords (header %08X) at %08X (depth %d)",
@@ -811,10 +836,7 @@ namespace
                     WriteRegister(first + i, *GuestPtr<be32>(va + i * 4));
                 break;
             }
-            uint32_t values[0x1000];
-            const be32* words = GuestPtr<be32>(va);
-            for (uint32_t i = 0; i < sizeDwords; i++) values[i] = words[i];
-            g.registers.WriteRun(first, values, sizeDwords);
+            g.registers.WriteRun(first, GuestPtr<uint32_t>(va), sizeDwords);
             break;
         }
 

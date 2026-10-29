@@ -235,8 +235,9 @@ processor parses it. Two rules follow:
    to a draw must happen before that report.
 
 A draw binding a slot to the same six fetch dwords as the last draw that bound
-it keeps that draw's image, without a lookup, until `vk::textures::Epoch`
-moves: at a new frame or segment, when an image is let go, and at
+it keeps that draw's image, without a lookup, and so does one binding fetch
+dwords another slot was answered for (64 recent answers, by a hash of the
+dwords), until `vk::textures::Epoch` moves: at a new frame or segment, when an image is let go, and at
 `MemoryWritten`. Until then a lookup would answer the same and find nothing
 more to check (the watch is consulted once a frame, and rewritten textures
 once a segment). A resolve also ends it, since it can change which copy an

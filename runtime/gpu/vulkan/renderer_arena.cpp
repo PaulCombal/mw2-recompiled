@@ -96,13 +96,13 @@ namespace vk::renderer::detail
                 const uint32_t at = CopyIntoArena(&r.values[first], 256, kArenaConstants);
                 if (at == UINT32_MAX) return at;
                 block = { stamp, at / 16, true };
+                g.constantTableWords[4 + b] = at / 16;
                 moved = true;
             }
         if (!moved) return table.at;
-        uint32_t words[bindings::kConstantTableWords] = { base };
-        for (uint32_t b = 0; b < bindings::kConstantFileBlocks; b++)
-            words[4 + b] = g.constantBlocks[b].valid ? g.constantBlocks[b].at : 0;
-        const uint32_t at = CopyIntoArena(words, sizeof words, kArenaConstants);
+        g.constantTableWords[0] = base;
+        const uint32_t at = CopyIntoArena(g.constantTableWords, sizeof g.constantTableWords,
+                                          kArenaConstants);
         if (at == UINT32_MAX) return at;
         table = { 0, base, at, true, 0 };
         return at;
@@ -156,6 +156,12 @@ namespace vk::renderer::detail
     {
         const uint32_t (&subs)[3] = program.vertexFetchSubs;
         ConstantOffsets out{ 0, 0, 0, 0, 0, false };
+        // The pairs of the fetch window either program reads, and the vertex
+        // fetches rewritten below in any case.
+        uint32_t pairs[3];
+        for (uint32_t i = 0; i < 3; i++)
+            pairs[i] = program.fetchPairsRead[i] | pixelProgram.fetchPairsRead[i] |
+                       program.vertexFetchPairs[i];
 
         out.vertexFloats = WriteConstantTable(r, ConstantsNeeded(program));
         if (out.vertexFloats == UINT32_MAX) return out;
@@ -173,7 +179,8 @@ namespace vk::renderer::detail
         const bool fetchCached = !rectangles &&
                                  g.fetchBlock.valid && g.fetchBlock.stamp == fetchStamp &&
                                  g.fetchBlock.base == VertexRange(lowestVertex, highestVertex) &&
-                                 std::equal(subs, subs + 3, g.fetchSubs);
+                                 std::equal(subs, subs + 3, g.fetchSubs) &&
+                                 std::equal(pairs, pairs + 3, g.fetchPairs);
 
         // The fetch window is 32 groups of six dwords; the shader sees 96
         // constants of two dwords each, padded to a vec4.
@@ -189,20 +196,22 @@ namespace vk::renderer::detail
         }
         out.fetch = Allocate(96 * 16, kArenaConstants);
         if (out.fetch == UINT32_MAX) return out;
-        // Assembled here and copied across once: the arena is write-combined
+        // Assembled here and copied across: the arena is write-combined
         // memory, and the rewriting below reads back what it has just written.
+        // Only the pairs the programs read: a draw reads two or three of the
+        // 96, and assembling and copying the whole window was a kilobyte and
+        // a half a draw. The rest of the block is whatever the arena held.
         alignas(64) uint32_t fetch[96 * 4];
-        std::memset(fetch, 0, sizeof fetch);
-        for (uint32_t group = 0; group < 32; group++)
-        {
-            const uint32_t* source = &r.values[gpu::kConstantBaseFetch + group * 6];
-            for (uint32_t sub = 0; sub < 3; sub++)
+        for (uint32_t i = 0; i < 3; i++)
+            for (uint32_t bits = pairs[i]; bits; bits &= bits - 1)
             {
-                uint32_t* entry = fetch + (group * 3 + sub) * 4;
-                entry[0] = source[sub * 2];
-                entry[1] = source[sub * 2 + 1];
+                const uint32_t pair = i * 32 + uint32_t(std::countr_zero(bits));
+                const uint32_t* source = &r.values[gpu::kConstantBaseFetch + pair * 2];
+                uint32_t* entry = fetch + pair * 4;
+                entry[0] = source[0];
+                entry[1] = source[1];
+                entry[2] = entry[3] = 0;
             }
-        }
 
         // A vertex fetch constant holds a physical address. Rather than making all of
         // guest memory addressable by the GPU, the data each fetch names is copied
@@ -214,12 +223,11 @@ namespace vk::renderer::detail
         struct Made { uint32_t address, base, first, dwords; };
         Made made[kFetchSlots];          // every entry is written before it is read
         uint32_t madeCount = 0;
-        for (uint32_t group = 0; group < 32; group++)
-        {
-            for (uint32_t sub = 0; sub < 3; sub++)
+        for (uint32_t i = 0; i < 3; i++)
+            for (uint32_t bits = program.vertexFetchPairs[i]; bits; bits &= bits - 1)
             {
-                if (!(subs[sub] & (1u << group))) continue;
-                uint32_t* entry = fetch + (group * 3 + sub) * 4;
+                const uint32_t slot = i * 32 + uint32_t(std::countr_zero(bits));
+                uint32_t* entry = fetch + slot * 4;
                 const uint32_t type = entry[0] & 3;
                 if (type != 3) continue;                       // not a vertex fetch
                 const uint32_t declared = (entry[1] >> 2) & 0xFFFFFF;
@@ -231,7 +239,6 @@ namespace vk::renderer::detail
                 // The window the program reaches, not the extent the constant spans:
                 // a model near the end of a shared vertex heap is indexed from the
                 // heap's base, so the prefix below it is as large as the buffer.
-                const uint32_t slot = group * 3 + sub;
                 const uint32_t stride = program.vertexFetchStride[slot];
 
                 if (rectangles && stride)
@@ -310,7 +317,6 @@ namespace vk::renderer::detail
                 }
                 entry[0] = found->base | type;
             }
-        }
 
         const uint64_t boolStamp = r.StampOf(gpu::kConstantBaseBool, 8);
         if (g.booleans.valid && g.booleans.stamp == boolStamp)
@@ -338,9 +344,19 @@ namespace vk::renderer::detail
             g.loops = { loopStamp, 0, out.loops, true };
         }
 
-        std::memcpy(g.arenaMapped + out.fetch, fetch, sizeof fetch);
+        uint32_t written = 0;
+        for (uint32_t i = 0; i < 3; i++)
+            for (uint32_t bits = pairs[i]; bits; bits &= bits - 1)
+            {
+                const uint32_t pair = i * 32 + uint32_t(std::countr_zero(bits));
+                std::memcpy(g.arenaMapped + out.fetch + pair * 16, fetch + pair * 4, 16);
+                written += 16;
+            }
+        // Allocate counted the whole block.
+        g.arenaWritten[kArenaConstants] -= 96 * 16 - written;
         g.fetchBlock = { fetchStamp, VertexRange(lowestVertex, highestVertex), out.fetch, true };
         std::copy(subs, subs + 3, g.fetchSubs);
+        std::copy(pairs, pairs + 3, g.fetchPairs);
         out.ok = true;
         return out;
     }

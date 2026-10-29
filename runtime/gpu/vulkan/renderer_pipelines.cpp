@@ -250,8 +250,16 @@ namespace vk::renderer::detail
                               bool* made)
     {
         TakeOptimisedPipelines();
+        if (g.lastPipeline && g.lastPipelineSwaps == g.pipelinesOptimised && key == g.lastPipelineKey)
+            return g.lastPipeline;
         auto found = g.pipelines.find(key);
-        if (found != g.pipelines.end()) return found->second;
+        if (found != g.pipelines.end())
+        {
+            g.lastPipelineKey = key;
+            g.lastPipeline = found->second;
+            g.lastPipelineSwaps = g.pipelinesOptimised;
+            return found->second;
+        }
         if (made) *made = true;
 
         const auto compileStart = std::chrono::steady_clock::now();

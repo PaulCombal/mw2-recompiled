@@ -118,7 +118,10 @@ where a read is many times the cost of one from ordinary memory, so whatever
 has to be looked at again after it is written (the fetch constants while their
 addresses are rewritten, a rectangle's corners) is put together in ordinary
 memory and copied across once. Reading the fetch block in place cost a fifth
-of the ring consumer's time on Team Player.
+of the ring consumer's time on Team Player. Of the fetch block's 96 pairs only
+those the draw's two programs read are put together and written (the
+translator records them, `fetchPairsRead`); the rest of it is whatever the
+arena held, which nothing reads.
 
 | Set | Contents |
 |---|---|
@@ -138,7 +141,8 @@ A draw pushes where each of its five constant blocks is in the arena
   table of where the blocks are. With four players in split screen that halved
   the constants copied a frame, 25 MB to 13 MB. D3D sends a draw's constants
   whole, so a write of the value a register already holds does not stamp it,
-  and a run of them is compared and stamped a block of 64 registers at a time
+  and a run of them is swapped, compared and stored in one pass straight from
+  the command buffer, and stamped, a block of 64 registers at a time
   (`RegisterFile::WriteRun`). Fetch constants are stamped by every write: the
   vertex data they name is copied with them, and the title rewrites some
   buffers in place.

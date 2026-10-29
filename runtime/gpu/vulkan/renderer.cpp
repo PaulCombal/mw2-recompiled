@@ -384,9 +384,11 @@ void vk::renderer::Shutdown()
     }
     for (auto& [key, target] : g.targets) DestroyTarget(target);
     g.pipelines.clear();
+    g.lastPipeline = VK_NULL_HANDLE;
     g.shaders.clear();
     for (auto& last : g.lastShader) last = {};
     g.targets.clear();
+    g.lastTargets[0] = g.lastTargets[1] = {};
     for (uint32_t i = 0; i < kPresentImages; i++)
     {
         if (g.present[i]) vkDestroyImage(g.device, g.present[i], nullptr);

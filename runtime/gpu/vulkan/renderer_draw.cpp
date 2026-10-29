@@ -69,6 +69,14 @@ namespace vk::renderer::detail
         viewport.maxDepth = std::clamp(std::max(zOffset, zOffset + zScale), 0.0f, 1.0f);
     }
 
+    // Where a fetch's answer goes in State::recentTextures.
+    uint32_t RecentTexture(const uint32_t (&fetch)[6])
+    {
+        uint64_t h = 0;
+        for (uint32_t word : fetch) h = (h ^ word) * 0x9E3779B97F4A7C15ull;
+        return uint32_t(h >> 58);
+    }
+
     // Slots neither shader names are left empty: the layout declares all
     // thirty-two, but a shader cannot read what it did not declare.
     //
@@ -85,9 +93,9 @@ namespace vk::renderer::detail
         Stopwatch watch(g.textureNanoseconds);
         uint64_t ids[vk::textures::kSlots]{};
         const uint64_t epoch = vk::textures::Epoch();
-        for (uint32_t slot = 0; slot < vk::textures::kSlots; slot++)
+        for (uint32_t bits = mask; bits; bits &= bits - 1)
         {
-            if (!(mask & (1u << slot))) continue;
+            const uint32_t slot = uint32_t(std::countr_zero(bits));
             gpu::TextureFetch fetch;
             for (uint32_t i = 0; i < 6; i++)
                 fetch.d[i] = r[gpu::kConstantBaseFetch + slot * 6 + i];
@@ -98,9 +106,28 @@ namespace vk::renderer::detail
             // have more to do (vk::textures::Epoch, a resolve): that draw's
             // answer. Most draws keep most of their textures, and the lookup
             // -- two hash tables, the watch -- was a tenth of the consumer.
+            //
+            // Then the same for any slot: an answer is the fetch's, not the
+            // slot's, and within a segment a draw often binds in one slot what
+            // an earlier draw bound in another, which the slot's own memory
+            // has no way to know.
             State::TextureSlot& kept = g.textureSlots[slot];
-            if (kept.valid && kept.epoch == epoch && kept.resolveEpoch == g.resolveEpoch &&
-                !g.drawRecord && std::memcmp(kept.fetch, fetch.d, sizeof kept.fetch) == 0)
+            const auto answers = [&](const State::TextureSlot& entry) {
+                return entry.valid && entry.epoch == epoch && entry.resolveEpoch == g.resolveEpoch &&
+                       std::memcmp(entry.fetch, fetch.d, sizeof entry.fetch) == 0;
+            };
+            bool known = false;
+            if (!g.drawRecord)
+            {
+                if (answers(kept)) known = true;
+                else if (const State::TextureSlot& recent = g.recentTextures[RecentTexture(fetch.d)];
+                         answers(recent))
+                {
+                    kept = recent;
+                    known = true;
+                }
+            }
+            if (known)
             {
                 g.textureSlotsKept++;
                 ids[slot] = kept.id;
@@ -118,6 +145,7 @@ namespace vk::renderer::detail
                 kept.epoch = epoch;
                 kept.resolveEpoch = g.resolveEpoch;
                 kept.valid = true;
+                g.recentTextures[RecentTexture(fetch.d)] = kept;
             };
 
             auto found = g.resolvedTo.find(fetch.BaseAddress());
@@ -490,6 +518,10 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
         const uint32_t* fetch = reinterpret_cast<const uint32_t*>(g.arenaMapped + constants.fetch);
         for (uint32_t slot = 0; slot < 96; slot++)
         {
+            // The arena holds only the pairs the programs read (WriteConstants).
+            const uint32_t read = vertex->translation.fetchPairsRead[slot / 32] |
+                                  pixel->translation.fetchPairsRead[slot / 32];
+            if (!(read & (1u << (slot % 32)))) continue;
             const uint32_t* entry = fetch + slot * 4;
             if ((entry[0] & 3) != 3 || !entry[1]) continue;
             const uint32_t stride = vertex->translation.vertexFetchStride[slot];
@@ -558,10 +590,12 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
     // there. The two stages share the set; where both sample a slot the pixel
     // shader's reading wins, and the title has not been seen to disagree.
     uint8_t kinds[vk::textures::kSlots];
-    for (uint32_t s = 0; s < vk::textures::kSlots; s++)
-        kinds[s] = (pixel->translation.textureMask & (1u << s))
-                       ? pixel->translation.textureKinds[s]
-                       : vertex->translation.textureKinds[s];
+    std::memcpy(kinds, vertex->translation.textureKinds, sizeof kinds);
+    for (uint32_t bits = pixel->translation.textureMask; bits; bits &= bits - 1)
+    {
+        const uint32_t s = uint32_t(std::countr_zero(bits));
+        kinds[s] = pixel->translation.textureKinds[s];
+    }
     uint32_t scaledSlots[2]{};
     VkDescriptorSet textureSet = TextureSetFor(
         r, vertex->translation.textureMask | pixel->translation.textureMask, kinds, scaledSlots);

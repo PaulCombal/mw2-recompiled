@@ -261,6 +261,8 @@ namespace
                             if (f.ConstantSelect() < 3)
                             {
                                 m_result.vertexFetchSubs[f.ConstantSelect()] |= 1u << f.ConstantIndex();
+                                const uint32_t pair = f.ConstantIndex() * 3 + f.ConstantSelect();
+                                m_result.vertexFetchPairs[pair / 32] |= 1u << (pair % 32);
                                 lastSlot = f.VertexFetchSlot();
                             }
                         }
@@ -1186,6 +1188,7 @@ namespace
     // constants at the copies.
     Id Translator::FetchConstantWord(uint32_t pair, uint32_t word)
     {
+        m_result.fetchPairsRead[pair / 32] |= 1u << (pair % 32);
         return ArenaWord(Emit(Op::IAdd, m_uint,
                               { ConstantBlock(bindings::kFetchConstants), m_module.ConstantU(pair * 4 + word) }));
     }

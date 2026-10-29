@@ -34,9 +34,16 @@ namespace shader
         // whose bits read as a vertex fetch of some enormous buffer. Exact slot:
         // bit `group` of `vertexFetchSubs[sub]`.
         uint32_t vertexFetchSubs[3]{};
+        // The same slots numbered as the fetch window's pairs, group * 3 +
+        // sub, a bit each: what a draw walks to rewrite them.
+        uint32_t vertexFetchPairs[3]{};
         // A draw reads `index * stride + tail` dwords of what a fetch constant
         // points at, which is far less than the extent the constant declares.
         uint32_t vertexFetchStride[96]{}, vertexFetchTail[96]{};
+        // Every pair of the fetch window the program reads at all, vertex or
+        // texture, a bit each: a draw writes these into the arena and leaves
+        // the rest of the window as it found it.
+        uint32_t fetchPairsRead[3]{};
         // The float constants the program actually reads: one past the highest
         // index, or nothing if it reads none. A shader that reads four of them
         // was still being handed a copy of all 256 -- 4 KB a draw, twelve

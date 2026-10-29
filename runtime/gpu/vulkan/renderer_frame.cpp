@@ -8,6 +8,8 @@
 #include "../../pacing_trace.h"
 #include "../../report.h"
 
+#include <cstring>
+
 #ifdef MW2_HAVE_VULKAN
 
 namespace vk::renderer::detail
@@ -58,6 +60,7 @@ namespace vk::renderer::detail
         g.pixelWindow.valid = false;
         for (State::ConstantBlock& block : g.constantBlocks) block.valid = false;
         g.constantTable.valid = false;
+        std::memset(g.constantTableWords, 0, sizeof g.constantTableWords);
         g.fetchBlock.valid = g.booleans.valid = g.loops.valid = false;
         g.recording = true;
         return true;

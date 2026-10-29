@@ -313,8 +313,12 @@ namespace vk::renderer::detail
         struct ConstantBlock { uint64_t stamp = 0; uint32_t at = 0; bool valid = false; };
         ConstantBlock constantBlocks[bindings::kConstantFileBlocks];
         Cached constantTable;
+        // The table as the next copy of it would be, kept up as blocks are
+        // copied: the base, then each block's vec4 index, 0 for none yet.
+        uint32_t constantTableWords[bindings::kConstantTableWords]{};
         Cached fetchBlock, booleans, loops;
         uint32_t fetchSubs[3]{};          // what fetchBlock was assembled for
+        uint32_t fetchPairs[3]{};         // and which of its pairs it holds
 
         // The title's own occlusion queries. A bracket can outlive a command
         // buffer, so its queries are reset when the title opens it.
@@ -342,7 +346,18 @@ namespace vk::renderer::detail
         VkDescriptorSet memorySet = VK_NULL_HANDLE;     // set 2, the arena
 
         std::map<TargetKey, Target> targets;
+        // The last target EnsureTarget answered for colour and for depth: a
+        // draw asks for both, and the same two as the draw before it, nearly
+        // always. Forgotten whenever the map loses an entry.
+        struct LastTarget { TargetKey key; Target* target = nullptr; };
+        LastTarget lastTargets[2];
         std::unordered_map<PipelineKey, VkPipeline, WordsHash> pipelines;
+        // The last pipeline EnsurePipeline answered, while no optimised one
+        // has replaced an entry since (pipelinesOptimised): draws come in runs
+        // with one pipeline, and the key's hash was a few percent of a draw.
+        PipelineKey lastPipelineKey{};
+        VkPipeline lastPipeline = VK_NULL_HANDLE;
+        uint64_t lastPipelineSwaps = 0;
         std::unordered_map<uint64_t, Shader> shaders;
         // The last usable shader of each type ShaderFor answered with: draws
         // come in runs with the same pair, and an entry stays where it is
@@ -435,6 +450,8 @@ namespace vk::renderer::detail
             bool valid;
         };
         TextureSlot textureSlots[vk::textures::kSlots]{};
+        // The last answers for any slot, by a hash of the fetch: 64 entries.
+        TextureSlot recentTextures[64]{};
         uint64_t textureSlotsKept = 0, textureSlotsLookedUp = 0;
         std::map<uint32_t, ResolveSurface> resolveSurfaces;
 
