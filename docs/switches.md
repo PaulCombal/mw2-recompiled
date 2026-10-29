@@ -33,7 +33,7 @@ them as unset whatever the environment says, and also drops the keys `F5`, `F7`,
 | `MW2_FULLSCREEN=1` | R | starts fullscreen, borderless at the desktop's resolution. `F8` toggles it |
 | `MW2_STRETCH=1` | R | the frame fills the window or screen whatever their shapes, instead of keeping its proportions between black bars: for a TV that shows a widescreen signal at 4:3, with a 4:3 frame (`MW2_RENDER`) |
 | `MW2_LOG_FILE=<path>` | R | writes the log there, creating its folder. The log goes to stderr, so `> file` does not catch it. A title started from the other one's menus writes on in the same file |
-| `MW2_REPORT=1` | R | what a bug report needs, as the launcher's REPORT A BUG sets it: the log names the graphics driver and ends with the run's frame rate, frame time spread, what was compiled at a draw, and the processor and memory in play: how busy, how much of it this game's and which threads, how much memory was free, what the memory watch's protection changes cost ([building.md](building.md)) |
+| `MW2_REPORT=1` | R | what a bug report needs, as the launcher's REPORT A BUG sets it: the log names the graphics driver and ends with the run's frame rate, frame time spread, what was compiled at a draw, how much of the time the graphics chip was at work by its own clock (a timestamp pair around every submission), and the processor and memory in play: how busy, how much of it this game's and which threads, how much memory was free, what the memory watch's protection changes cost ([building.md](building.md)) |
 | `MW2_LOG_TIME=1` | | stamps every log line with the time since start |
 | `MW2_CONSOLE="30:map af_caves;45:god"` | R | queues commands into the title's console command buffer at the given wall-clock seconds; see [gameplay.md](gameplay.md) |
 | `MW2_CUSTOM_MAPS=1` | R | the multiplayer loads fastfiles nobody signed: a map converted from the PC game. Off, it refuses them as the console does, and the launcher's shader pass reads only the game's own fastfiles ([gameplay.md](gameplay.md)) |
@@ -133,6 +133,7 @@ walking to it.
 | `MW2_NO_SHADOW=1` | | no shadow of guest memory: every draw copies its vertex data into the arena |
 | `MW2_RECORD_THREAD=0` | | makes the Vulkan calls on the ring consumer instead of the recorder thread |
 | `MW2_TIME_RENDER=1` | | where the ring consumer's time goes, and how long it waits on the GPU |
+| `MW2_TIME_PASSES=<seconds>` | | from that far into the run, the GPU's time a frame by rendering instance (by target size, samples and format), resolve and the work between them, from a timestamp at each; a table at exit |
 | `MW2_TRACE_PACING=<file>` | | a timeline written at exit: the consumer's batches and swaps, the title's presents, and every guest thread's engine waits, kernel waits and sleeps with their callers ([multiplayer.md](multiplayer.md)) |
 | `MW2_STUTTERS=1` | | (at the console's pacing only, not under `MW2_FPS_LIMIT`) from the first 30 consecutive world frames on, logs `STUTTER` for every world frame 25 ms or more after the previous one, with what the renderer spent the gap on, and `DISPLAY` when a frame is held or dropped by the window; totals at exit. When play stops for a second it logs `STALL` with what every guest thread waits on and every thread's stack (Linux), once a stall. The pad's Y and `F7` log a `STUTTER MARK` |
 

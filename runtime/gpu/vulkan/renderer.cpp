@@ -28,6 +28,7 @@ void vk::renderer::Idle() {}
 #include "shader_build.h"
 #include "shader_marker.h"
 #include "display_table.h"
+#include "gpu_time.h"
 #include "texture_cache.h"
 #include "../memory_watch.h"
 #include "../../guest_memory.h"
@@ -215,6 +216,8 @@ bool vk::renderer::Initialise()
     queries.queryCount = kGuestQueryRing;
     if (vkCreateQueryPool(g.device, &queries, nullptr, &g.guestQueries) != VK_SUCCESS)
         g.guestQueries = VK_NULL_HANDLE;
+    vk::gpu_time::Start(g.physical, g.device, g.queue, vk::pipeline::QueueFamily());
+    StartPassTimes();
 
     VkFenceCreateInfo fence{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
     for (State::Slot& slot : g.slots)
@@ -370,6 +373,8 @@ void vk::renderer::Shutdown()
     // commands may still be with the recorder thread.
     vk::record::Stop();
     vkDeviceWaitIdle(g.device);
+    vk::gpu_time::Stop();
+    StopPassTimes();
     StopPreparing();
     vk::display::Shutdown();
     WriteShaderCache();

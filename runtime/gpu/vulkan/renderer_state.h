@@ -811,4 +811,20 @@ namespace vk::renderer::detail
     // and waited for.
     void ExamineFrame(bool worldDrawn, const FrameReadBacks& plan);
     void SummariseTargets();
+
+    // ---- renderer_passtime.cpp ----
+    // MW2_TIME_PASSES=<seconds>: from that far into the run, the GPU's time
+    // over each rendering instance, by the target it draws into, and over the
+    // work between them, by a timestamp at each end; written at the exit.
+    // Off, each is one test of a flag.
+    void StartPassTimes();
+    void StopPassTimes();
+    // At a slot's reuse, once its last submission is done.
+    void PassTimesBegin(uint32_t slot);
+    void PassTimesOpen(const Target& colour, uint32_t samples);
+    void PassTimesClose();
+    // Ahead of a pass, and at the end of a submission: what came since the last mark.
+    void PassTimesBetween();
+    // What came since the last mark, by a name of its own (printf's format).
+    void PassTimesMark(const char* format, ...);
 }

@@ -2,6 +2,7 @@
 // and the title's occlusion queries, which live and die with the render passes.
 #include "renderer_state.h"
 #include "capture.h"
+#include "gpu_time.h"
 #include "presenter.h"
 #include "texture_cache.h"
 #include "../../log.h"
@@ -46,6 +47,7 @@ namespace vk::renderer::detail
         State::Slot& slot = g.slots[g.slot];
         if (!WaitForSlot(slot, "a frame slot's fence")) return false;
         NoteCompleted();
+        vk::gpu_time::Collect();
         g.arenaBase = slot.arenaBase;
         vk::textures::BeginUploads(g.slot);
         g.ended.clear();
@@ -56,6 +58,7 @@ namespace vk::renderer::detail
         const VkCommandPool pool = slot.commands;
         Record([=](VkCommandBuffer) { vkResetCommandPool(device, pool, 0); });
         BeginSegmentBuffer();
+        PassTimesBegin(g.slot);
         g.arenaUsed = 0;
         g.pixelWindow.valid = false;
         for (State::ConstantBlock& block : g.constantBlocks) block.valid = false;
@@ -97,6 +100,7 @@ namespace vk::renderer::detail
     void CloseSegment()
     {
         EndPass();
+        PassTimesBetween();
         if (void* uploads = vk::textures::EndSegment())
             g.ended.push_back(static_cast<VkCommandBuffer>(uploads));
         g.ended.push_back(g.command);
@@ -122,6 +126,7 @@ namespace vk::renderer::detail
         g.command = slot.buffers[g.segment];
         vk::record::Into(g.command);
         BeginSegmentBuffer();
+        PassTimesMark("texture uploads at a segment's end");
         g.segments++;
     }
 
@@ -170,6 +175,7 @@ namespace vk::renderer::detail
                                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                                      0, 1, &after, 0, nullptr, 0, nullptr);
             });
+        PassTimesClose();
         g.currentColour = g.currentDepth = VK_NULL_HANDLE;
     }
 
@@ -187,6 +193,7 @@ namespace vk::renderer::detail
         Stopwatch watch(g.submitNanoseconds);
         if (!g.recording) return true;
         EndPass();
+        PassTimesBetween();
         if (g.arenaUsed > g.arenaPeak) g.arenaPeak = g.arenaUsed;
         g.recording = false;
 
@@ -211,7 +218,7 @@ namespace vk::renderer::detail
             vkResetFences(device, 1, &fence);
             // Whatever happens the fence is signalled, or whoever waits for
             // this slot waits for ever.
-            if (!ended || vk::pipeline::Failed(vkQueueSubmit(queue, 1, &submit, fence),
+            if (!ended || vk::pipeline::Failed(vk::gpu_time::Submit(queue, submit, fence),
                                                "a frame's submission"))
                 vkQueueSubmit(queue, 0, nullptr, fence);
         });

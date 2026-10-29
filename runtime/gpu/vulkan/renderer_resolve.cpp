@@ -170,6 +170,7 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
         if (!g.recording && !BeginFrame()) { Skip("no command buffer"); return; }
         g.resolves++;
         EndPass();
+        PassTimesBetween();
 
         uint32_t width = std::min(rect.extent.width, from->width - uint32_t(rect.offset.x));
         uint32_t height = std::min(rect.extent.height, from->height - uint32_t(rect.offset.y));
@@ -260,8 +261,10 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
                       VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
                       VK_PIPELINE_STAGE_TRANSFER_BIT, kShaderStages);
         EndReadingDepth(*from);
+        PassTimesMark("depth resolve %ux%u %ux", width * from->scale, height * from->scale, unsigned(from->samples));
         g.depthResolves++;
         ClearAfterResolve(r, control);
+        PassTimesMark("clears after a resolve");
         if (!SubmitIfFilling()) Skip("frame submission failed");
         return;
     }
@@ -281,6 +284,7 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
     g.resolves++;
 
     EndPass();
+    PassTimesBetween();
 
     // The image is the destination surface RB_COPY_DEST_PITCH describes, not
     // the rectangle, and the rectangle lands at its own offset in it -- as
@@ -345,7 +349,9 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
                   VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
                   VK_PIPELINE_STAGE_TRANSFER_BIT, kShaderStages);
     EndReadingColour(*source);
+    PassTimesMark("colour resolve %ux%u %ux", width * source->scale, height * source->scale, unsigned(source->samples));
     ClearAfterResolve(r, control);
+    PassTimesMark("clears after a resolve");
     if (!SubmitIfFilling()) Skip("frame submission failed");
 }
 

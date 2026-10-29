@@ -40,6 +40,7 @@ uint64_t vk::PresentedFrames() { return 0; }
 #include <vector>
 
 #include "capture.h"
+#include "gpu_time.h"
 #include "pipeline.h"
 #include "renderer.h"
 
@@ -886,7 +887,7 @@ namespace
         // between them.
         {
             std::lock_guard queueLock(vk::pipeline::QueueMutex());
-            vk::pipeline::Failed(vkQueueSubmit(g.queue, 1, &submit, frame.inFlight),
+            vk::pipeline::Failed(vk::gpu_time::Submit(g.queue, submit, frame.inFlight),
                                  "the presenter's submission");
         }
         // The copy is in the queue ahead of anything the renderer submits from

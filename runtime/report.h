@@ -28,8 +28,9 @@ namespace report
     // back: the thread itself when it is busy all the time, the graphics chip
     // when the busy time is waiting for it, the title when it is neither.
     // kExecuting has the others in it. All are timed on the consumer's
-    // thread, where report::Frame is called from.
-    enum Time { kExecuting, kRecorderWait, kGpuWait, kTextures, kCompiling, kTimeCount };
+    // thread, where report::Frame is called from, but kGpuBusy: the time the
+    // graphics chip itself was at work, by its own clock (gpu_time.h).
+    enum Time { kExecuting, kRecorderWait, kGpuWait, kTextures, kCompiling, kGpuBusy, kTimeCount };
     void Spent(Time time, uint64_t nanoseconds);
     // A shader the renderer built, and whether the driver found it in the
     // pipeline cache the launcher compiled every shader of the game into:

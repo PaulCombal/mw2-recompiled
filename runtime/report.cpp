@@ -254,6 +254,9 @@ void report::Write()
         LOGI("report: in play, the renderer's thread was at work %.0f%% of the time: %.0f%% waiting for the"
              " graphics chip, %.0f%% for its recorder thread, %.0f%% reading textures, %.0f%% compiling",
              took(kExecuting), took(kGpuWait), took(kRecorderWait), took(kTextures), took(kCompiling));
+        if (s.spentInPlay[kGpuBusy])
+            LOGI("report: in play, the graphics chip was at work %.0f%% of the time, %.1f ms a frame",
+                 took(kGpuBusy), double(s.spentInPlay[kGpuBusy]) / 1e6 / double(s.intervals));
     }
     if (m.playNanoseconds && m.inPlay.total)
     {

@@ -420,6 +420,7 @@ namespace vk::renderer::detail
                         uint32_t height)
     {
         EndPass();
+        PassTimesOpen(colour, uint32_t(colour.samples));
         const VkImageView colourView = colour.view, depthView = depth.view;
         // Both are drawn at the pass's scale: their keys carry it.
         const VkExtent2D area = Scaled(VkExtent2D{ width, height }, colour.scale);
