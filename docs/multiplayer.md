@@ -282,7 +282,13 @@ controller from a game Steam did not start.
   party or private match the host is in, which the friend's copy takes as an
   accepted Live invitation; otherwise `connect`, the host's system-link join
   line, which the friend's copy types. Either is acted on once per lobby
-  entered.
+  entered, and again when the friend accepts another invitation to the lobby
+  they are in: the host may have started another party since, or the friend
+  left it.
+- Each copy logs the Steam links to the players it talks to: a request for one
+  and whether it was taken, a link connecting, connected (with its ping), and
+  ending (with Steam's reason), and, at most every 5 s, a link that loses
+  packets or queues what it sends.
 - Steam cannot launch the game from an invitation (it would start Spacewar), so
   the friend must already be running it.
 

@@ -205,6 +205,10 @@ namespace
     // The title broadcasts a search every few seconds while its list is open;
     // Steam is asked for the list at most this often.
     constexpr auto kSearchEvery = std::chrono::seconds(2);
+    // The links to other players are looked at this often; one that goes
+    // bad is told about at most this often.
+    constexpr auto kLinksEvery = std::chrono::seconds(1);
+    constexpr auto kPoorLinkEvery = std::chrono::seconds(5);
     // Unreliable, sent at once, and a session that broke is started again
     // rather than refused.
     constexpr int kSendFlags = 0 | 1 | 32;
@@ -232,6 +236,36 @@ namespace
         identity.steamId = steamId;
         return identity;
     }
+
+    // SteamNetConnectionInfo_t and SteamNetConnectionRealTimeStatus_t, laid
+    // out alike packed to 4 and to 8.
+    struct LinkInfo
+    {
+        Identity remote;
+        int64_t userData;
+        uint32_t listenSocket;
+        uint8_t address[18];   // SteamNetworkingIPAddr, packed to 1
+        uint16_t pad;
+        uint32_t popRemote, popRelay;
+        int32_t state, endReason;
+        char endDebug[128];
+        char description[128];
+        int32_t flags;
+        uint32_t reserved[63];
+    };
+    struct LinkStatus
+    {
+        int32_t state, ping;
+        float qualityLocal, qualityRemote;   // the share of packets that arrive, here and there
+        float outPackets, outBytes, inPackets, inBytes;
+        int32_t sendRate, pendingUnreliable, pendingReliable, sentUnacked;
+        int64_t queueMicroseconds;
+        uint32_t reserved[16];
+    };
+    static_assert(offsetof(LinkInfo, state) == 176 && offsetof(LinkInfo, endDebug) == 184 &&
+                  sizeof(LinkInfo) == 696);
+    static_assert(offsetof(LinkStatus, queueMicroseconds) == 48 && sizeof(LinkStatus) == 120);
+    constexpr int kConnected = 3, kClosedByPeer = 4, kProblem = 5;   // ESteamNetworkingConnectionState
 
     // The callback structures, packed as the SDK packs them: to 8 on Windows,
     // to 4 elsewhere. Of the ones read here only LobbyCreated's lobby moves.
@@ -676,6 +710,11 @@ namespace
                     std::lock_guard g(lock_);
                     if (!listing_) ListLocked();
                 }
+                if (const auto now = std::chrono::steady_clock::now(); now - linksWatched_ >= kLinksEvery)
+                {
+                    linksWatched_ = now;
+                    WatchLinks(now);
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
         }
@@ -742,7 +781,8 @@ namespace
                 const auto& request = *reinterpret_cast<const SessionRequest*>(message.param);
                 if (request.remote.type != 16) break;
                 const uint64_t who = request.remote.steamId;
-                bool take = InLobby(who);
+                const bool member = InLobby(who);
+                bool take = member;
                 if (!take)
                 {
                     std::lock_guard g(lock_);
@@ -750,6 +790,9 @@ namespace
                     if (take) strangers_.insert(who);
                 }
                 if (take) Call<bool>(messages_, messages::Accept, &request.remote);
+                LOGI("online: %s asks for a link: %s", Who(who).c_str(),
+                     member ? "in the lobby, taken" : take ? "taken, as this player hosts a game"
+                                                           : "refused, being neither in the lobby nor at a game hosted here");
                 break;
             }
             default:
@@ -759,7 +802,20 @@ namespace
 
         void Join(uint64_t lobby)
         {
-            if (!lobby || lobby == lobby_) return;
+            if (!lobby) return;
+            if (lobby == lobby_)
+            {
+                // Already in it, with the host's party or game followed once:
+                // since then the host may have started another, or this player
+                // left it. Taking the invitation again follows the host again.
+                LOGI("online: invited again to lobby %016llx; following its owner", (unsigned long long)lobby);
+                {
+                    std::lock_guard g(lock_);
+                    followed_ = false;
+                }
+                Follow();
+                return;
+            }
             LOGI("online: invited; entering lobby %016llx", (unsigned long long)lobby);
             if (const uint64_t old = lobby_.exchange(0)) Call<void>(matchmaking_, matchmaking::LeaveLobby, old);
             joinCall_ = Call<SteamAPICall>(matchmaking_, matchmaking::JoinLobby, lobby);
@@ -787,7 +843,7 @@ namespace
 
         // The owner's game, once per lobby entered: a friend who accepted an
         // invitation lands in it, and is not pulled back in each time the host
-        // starts another.
+        // starts another -- only when invited again (Join).
         void Follow()
         {
             std::lock_guard g(lock_);
@@ -1006,6 +1062,68 @@ namespace
             return false;
         }
 
+        std::string Who(uint64_t id)
+        {
+            const char* name = Call<const char*>(friends_, friends::Name, id);
+            char text[160];
+            std::snprintf(text, sizeof text, "%s (%016llx)", name && *name ? name : "?", (unsigned long long)id);
+            return text;
+        }
+
+        // The links to everyone this player talks to through Steam: the
+        // lobby's, the strangers at its game, the hosts it went to. The log
+        // says when one connects, when one goes bad and why one ends.
+        void WatchLinks(std::chrono::steady_clock::time_point now)
+        {
+            std::set<uint64_t> peers;
+            {
+                std::lock_guard g(lock_);
+                peers.insert(strangers_.begin(), strangers_.end());
+                peers.insert(contacted_.begin(), contacted_.end());
+            }
+            if (const uint64_t lobby = lobby_)
+            {
+                const int count = Call<int>(matchmaking_, matchmaking::MemberCount, lobby);
+                for (int i = 0; i < count; i++) peers.insert(CallSteamId(matchmaking_, matchmaking::Member, lobby, i));
+            }
+            for (const auto& [peer, link] : links_) peers.insert(peer);
+            peers.erase(self_);
+            for (const uint64_t peer : peers)
+            {
+                const Identity identity = SteamIdentity(peer);
+                LinkInfo info{};
+                LinkStatus status{};
+                const int state = Call<int>(messages_, messages::SessionInfo, &identity, &info, &status);
+                Link& link = links_[peer];
+                info.endDebug[sizeof info.endDebug - 1] = 0;
+                if (state != link.state)
+                {
+                    if (state == kConnected)
+                        LOGI("online: link to %s: connected, %d ms, %.0f%% of packets arrive", Who(peer).c_str(),
+                             status.ping, 100.0 * status.qualityLocal);
+                    else if (state == kClosedByPeer || state == kProblem)
+                        LOGI("online: link to %s: %s (reason %d: %s)", Who(peer).c_str(),
+                             state == kClosedByPeer ? "closed by them" : "lost", info.endReason, info.endDebug);
+                    else
+                        LOGI("online: link to %s: %s", Who(peer).c_str(),
+                             state == 1 ? "connecting" : state == 2 ? "finding a route" : "none");
+                    link.state = state;
+                }
+                else if (state == kConnected && now - link.told >= kPoorLinkEvery &&
+                         (status.qualityLocal < 0.9f || status.qualityRemote < 0.9f ||
+                          status.queueMicroseconds >= 100000))
+                {
+                    link.told = now;
+                    LOGI("online: link to %s is poor: %d ms, %.0f%% of packets arrive here and %.0f%% there, "
+                         "%.0f ms queued to send, %.1f KB/s out of %.1f allowed, %.1f KB/s in", Who(peer).c_str(),
+                         status.ping, 100.0 * status.qualityLocal, 100.0 * status.qualityRemote,
+                         double(status.queueMicroseconds) / 1000.0, status.outBytes / 1024.0,
+                         status.sendRate / 1024.0, status.inBytes / 1024.0);
+                }
+            }
+            std::erase_if(links_, [](const auto& entry) { return entry.second.state <= 0; });
+        }
+
         void* library_ = nullptr;
         void* client_ = nullptr;
         void* steamUser_ = nullptr;
@@ -1041,6 +1159,14 @@ namespace
         std::set<uint64_t> strangers_;          // not in the lobby, whose sessions this player accepted hosting
         std::set<uint64_t> contacted_;          // listed hosts this player sent to on its own
         std::chrono::steady_clock::time_point listAsked_{};   // the callback thread's
+        // The links WatchLinks follows, on the callback thread.
+        struct Link
+        {
+            int state = 0;
+            std::chrono::steady_clock::time_point told{};   // when it was last said to be poor
+        };
+        std::map<uint64_t, Link> links_;
+        std::chrono::steady_clock::time_point linksWatched_{};
         std::deque<std::string> joins_;
         std::deque<online::Invite> invites_;
 
