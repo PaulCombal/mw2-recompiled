@@ -210,7 +210,9 @@ namespace vk::renderer::detail
         // After whatever wrote the image in the layout it is in, even when that
         // is already TRANSFER_SRC, and back afterwards for what uses it there.
         const LayoutUse use = UseOf(layout);
-        Barrier(g.setup, image, aspect, layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        // Depth and stencil change layout together; only the depth is read.
+        const VkImageAspectFlags all = aspect == VK_IMAGE_ASPECT_DEPTH_BIT ? kDepthAspects : aspect;
+        Barrier(g.setup, image, all, layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 use.writes, VK_ACCESS_TRANSFER_READ_BIT, use.stages, VK_PIPELINE_STAGE_TRANSFER_BIT);
         VkBufferImageCopy region{};
         region.imageSubresource = { aspect, 0, 0, 1 };
@@ -218,7 +220,7 @@ namespace vk::renderer::detail
         vkCmdCopyImageToBuffer(g.setup, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                buffer, 1, &region);
         if (layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
-            Barrier(g.setup, image, aspect, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, layout,
+            Barrier(g.setup, image, all, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, layout,
                     0, use.accesses, VK_PIPELINE_STAGE_TRANSFER_BIT, use.stages);
         vkEndCommandBuffer(g.setup);
         VkSubmitInfo submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
@@ -537,45 +539,47 @@ namespace vk::renderer::detail
         char name[96];
         for (const auto& [key, target] : g.targets)
         {
-            if (target.depth || !target.draws) continue;
-            // A multisampled target is dumped as its twin: the last rectangle
-            // resolved out of it, which for the world is the whole frame.
-            if (target.samples > 1 && !target.singleReady) continue;
+            if (target.depth || !target.draws || target.samples > 1) continue;
             std::snprintf(name, sizeof name, "frame_%06llu_tile%u_fmt%u_%ux%u_%ux",
                           (unsigned long long)g.frames, key.baseTile, target.guestFormat,
                           target.width, target.height, 1u << key.samples);
-            DumpImage(target.samples > 1 ? target.singleImage : target.image,
-                      target.samples > 1 ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-                                         : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            DumpImage(target.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                       target.width * target.scale, std::min(target.height, 1024u) * target.scale, name);
         }
 
-        // A multisampled depth image cannot be copied out, so it is resolved into
-        // its twin first -- and that resolve is a render pass, so it has to be
-        // recorded and submitted before the copy reads what it wrote.
+        // A multisampled image cannot be copied out, so it is resolved into its
+        // twin first, and every depth image is made ready to be copied from:
+        // all of it recorded and submitted before the copies read what it wrote.
         struct Shot { VkImage image; uint32_t tile, samples; Target* target; };
         std::vector<Shot> shots;
         for (auto& [key, target] : g.targets)
         {
-            if (!target.depth || !target.draws) continue;
+            if (!target.draws || (!target.depth && target.samples == 1)) continue;
             if (!BeginFrame()) break;
             const uint32_t tall = std::min(target.height, 1024u);
-            VkImage image = BeginReadingDepth(target, { 0, 0 }, target.width, tall);
+            VkImage image = target.depth ? BeginReadingDepth(target, { 0, 0 }, target.width, tall)
+                                         : BeginReadingColour(target, { 0, 0 }, target.width, tall);
             if (image) shots.push_back({ image, key.baseTile, key.samples, &target });
         }
         if (!shots.empty()) Submit(true);
         for (const Shot& shot : shots)
         {
-            const uint32_t tall = std::min(shot.target->height, 1024u);
-            std::snprintf(name, sizeof name, "frame_%06llu_depth_tile%u_%ux%u_%ux",
-                          (unsigned long long)g.frames, shot.tile,
-                          shot.target->width, tall, 1u << shot.samples);
-            DumpImage(shot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                      shot.target->width * shot.target->scale, tall * shot.target->scale, name,
-                      VK_IMAGE_ASPECT_DEPTH_BIT, g.depthFormat);
+            const Target& target = *shot.target;
+            const uint32_t tall = std::min(target.height, 1024u);
+            if (target.depth)
+                std::snprintf(name, sizeof name, "frame_%06llu_depth_tile%u_%ux%u_%ux",
+                              (unsigned long long)g.frames, shot.tile, target.width, tall, 1u << shot.samples);
+            else
+                std::snprintf(name, sizeof name, "frame_%06llu_tile%u_fmt%u_%ux%u_%ux",
+                              (unsigned long long)g.frames, shot.tile, target.guestFormat,
+                              target.width, target.height, 1u << shot.samples);
+            DumpImage(shot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target.width * target.scale,
+                      tall * target.scale, name,
+                      target.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT,
+                      target.depth ? g.depthFormat : VK_FORMAT_UNDEFINED);
         }
         for (const Shot& shot : shots)
-            if (BeginFrame()) EndReadingDepth(*shot.target);
+            if (shot.target->depth && BeginFrame()) EndReadingDepth(*shot.target);
 
         for (const auto& [address, ring] : g.resolvedTo)
         {

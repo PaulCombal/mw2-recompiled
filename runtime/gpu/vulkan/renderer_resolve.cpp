@@ -43,9 +43,10 @@ namespace vk::renderer::detail
     }
 
     // `scale` is the surface's the copy comes out of: a copy is as many times
-    // the title's size as that surface.
+    // the title's size as that surface. `attachment`: a multisampled depth
+    // surface is resolved into it (Resolved::attachmentView).
     bool MakeResolveImage(Resolved& into, uint32_t width, uint32_t height, uint32_t scale,
-                          VkFormat format, bool depth = false, bool exact = false)
+                          VkFormat format, bool depth = false, bool exact = false, bool attachment = false)
     {
         // Grow only within a frame: the second shadow cascade lands inside the
         // surface the first one made, and must not throw the first away.
@@ -55,9 +56,10 @@ namespace vk::renderer::detail
         // image, so an image wider than the surface stretches what it holds.
         const bool fits = exact ? into.width == width && into.height == height
                                 : into.width >= width && into.height >= height;
-        if (into.image && fits && into.format == format && into.depth == depth && into.scale == scale)
-            return true;
-        if (!exact && into.image && into.format == format && into.depth == depth && into.scale == scale)
+        const bool same = into.image && into.format == format && into.depth == depth && into.scale == scale &&
+                          (into.attachmentView || !attachment);
+        if (same && fits) return true;
+        if (!exact && same)
         {
             width = std::max(width, into.width);
             height = std::max(height, into.height);
@@ -73,6 +75,7 @@ namespace vk::renderer::detail
         if (into.image) vk::textures::ForgetViews();
         if (into.view) vkDestroyImageView(g.device, into.view, nullptr);
         if (into.gammaView) vkDestroyImageView(g.device, into.gammaView, nullptr);
+        if (into.attachmentView) vkDestroyImageView(g.device, into.attachmentView, nullptr);
         if (into.image) vkDestroyImage(g.device, into.image, nullptr);
         if (into.memory) vkFreeMemory(g.device, into.memory, nullptr);
         into = Resolved{};
@@ -88,6 +91,7 @@ namespace vk::renderer::detail
         info.tiling = VK_IMAGE_TILING_OPTIMAL;
         info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                      VK_IMAGE_USAGE_SAMPLED_BIT;
+        if (attachment) info.usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
         info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         // Two views of one image, so the format has to be allowed to differ from
@@ -125,6 +129,11 @@ namespace vk::renderer::detail
                                                            : VK_IMAGE_ASPECT_COLOR_BIT),
                                   0, 1, 0, 1 };
         if (vkCreateImageView(g.device, &view, nullptr, &into.view) != VK_SUCCESS) return false;
+        if (attachment)
+        {
+            view.subresourceRange.aspectMask = kDepthAspects;
+            if (vkCreateImageView(g.device, &view, nullptr, &into.attachmentView) != VK_SUCCESS) return false;
+        }
         if (srgb != VK_FORMAT_UNDEFINED)
         {
             view.format = srgb;
@@ -218,8 +227,19 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
         const uint32_t imageHeight = std::max(destY + height,
                                               std::min(destPitch.Height(), 4096u));
         const bool firstThisFrame = into.writtenFrame != g.frames;
+        // A multisampled surface is resolved straight into the copy, which a
+        // rendering instance's resolve can do only where the rectangle sits
+        // in the surface: at its first row (the scene's depth, every frame).
+        // The copy has to be an attachment for it, and one that is not is
+        // made again only at the frame's first resolve into it: later, that
+        // would lose what the frame's earlier resolves put there. A copy
+        // landing further down, or into such an image, goes through the
+        // surface's twin.
+        const bool direct = from->samples != VK_SAMPLE_COUNT_1_BIT && row == 0 &&
+                            (firstThisFrame || into.attachmentView);
         if (!destination || !width || !height ||
-            !MakeResolveImage(into, imageWidth, imageHeight, from->scale, from->format, true, firstThisFrame))
+            !MakeResolveImage(into, imageWidth, imageHeight, from->scale, from->format, true, firstThisFrame,
+                              direct))
         {
             Skip("depth resolve destination image");
             SubmitIfFilling();
@@ -229,38 +249,45 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
         height = std::min(height, into.height > destY ? into.height - destY : 0u);
         const bool keep = into.writtenFrame == g.frames;
         into.writtenFrame = g.frames;
-
-        constexpr VkImageAspectFlags kBoth =
-            VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-        VkImage fromImage = BeginReadingDepth(*from, rect.offset, width, height);
-        if (!fromImage) { Skip("depth resolve of a multisampled surface"); SubmitIfFilling(); return; }
         // The second cascade keeps the first: it comes out of the layout the
         // first left it in rather than out of UNDEFINED, which may discard.
-        RecordBarrier(into.image, kBoth,
-                      keep ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
-                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                      0, VK_ACCESS_TRANSFER_WRITE_BIT, kShaderStages, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        const VkImageLayout before = keep ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
 
-        // A copy rather than a blit: depth cannot be filtered on the way through,
-        // and a plain copy asks nothing of the format beyond being transferable.
-        VkImageCopy copy{};
-        copy.srcSubresource = { kBoth, 0, 0, 1 };
-        copy.srcOffset = Scaled(rect.offset.x, rect.offset.y, 0, from->scale);
-        copy.dstSubresource = copy.srcSubresource;
-        copy.dstOffset = Scaled(int32_t(destX), int32_t(destY), 0, from->scale);
-        copy.extent = { width * from->scale, height * from->scale, 1 };
-        const VkImage intoImage = into.image;
-        Record([=](VkCommandBuffer command) {
-            vkCmdCopyImage(command, fromImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                           intoImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-        });
+        if (direct)
+            ResolveDepthInto(*from, rect.offset, width, height, into.image, into.attachmentView, before,
+                             kShaderStages, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
+                             kShaderStages);
+        else
+        {
+            VkImage fromImage = BeginReadingDepth(*from, rect.offset, width, height);
+            if (!fromImage) { Skip("depth resolve of a multisampled surface"); SubmitIfFilling(); return; }
+            // Layouts change for both aspects together.
+            RecordBarrier(into.image, kDepthAspects, before, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          0, VK_ACCESS_TRANSFER_WRITE_BIT, kShaderStages, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
-        RecordBarrier(into.image, kBoth,
-                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                      VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-                      VK_PIPELINE_STAGE_TRANSFER_BIT, kShaderStages);
-        EndReadingDepth(*from);
+            // A copy rather than a blit: depth cannot be filtered on the way
+            // through, and a plain copy asks nothing of the format beyond being
+            // transferable. Of the depth alone: the copy is sampled through a
+            // depth-only view, so its stencil is never read.
+            VkImageCopy copy{};
+            copy.srcSubresource = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1 };
+            copy.srcOffset = Scaled(rect.offset.x, rect.offset.y, 0, from->scale);
+            copy.dstSubresource = copy.srcSubresource;
+            copy.dstOffset = Scaled(int32_t(destX), int32_t(destY), 0, from->scale);
+            copy.extent = { width * from->scale, height * from->scale, 1 };
+            const VkImage intoImage = into.image;
+            Record([=](VkCommandBuffer command) {
+                vkCmdCopyImage(command, fromImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               intoImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            });
+
+            RecordBarrier(into.image, kDepthAspects,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                          VK_PIPELINE_STAGE_TRANSFER_BIT, kShaderStages);
+            EndReadingDepth(*from);
+        }
         PassTimesMark("depth resolve %ux%u %ux", width * from->scale, height * from->scale, unsigned(from->samples));
         g.depthResolves++;
         ClearAfterResolve(r, control);
@@ -322,33 +349,36 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
     }
     into.writtenFrame = g.frames;
     into.from = sourceKey;
-    VkImage sourceImage = BeginReadingColour(*source, { int32_t(destX), int32_t(destY) },
-                                             width, height);
-    if (!sourceImage) { Skip("resolve of a multisampled surface"); SubmitIfFilling(); return; }
     // After the draws that sampled this copy's last contents.
     RecordBarrier(into.image, VK_IMAGE_ASPECT_COLOR_BIT,
                   VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                   0, VK_ACCESS_TRANSFER_WRITE_BIT, kShaderStages, VK_PIPELINE_STAGE_TRANSFER_BIT);
-
-    VkImageBlit copy{};
-    copy.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-    copy.srcOffsets[0] = Scaled(int32_t(destX), int32_t(destY), 0, source->scale);
-    copy.srcOffsets[1] = Scaled(int32_t(destX + width), int32_t(destY + height), 1, source->scale);
-    copy.dstSubresource = copy.srcSubresource;
-    copy.dstOffsets[0] = copy.srcOffsets[0];
-    copy.dstOffsets[1] = copy.srcOffsets[1];
-    const VkImage intoImage = into.image;
-    Record([=](VkCommandBuffer command) {
-        vkCmdBlitImage(command, sourceImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                       intoImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy,
-                       VK_FILTER_LINEAR);
-    });
-
+    // The copy is of the surface's format and the rectangle lands where it
+    // sits, so a multisampled surface is resolved straight into it, and a
+    // single-sampled one copied.
+    const VkOffset2D at{ int32_t(destX), int32_t(destY) };
+    if (source->samples != VK_SAMPLE_COUNT_1_BIT)
+        ResolveColourInto(*source, at, width, height, into.image);
+    else
+    {
+        const VkImage sourceImage = BeginReadingColour(*source, at, width, height);
+        VkImageCopy copy{};
+        copy.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        copy.srcOffset = Scaled(int32_t(destX), int32_t(destY), 0, source->scale);
+        copy.dstSubresource = copy.srcSubresource;
+        copy.dstOffset = copy.srcOffset;
+        copy.extent = { width * source->scale, height * source->scale, 1 };
+        const VkImage intoImage = into.image;
+        Record([=](VkCommandBuffer command) {
+            vkCmdCopyImage(command, sourceImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           intoImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        });
+        EndReadingColour(*source);
+    }
     RecordBarrier(into.image, VK_IMAGE_ASPECT_COLOR_BIT,
                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                   VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
                   VK_PIPELINE_STAGE_TRANSFER_BIT, kShaderStages);
-    EndReadingColour(*source);
     PassTimesMark("colour resolve %ux%u %ux", width * source->scale, height * source->scale, unsigned(source->samples));
     ClearAfterResolve(r, control);
     PassTimesMark("clears after a resolve");

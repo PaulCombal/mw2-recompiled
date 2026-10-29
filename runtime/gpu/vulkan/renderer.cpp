@@ -111,6 +111,7 @@ bool vk::renderer::Initialise()
         const bool depthResolve = modern &&
             (resolve.supportedDepthResolveModes & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT);
         g.msaa = !off && depthResolve && (g.sampleCounts & ~VkSampleCountFlags(VK_SAMPLE_COUNT_1_BIT));
+        g.stencilUnresolved = depthResolve && (resolve.independentResolveNone || resolve.independentResolve);
         if (g.msaa)
             LOGI("renderer: multisampling on: the device draws at%s%s%s%s, the title's 2x and 4x"
                  " surfaces are drawn at %ux and %ux%s",
@@ -412,6 +413,7 @@ void vk::renderer::Shutdown()
         {
             if (resolved.view) vkDestroyImageView(g.device, resolved.view, nullptr);
             if (resolved.gammaView) vkDestroyImageView(g.device, resolved.gammaView, nullptr);
+            if (resolved.attachmentView) vkDestroyImageView(g.device, resolved.attachmentView, nullptr);
             if (resolved.image) vkDestroyImage(g.device, resolved.image, nullptr);
             if (resolved.memory) vkFreeMemory(g.device, resolved.memory, nullptr);
         }

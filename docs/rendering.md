@@ -207,8 +207,12 @@ destination address, and a texture fetch of that address binds the image.
 - **A resolve that lands inside a surface started this frame** goes into that
   surface's image at the matching row, without discarding it. The sun shadow
   map is one 1024x2048 surface filled by two resolves.
-- Colour is blitted and also gets an sRGB view. Depth is copied and sampled
-  through a depth-only view; the title reads scene depth as a texture.
+- Colour and depth are copied, or resolved straight into the image from a
+  multisampled surface ([Multisampling](#multisampling)), at the place the
+  rectangle names, with nothing in between. Colour also gets an sRGB view.
+  Depth is sampled through a depth-only view, since the title reads scene
+  depth as a texture; nothing reads a resolved stencil, so a copy takes the
+  depth alone.
 - **The frame** is the front buffer the swap packet names (`PM4_XE_SWAP`, which
   `VdSwap` writes): a resolve destination like any other. At the swap its
   newest copy is blitted into one of four present images, run through the
@@ -375,12 +379,17 @@ supports for colour, depth and stencil. Multisampling needs Vulkan 1.2 and a
 `SAMPLE_ZERO` depth resolve. Without them, or under `MW2_NO_MSAA=1`, everything
 is 1x. `MW2_MSAA=<n>` forces n.
 
-A multisampled image cannot be blitted, copied or sampled, so each one has a
-single-sampled **twin**, and every read goes through it. Colour reaches the
-twin through `vkCmdResolveImage`, which averages as the console does. Depth
-reaches it through an empty rendering instance with `SAMPLE_ZERO`, because an
-averaged depth describes a surface nothing was drawn at. Sample positions are
-Vulkan's standard ones.
+A multisampled image cannot be blitted, copied or sampled, so every read of
+one is a resolve. Colour goes through `vkCmdResolveImage`, which averages as
+the console does. Depth goes through an empty rendering instance with
+`SAMPLE_ZERO`, because an averaged depth describes a surface nothing was drawn
+at. Both resolve straight into the resolve's image, which for depth must be an
+attachment as well. The rendering instance writes where the rectangle sits in
+its surface. So a depth resolve goes through a single-sampled **twin** of the
+surface, and is copied from there, in two cases: when it lands lower in its
+image, and when the image is not yet an attachment but already holds an
+earlier resolve of the frame. The target dumps use the twin too. Sample
+positions are Vulkan's standard ones.
 
 ## Anisotropic filtering
 

@@ -109,14 +109,14 @@ namespace vk::renderer::detail
         uint32_t scale = 1;         // how many times the title's size the image is, each way
         // The console's 2x and 4x surfaces are drawn with that many samples
         // here. A multisampled image can be neither blitted, copied nor
-        // sampled, so every read of one -- a resolve, the present, a dump --
-        // goes through a single-sampled twin the same size, made on first use
-        // and filled by the read's own resolve.
+        // sampled, so every read of one is a resolve: straight into the copy
+        // the title asked for, or -- for a dump, or a depth copy landing lower
+        // in its surface than the rectangle sits -- into a single-sampled twin
+        // the same size, made on first use.
         VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
         VkImage singleImage = VK_NULL_HANDLE;
         VkDeviceMemory singleMemory = VK_NULL_HANDLE;
         VkImageView singleView = VK_NULL_HANDLE;
-        bool singleReady = false;   // holds a resolve of some rectangle
         // A surface nothing presents looks exactly like a surface nothing draws into.
         uint64_t draws = 0, presented = 0;
         // Colour draws this frame; a multisampled target with any is the world pass.
@@ -186,6 +186,10 @@ namespace vk::renderer::detail
         // A depth resolve is sampled through a depth-only view; the title reads
         // the scene's depth as an ordinary texture.
         bool depth = false;
+        // For a depth copy out of a multisampled surface, which is resolved
+        // into it by a rendering instance: the image is an attachment too,
+        // through this view of both aspects.
+        VkImageView attachmentView = VK_NULL_HANDLE;
         // The surface the last colour resolve copied out of.
         TargetKey from{};
         // The frame the last resolve landed in this image. The first resolve
@@ -226,6 +230,9 @@ namespace vk::renderer::detail
         // colour, depth and stencil alike.
         bool msaa = false;
         VkSampleCountFlags sampleCounts = VK_SAMPLE_COUNT_1_BIT;
+        // Whether a depth resolve may leave the stencil beside it unresolved
+        // (independentResolveNone): it stays attached, kept, and costs nothing.
+        bool stencilUnresolved = false;
         // MW2_SCALE: how many times wider and taller than the title's every
         // EDRAM surface and resolve copy is. The title is not told: a Target's
         // and a Resolved's sizes, and every rectangle worked out from the
@@ -534,6 +541,8 @@ namespace vk::renderer::detail
         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
     constexpr VkAccessFlags kDepthAccess =
         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    // A depth format here carries stencil too, and the two change layout together.
+    constexpr VkImageAspectFlags kDepthAspects = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
     // A resolve is sampled by vertex programs as well as pixel ones.
     constexpr VkPipelineStageFlags kShaderStages =
         VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
@@ -664,6 +673,12 @@ namespace vk::renderer::detail
     void EndReadingColour(Target& target);
     VkImage BeginReadingDepth(Target& target, VkOffset2D at, uint32_t width, uint32_t height);
     void EndReadingDepth(Target& target);
+    // A multisampled target's rectangle resolved straight into a destination
+    // at the same place (renderer_targets.cpp).
+    void ResolveColourInto(Target& target, VkOffset2D at, uint32_t width, uint32_t height, VkImage into);
+    void ResolveDepthInto(Target& target, VkOffset2D at, uint32_t width, uint32_t height,
+                          VkImage into, VkImageView intoView, VkImageLayout before, VkPipelineStageFlags usedBy,
+                          VkImageLayout after, VkAccessFlags readAs, VkPipelineStageFlags readBy);
     void ClearAliasedDepth(uint32_t fromTile);
     void ClearAfterResolve(const gpu::RegisterFile& r, const gpu::CopyControl& control);
 

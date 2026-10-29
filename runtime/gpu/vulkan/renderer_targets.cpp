@@ -170,7 +170,6 @@ namespace vk::renderer::detail
         target.singleView = VK_NULL_HANDLE;
         target.singleImage = VK_NULL_HANDLE;
         target.singleMemory = VK_NULL_HANDLE;
-        target.singleReady = false;
     }
 
     void DestroyTarget(Target& target)
@@ -210,11 +209,36 @@ namespace vk::renderer::detail
         target.singleImage = one.image;
         target.singleMemory = one.memory;
         target.singleView = one.view;
-        target.singleReady = false;
         return true;
     }
 
-    // What a copy or blit out of a colour target reads, in TRANSFER_SRC. For a
+    // The rectangle of a multisampled colour target resolved into `into`, an
+    // image of its format in TRANSFER_DST, at the same place. Outside any
+    // render pass; the target is an attachment again afterwards.
+    void ResolveColourInto(Target& target, VkOffset2D at, uint32_t width, uint32_t height, VkImage into)
+    {
+        RecordBarrier(target.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                      kColourStages, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkImageResolve region{};
+        region.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        region.srcOffset = Scaled(at.x, at.y, 0, target.scale);
+        region.dstSubresource = region.srcSubresource;
+        region.dstOffset = region.srcOffset;
+        region.extent = { width * target.scale, height * target.scale, 1 };
+        const VkImage from = target.image;
+        Record([=](VkCommandBuffer command) {
+            vkCmdResolveImage(command, from, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                              into, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        });
+        RecordBarrier(target.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                      VK_ACCESS_TRANSFER_READ_BIT, kColourAccess,
+                      VK_PIPELINE_STAGE_TRANSFER_BIT, kColourStages);
+    }
+
+    // What a copy out of a colour target reads, in TRANSFER_SRC. For a
     // single-sampled target that is the target itself; for a multisampled one
     // the rectangle is resolved into the twin first. Outside any render pass.
     VkImage BeginReadingColour(Target& target, VkOffset2D at, uint32_t width, uint32_t height)
@@ -228,36 +252,17 @@ namespace vk::renderer::detail
             return target.image;
         }
         if (!EnsureSingle(target)) return VK_NULL_HANDLE;
-        RecordBarrier(target.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
-                      kColourStages, VK_PIPELINE_STAGE_TRANSFER_BIT);
         // From UNDEFINED: only the rectangle is read afterwards. After the
         // copies out of the twin's last contents.
         RecordBarrier(target.singleImage, VK_IMAGE_ASPECT_COLOR_BIT,
                       VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                       0, VK_ACCESS_TRANSFER_WRITE_BIT,
                       VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-        VkImageResolve region{};
-        region.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-        region.srcOffset = Scaled(at.x, at.y, 0, target.scale);
-        region.dstSubresource = region.srcSubresource;
-        region.dstOffset = region.srcOffset;
-        region.extent = { width * target.scale, height * target.scale, 1 };
-        const VkImage from = target.image, into = target.singleImage;
-        Record([=](VkCommandBuffer command) {
-            vkCmdResolveImage(command, from, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                              into, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-        });
+        ResolveColourInto(target, at, width, height, target.singleImage);
         RecordBarrier(target.singleImage, VK_IMAGE_ASPECT_COLOR_BIT,
                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                       VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
                       VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-        RecordBarrier(target.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                      VK_ACCESS_TRANSFER_READ_BIT, kColourAccess,
-                      VK_PIPELINE_STAGE_TRANSFER_BIT, kColourStages);
-        target.singleReady = true;
         return target.singleImage;
     }
 
@@ -274,10 +279,9 @@ namespace vk::renderer::detail
     // rectangle with nothing drawn in it.
     VkImage BeginReadingDepth(Target& target, VkOffset2D at, uint32_t width, uint32_t height)
     {
-        constexpr VkImageAspectFlags kBoth = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
         if (target.samples == VK_SAMPLE_COUNT_1_BIT)
         {
-            RecordBarrier(target.image, kBoth,
+            RecordBarrier(target.image, kDepthAspects,
                           VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
@@ -285,65 +289,84 @@ namespace vk::renderer::detail
             return target.image;
         }
         if (!EnsureSingle(target)) return VK_NULL_HANDLE;
-        // A rendering instance with nothing drawn in it, which loads the
-        // multisampled depth and resolves it into the twin: a transfer cannot.
-        // The first sample, as the console's own depth resolve takes one
-        // sample rather than an average -- an averaged depth is a surface
-        // nothing was drawn at. The target stays an attachment throughout, and
-        // the twin comes out in TRANSFER_SRC, ready to be copied from.
-        const VkImageView view = target.view, twinView = target.singleView;
-        const VkImage twin = target.singleImage;
+        // The copies before it read the twin, which comes out in
+        // TRANSFER_SRC, ready to be copied from.
+        ResolveDepthInto(target, at, width, height, target.singleImage, target.singleView,
+                         VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT);
+        return target.singleImage;
+    }
+
+    // A rendering instance with nothing drawn in it, which loads the
+    // multisampled depth and resolves the rectangle into `into` at the same
+    // place: a transfer cannot. The first sample, as the console's own depth
+    // resolve takes one sample rather than an average -- an averaged depth is
+    // a surface nothing was drawn at. The stencil is attached too, loaded and
+    // stored, so the target's stays what it was: a view of both aspects
+    // attached as depth alone would leave it to how a driver keeps the two
+    // together. Nothing reads a resolved stencil, so it is not resolved where
+    // the device allows (State::stencilUnresolved), and resolved alike where
+    // not. The target stays an attachment throughout; `into` goes from
+    // `before` (last used by `usedBy`) to `after`, for `readAs` at `readBy`.
+    void ResolveDepthInto(Target& target, VkOffset2D at, uint32_t width, uint32_t height,
+                          VkImage into, VkImageView intoView, VkImageLayout before, VkPipelineStageFlags usedBy,
+                          VkImageLayout after, VkAccessFlags readAs, VkPipelineStageFlags readBy)
+    {
+        const VkImageView view = target.view;
         const VkRect2D area{ Scaled(at, target.scale), Scaled(VkExtent2D{ width, height }, target.scale) };
+        const bool stencilUnresolved = g.stencilUnresolved;
         Record([=](VkCommandBuffer command) {
-            constexpr VkImageAspectFlags kBoth = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-            // The draws before it wrote the depth; the copies before it read the twin.
+            // The draws before it wrote the depth.
             VkMemoryBarrier written{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
             written.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
             written.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
                                     VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            VkImageMemoryBarrier into{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-            into.srcAccessMask = 0;
-            into.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            into.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            into.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-            into.srcQueueFamilyIndex = into.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            into.image = twin;
-            into.subresourceRange = { kBoth, 0, 1, 0, 1 };
-            vkCmdPipelineBarrier(command, kDepthStages | VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VkImageMemoryBarrier entering{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+            entering.srcAccessMask = 0;
+            entering.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                     VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            entering.oldLayout = before;
+            entering.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            entering.srcQueueFamilyIndex = entering.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            entering.image = into;
+            entering.subresourceRange = { kDepthAspects, 0, 1, 0, 1 };
+            vkCmdPipelineBarrier(command, kDepthStages | usedBy,
                                  kDepthStages | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                 0, 1, &written, 0, nullptr, 1, &into);
+                                 0, 1, &written, 0, nullptr, 1, &entering);
 
             VkRenderingAttachmentInfoKHR depth{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR };
             depth.imageView = view;
             depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             depth.resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
-            depth.resolveImageView = twinView;
+            depth.resolveImageView = intoView;
             depth.resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
             depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             VkRenderingInfoKHR info{ VK_STRUCTURE_TYPE_RENDERING_INFO_KHR };
             info.renderArea = area;
             info.layerCount = 1;
+            VkRenderingAttachmentInfoKHR stencil = depth;
+            if (stencilUnresolved)
+            {
+                stencil.resolveMode = VK_RESOLVE_MODE_NONE;
+                stencil.resolveImageView = VK_NULL_HANDLE;
+            }
             info.pDepthAttachment = &depth;
-            info.pStencilAttachment = &depth;
+            info.pStencilAttachment = &stencil;
             dispatch.beginRendering(command, &info);
             dispatch.endRendering(command);
 
-            // A resolve writes at the colour output stage whatever it
-            // resolves; the copy after it reads the twin.
-            VkImageMemoryBarrier out = into;
-            out.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            out.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            out.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-            out.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            vkCmdPipelineBarrier(command,
-                                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | kDepthStages,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &out);
+            // A resolve writes at the colour output stage whatever it resolves.
+            VkImageMemoryBarrier leaving = entering;
+            leaving.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            leaving.dstAccessMask = readAs;
+            leaving.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            leaving.newLayout = after;
+            vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | kDepthStages,
+                                 readBy, 0, 0, nullptr, 0, nullptr, 1, &leaving);
         });
-        target.singleReady = true;
-        return target.singleImage;
     }
 
     void EndReadingDepth(Target& target)
