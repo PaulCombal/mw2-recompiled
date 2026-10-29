@@ -33,6 +33,7 @@ namespace ui
         SDL_Texture* smoke[2] = {};
         SDL_Texture* shade = nullptr;
         SDL_Texture* glow = nullptr;
+        SDL_Texture* steam = nullptr;   // Steam's emblem, white, for the cards to tint (icon/steam_emblem.h)
     };
     Backdrop MakeBackdrop(SDL_Renderer* renderer);
     void DrawBackdrop(SDL_Renderer* renderer, const Backdrop& backdrop, double seconds);
@@ -59,6 +60,19 @@ namespace ui
         std::string stepTitle, detail, amount;
         float fraction = -1;        // of the step, or below zero when it has no amount
 
+        // Cards under the heading in the look of the game's callsigns: an
+        // emblem, a name and a title under it. The play entries show the
+        // network the game plays on and the profile at the first controller.
+        // Steam's emblem is a picture made from its icon; the others are drawn.
+        enum class Emblem { Computer, Lan, Server, Steam, Profile };
+        struct Card
+        {
+            Emblem emblem;
+            std::string name, title;
+            std::string label;      // a small line above the card: "NETWORK SETTING"
+        };
+        std::vector<Card> cards;
+
         float slider = -1;          // a setting with a range: where it is on its track, 0 to 1
         float fov = 0;              // and the field of view the pane shows a picture of (preview.h),
         float aspect = 16.0f / 9.0f;    // at the game picture's shape
@@ -69,8 +83,9 @@ namespace ui
         std::string hint;           // which controls do what, bottom right
     };
 
-    // Draws the frame. Returns the entry the pointer chose, or -1; `focus`
-    // follows the pointer when it moves over an entry. `slid` is where the
-    // pointer holds the frame's slider, 0 to 1, or below zero.
-    int Draw(const Fonts& fonts, const Frame& frame, float scale, int& focus, float& slid);
+    // Draws the frame, the cards' pictures taken from `backdrop`. Returns the
+    // entry the pointer chose, or -1; `focus` follows the pointer when it
+    // moves over an entry. `slid` is where the pointer holds the frame's
+    // slider, 0 to 1, or below zero.
+    int Draw(const Fonts& fonts, const Backdrop& backdrop, const Frame& frame, float scale, int& focus, float& slid);
 }

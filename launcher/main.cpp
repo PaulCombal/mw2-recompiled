@@ -407,6 +407,13 @@ namespace
             steps = { { 1, 2, 3, 4 }, 0, settings::SetShadowScale };
             now = settings::ShadowScale();
             break;
+        case Action::Resolution:
+            // The rows of the shape kept, smallest first.
+            for (int row = 0; row < int(settings::Resolutions(settings::AspectRatio()).size()); row++)
+                steps.values.push_back(row);
+            steps.set = [](int row) { settings::SetResolution(settings::AspectRatio(), row); };
+            now = settings::ResolutionRow();
+            break;
         default:
             return std::nullopt;
         }
@@ -771,9 +778,6 @@ namespace
                 settings::NextAspectRatio();
                 break;
             case Action::Resolution:
-                settings::SetResolution(settings::AspectRatio(),
-                                        (settings::ResolutionRow() + 1) % int(settings::Resolutions(settings::AspectRatio()).size()));
-                break;
             case Action::Antialiasing:
             case Action::Anisotropy:
             case Action::Shadows:
@@ -1023,6 +1027,7 @@ namespace
         {
             report::Made made;
             recording = false;
+            ReadProfile();   // the run may have made the first profile, which the play entries' cards name
             focusPlaced = false;
             messageFocus = -1;
             messageIsError = !report::Make(made, message);
@@ -1144,7 +1149,7 @@ namespace
             add(Action::Resolution, std::string("RESOLUTION ") + resolution.name, "RESOLUTION",
                 std::string("The size the game draws at, whatever the window's: now ") + resolution.name +
                 (resolution.width == 1280 && resolution.height == 720 && resolution.scale == 1 ? ", the console's own." : ".") +
-                "\n\nChoose to go to the next: " + sizes + ". A larger one is sharper and needs a faster graphics card. "
+                " Left and right change it: " + sizes + ".\n\nA larger one is sharper and needs a faster graphics card. "
                 "The best is the screen's own: a smaller one is enlarged to fit it, a larger one made smaller."
                 "\n\nIt applies to the campaign and the multiplayer, from the next time either is started.");
             const bool stretch = settings::Stretch();
@@ -1196,9 +1201,7 @@ namespace
             add(Action::Fov, "FOV " + std::to_string(fov), "FIELD OF VIEW",
                 std::string("How wide the game's view is: now ") + std::to_string(fov) +
                 (fov == settings::kConsoleFov ? ", the console's own." : ", where the console's is 65.") +
-                " Left and right change it. A wider view shows more to the sides and makes what is ahead smaller, "
-                "aiming down a sight included; it needs a faster computer. "
-                "It applies to the campaign and the multiplayer, from the next time either is started.");
+                "\n\nWider shows more and needs a faster computer.");
             add(Action::Back, "BACK", "", "")->shown.ruleAbove = true;
             return entries;
         }
@@ -1693,6 +1696,7 @@ namespace
         // answers to nothing but the mouse until it is clicked.
         SDL_RaiseWindow(app.window);
         app.FindScreenRate();
+        app.ReadProfile();   // the main screen's cards name the first profile
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -1796,6 +1800,36 @@ namespace
             frame.focus = app.focus;
             const Entry& current = entries[app.focus];
             frame.heading = current.heading;
+            if ((current.action == Action::PlayCampaign || current.action == Action::PlayMultiplayer) &&
+                current.shown.enabled)
+            {
+                // Who and on what the game will play, so a player who meant
+                // to join friends sees before starting that it is set otherwise.
+                using Emblem = ui::Frame::Emblem;
+                const settings::Network network = settings::CurrentNetwork();
+                const std::string address = settings::Server();
+                const char* const setting = "NETWORK SETTING";
+                frame.cards.push_back(
+                    network == settings::Network::Lan      ? ui::Frame::Card{ Emblem::Lan, "LAN", "LOCAL NETWORK", setting }
+                    : network == settings::Network::Server ? ui::Frame::Card{ Emblem::Server, "SERVER", address.empty() ? "NO ADDRESS SET" : address, setting }
+                    : network == settings::Network::Steam  ? ui::Frame::Card{ Emblem::Steam, "STEAM", "STEAM FRIENDS", setting }
+                                                           : ui::Frame::Card{ Emblem::Computer, "NO NETWORK", "THIS COMPUTER ONLY", setting });
+                // On Steam the others see Steam's name for the player, which the
+                // launcher does not know; the stats are still the profile's.
+                const auto first = std::find_if(app.players.begin(), app.players.end(),
+                                                [](const profile::Player& p) { return p.first && !p.name.empty(); });
+                const bool steam = network == settings::Network::Steam;
+                if (first == app.players.end())
+                    frame.cards.push_back({ Emblem::Profile, steam ? "STEAM PROFILE" : "NEW PROFILE",
+                                            steam ? "PLAYER 1" : "PLAYER 1, MADE AT THE FIRST START", "DEFAULT PROFILE" });
+                else
+                    frame.cards.push_back({ Emblem::Profile, steam ? std::string("STEAM PROFILE") : first->name,
+                                            current.action == Action::PlayMultiplayer && !first->offline
+                                                ? "PLAYER 1 \xc2\xb7 RANK " + std::to_string(first->level) +
+                                                      (first->prestige ? " \xc2\xb7 PRESTIGE " + std::to_string(first->prestige) : "")
+                                                : std::string("PLAYER 1"),
+                                            "DEFAULT PROFILE" });
+            }
             if (app.JobShown() && app.job->kind == Job::Kind::Compile)
             {
                 // The game's files read, then their shaders compiled.
@@ -1900,7 +1934,7 @@ namespace
             }
 
             float slid = -1;
-            const int pointed = ui::Draw(fonts, frame, scale, app.focus, slid);
+            const int pointed = ui::Draw(fonts, backdrop, frame, scale, app.focus, slid);
             if (steps)
             {
                 // A step a press to either side, or the one nearest where the pointer holds it.

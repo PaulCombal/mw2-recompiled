@@ -200,7 +200,9 @@ Its icon is in `launcher/icon/`: `launcher.ico` is linked into the Windows
 program as a resource, and `launcher.bmp` is written out as an array like the
 fonts and given to the window on both systems. `tools/launcher_icon.py` makes
 the two from the campaign's icon in the PC game's `iw4sp.exe`: the left half as
-it is, the right half in the multiplayer's colours. `tools/readme_art.py` draws the
+it is, the right half in the multiplayer's colours. `tools/steam_emblem.py`
+makes `steam_emblem.h`, the Steam card's emblem, from Steam's own 256-pixel
+icon: a coverage mask of its white parts, which the launcher tints. `tools/readme_art.py` draws the
 README's banner, tiles and headings into `docs/images/readme/`.
 
 | file | what |
@@ -257,15 +259,19 @@ system's file dialog, or `mw2-launcher --add-map <file>...` from a terminal, and
 files beside it, which share its name (`<map>.ff`, `<map>_load.ff`, `<map>.arena`, `<map>.iwd`). A PC map's fastfiles (`IW4x`, or version 276) are converted first, on the job
 thread the install uses, its progress and CANCEL on the same screen ([maps.md](maps.md)); the
 log of a conversion is kept as `maps/<map>.log`. A 360 fastfile is taken as it is, and refused
-when it is not an unsigned one of the game's own version. An entry with a range (FOV) sets
-`ui::Frame::slider`, and the pane draws a track for it; FOV's also shows a street drawn at the
+when it is not an unsigned one of the game's own version. An entry with a range (FOV,
+RESOLUTION, ANTIALIASING...) sets `ui::Frame::slider`, and the pane draws a track for it; FOV's also shows a street drawn at the
 angle (`preview.cpp`), with the game's projection, to say what the number does before the game
 is started.
 PLAY CAMPAIGN and PLAY MULTIPLAYER start `mw2-sp` and `mw2-mp` beside the
 launcher, the names a release gives the two game executables. Before that,
 and before REPORT A BUG starts either, the launcher checks the compiled
 shaders, and compiles them first when they no longer fit (SHADERS, with its
-progress and CANCEL). It does the same after an install.
+progress and CANCEL). It does the same after an install. While either entry
+is chosen, the pane shows two cards in the look of the game's callsigns
+(`ui::Frame::cards`): the NETWORK setting the game will play on, and the
+profile at the first controller. On Steam the name the other players see is
+Steam's, which the launcher does not know, so that card says STEAM PROFILE.
 
     mw2-launcher --compile-shaders
 

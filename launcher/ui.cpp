@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "fonts.h"
 #include "preview.h"
+#include "icon/steam_emblem.h"
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
@@ -34,6 +35,53 @@ namespace
     constexpr ImU32 kAmber = IM_COL32(232, 178, 52, 255);
     constexpr ImU32 kGreen = IM_COL32(186, 232, 176, 255);
     constexpr ImU32 kRed = IM_COL32(240, 150, 120, 255);
+
+    // The cards' emblems, drawn in a `side`-wide square at `at`: a screen for
+    // this computer only, three linked boxes for the local network, a rack for
+    // a server, Steam's logo without its disc, rank chevrons for a profile.
+    void DrawEmblem(ImDrawList* draw, const ui::Backdrop& backdrop, ui::Frame::Emblem emblem, ImVec2 at, float side, ImU32 colour)
+    {
+        using Emblem = ui::Frame::Emblem;
+        const float u = side / 12.0f, line = std::max(1.0f, u * 1.1f);
+        auto P = [&](float x, float y) { return ImVec2{ at.x + x * u, at.y + y * u }; };
+        switch (emblem)
+        {
+        case Emblem::Computer:
+            draw->AddRect(P(1, 1.5f), P(11, 8.5f), colour, u, 0, line);
+            draw->AddLine(P(6, 8.5f), P(6, 10.5f), colour, line);
+            draw->AddLine(P(3.5f, 10.5f), P(8.5f, 10.5f), colour, line);
+            break;
+        case Emblem::Lan:
+            draw->AddRectFilled(P(4.5f, 0.5f), P(7.5f, 3.5f), colour, u * 0.5f);
+            draw->AddRectFilled(P(0.5f, 8.5f), P(3.5f, 11.5f), colour, u * 0.5f);
+            draw->AddRectFilled(P(8.5f, 8.5f), P(11.5f, 11.5f), colour, u * 0.5f);
+            draw->AddLine(P(6, 3.5f), P(6, 6), colour, line);
+            draw->AddLine(P(2, 6), P(10, 6), colour, line);
+            draw->AddLine(P(2, 6), P(2, 8.5f), colour, line);
+            draw->AddLine(P(10, 6), P(10, 8.5f), colour, line);
+            break;
+        case Emblem::Server:
+            for (float y : { 1.0f, 6.5f })
+            {
+                draw->AddRect(P(1, y), P(11, y + 4.5f), colour, u, 0, line);
+                draw->AddCircleFilled(P(3.5f, y + 2.25f), u * 0.9f, colour);
+            }
+            break;
+        case Emblem::Steam:
+            if (backdrop.steam)
+                draw->AddImage(ImTextureID(backdrop.steam), P(-0.6f, -0.6f), P(12.6f, 12.6f), { 0, 0 }, { 1, 1 }, colour);
+            break;
+        case Emblem::Profile:
+            for (float y : { 1.5f, 5.0f, 8.5f })
+            {
+                draw->PathLineTo(P(1.5f, y + 2.5f));
+                draw->PathLineTo(P(6, y));
+                draw->PathLineTo(P(10.5f, y + 2.5f));
+                draw->PathStroke(colour, 0, line * 1.6f);
+            }
+            break;
+        }
+    }
 
     // Value noise, summed over a few octaves: the smoke.
     float Hash(int x, int y)
@@ -173,6 +221,22 @@ ui::Backdrop ui::MakeBackdrop(SDL_Renderer* renderer)
         rgb[2] = glow * 0.06f;
     });
     backdrop.glow = texture(SDL_BLENDMODE_ADD);
+
+    // Steam's emblem: white, its coverage as alpha, for the cards to tint.
+    constexpr int kSide = steam_emblem::kSize;
+    std::vector<uint8_t> white(size_t(kSide) * kSide * 4);
+    for (size_t i = 0; i < size_t(kSide) * kSide; i++)
+    {
+        white[i * 4 + 0] = white[i * 4 + 1] = white[i * 4 + 2] = 255;
+        white[i * 4 + 3] = steam_emblem::kParts[i];
+    }
+    backdrop.steam = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, kSide, kSide);
+    if (backdrop.steam)
+    {
+        SDL_UpdateTexture(backdrop.steam, nullptr, white.data(), kSide * 4);
+        SDL_SetTextureScaleMode(backdrop.steam, SDL_SCALEMODE_LINEAR);
+        SDL_SetTextureBlendMode(backdrop.steam, SDL_BLENDMODE_BLEND);
+    }
     return backdrop;
 }
 
@@ -200,11 +264,11 @@ void ui::DrawBackdrop(SDL_Renderer* renderer, const Backdrop& backdrop, double s
 
 void ui::DestroyBackdrop(Backdrop& backdrop)
 {
-    for (SDL_Texture* texture : { backdrop.smoke[0], backdrop.smoke[1], backdrop.shade, backdrop.glow }) SDL_DestroyTexture(texture);
+    for (SDL_Texture* texture : { backdrop.smoke[0], backdrop.smoke[1], backdrop.shade, backdrop.glow, backdrop.steam }) SDL_DestroyTexture(texture);
     backdrop = {};
 }
 
-int ui::Draw(const Fonts& fonts, const Frame& frame, float scale, int& focus, float& slid)
+int ui::Draw(const Fonts& fonts, const Backdrop& backdrop, const Frame& frame, float scale, int& focus, float& slid)
 {
     slid = -1;
     ImDrawList* draw = ImGui::GetBackgroundDrawList();
@@ -261,6 +325,43 @@ int ui::Draw(const Fonts& fonts, const Frame& frame, float scale, int& focus, fl
         py += fonts.heading->FontSize + S(6);
         draw->AddRectFilled({ left, py }, { left + S(54), py + S(3) }, kAmber);
         py += S(22);
+    }
+    if (!frame.cards.empty())
+    {
+        // Side by side: a square emblem on the left of a banner -- stripes for
+        // the title's picture -- with the name, and the title under it -- and
+        // what the card is above it.
+        const float height = S(58), width = S(300), gap = S(16), label = fonts.small->FontSize + S(6);
+        float x = left;
+        for (const Frame::Card& card : frame.cards)
+        {
+            if (!card.label.empty())
+                Spaced(draw, fonts.small, fonts.small->FontSize, { x, py }, IM_COL32(236, 236, 232, 170), card.label.c_str(), S(1));
+            const ImVec2 min{ x, py + label }, max{ x + width, py + label + height };
+            // Shades of the backdrop's own grey, see-through, fading to the right.
+            draw->AddRectFilledMultiColor(min, max, IM_COL32(236, 236, 232, 26), IM_COL32(236, 236, 232, 6),
+                                          IM_COL32(236, 236, 232, 6), IM_COL32(236, 236, 232, 26));
+            draw->PushClipRect(min, max, true);
+            for (float stripe = x + height - S(20); stripe < max.x; stripe += S(14))
+                draw->AddQuadFilled({ stripe + S(26), min.y }, { stripe + S(32), min.y }, { stripe + S(6), max.y }, { stripe, max.y },
+                                    IM_COL32(236, 236, 232, 8));
+            draw->PopClipRect();
+            draw->AddRectFilled(min, { x + height, max.y }, IM_COL32(0, 0, 0, 60));
+            DrawEmblem(draw, backdrop, card.emblem, { x + S(13), min.y + S(13) }, height - S(26), kAmber);
+            draw->AddRect(min, max, IM_COL32(236, 236, 232, 30), 0, 0, std::max(1.0f, S(1)));
+            const float textLeft = x + height + S(12), textWidth = max.x - textLeft - S(10);
+            const std::string name = Fitted(fonts.menu, card.name, textWidth);
+            draw->AddText(fonts.menu, fonts.menu->FontSize, { textLeft, min.y + S(6) }, kWhite, name.c_str());
+            const std::string title = Fitted(fonts.small, card.title, textWidth);
+            draw->AddText(fonts.small, fonts.small->FontSize, { textLeft, max.y - fonts.small->FontSize - S(7) }, kAmber, title.c_str());
+            x += width + gap;
+            if (x + width > right && &card != &frame.cards.back())
+            {
+                x = left;
+                py += label + height + gap;
+            }
+        }
+        py += label + height + S(18);
     }
     if (frame.busy)
     {
