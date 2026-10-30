@@ -155,6 +155,27 @@ the draw's record, in the arena at the dword the draw passes as its base vertex
   constant read in a pixel shader would be a load per pixel. A subgroup never
   spans two draws: a texture index without `NonUniform` already relies on
   that.
+- **Each record word is loaded once**, where a driver would sink the load:
+  in the narrowest block that dominates every read of it, ahead of the first
+  (`RecordWord`, `PlaceRecordLoads`). A straight-line program is one block,
+  so a word is loaded at its first read. In a program with the dispatcher a
+  word read in one case is loaded in that case, and one read in several at
+  the top of the iteration, in the block that switches. A driver merges two
+  equal loads only where one dominates the other, which a straight-line
+  program's repeated loads already were; the dispatcher's cases each loaded
+  the words again. Loading every word in the entry block instead leaves the
+  placement to the driver: RADV sinks a load to where its reads meet but not
+  into a loop, so the words stayed live across the dispatcher's loop and it
+  spilled scalar registers in 1,089 pixel shaders (356 unscaled), and a
+  driver that does not sink would keep every word live across every program.
+  On RADV (Renoir), over the game's 15,044 shaders, the 1,688 pixel shaders
+  with the dispatcher come out with 6% fewer instructions and 17-20% fewer
+  scalar loads; 77 of them spill a few scalar registers more than before
+  (2 unscaled), with no fewer waves; the straight-line pixel shaders and the
+  vertex shaders compile to the same code as before. Building all of them
+  takes 4-6% fewer CPU instructions. The GPU time of a frame moves by under
+  1% (S.S.D.D.: 720p -1.0%, 1080p and three times the title's size -0.4%),
+  at the edge of the run-to-run spread.
 - **Why no push constants.** RADV places push constants per draw by reading
   each bound shader's description, a cache miss on every draw, which was a
   third of the recorder thread's time; binding a texture set per draw was

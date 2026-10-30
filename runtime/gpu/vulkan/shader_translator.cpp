@@ -135,6 +135,24 @@ namespace
         Id m_recordInput = 0;
         Id m_recordOutput = 0;
         Id m_record = 0;
+        // Each word of the record the program reads, loaded once
+        // (RecordWord, PlaceRecordLoads): its value, and where it is read --
+        // the block and the place in the code, in the order emitted.
+        Id m_recordWords[bindings::kRecordWords]{};
+        struct RecordRead { uint32_t block; size_t at; };
+        std::vector<RecordRead> m_recordReads[bindings::kRecordWords];
+        // The blocks a read can be in. A straight-line program is one block
+        // up to its deferred kill; one with the dispatcher has the entry
+        // block, the loop header, the block that switches on the counter, a
+        // block per case (kInCase + the case) and the block after the loop.
+        // Each case is one block too: predication is a select, not a branch.
+        // Code that opens a block of its own has to say so here.
+        enum : uint32_t { kInEntry, kInLoopHeader, kInDispatch, kAfterLoop, kInCase };
+        uint32_t m_block = kInEntry;
+        // A place in the entry block, the loop header and the dispatch block
+        // ahead of where each branches on to the blocks it dominates.
+        size_t m_blockEnd[3]{};
+        void PlaceRecordLoads();
         Id m_position = 0;
         Id m_vertexIndex = 0;         // the index the sequencer puts in r0.x
         Id m_interpolators[kInterpolatorCount]{};
@@ -635,10 +653,71 @@ namespace
         return RecordWord(bindings::kRecordOffsets + block);
     }
 
-    // Word `index` of the draw's record.
+    // Word `index` of the draw's record: one value for the whole program,
+    // loaded where PlaceRecordLoads puts it once every read is known.
     Id Translator::RecordWord(uint32_t index)
     {
-        return ArenaWord(Emit(Op::IAdd, m_uint, { m_record, m_module.ConstantU(index) }));
+        Id& word = m_recordWords[index];
+        if (!word) word = m_module.Allocate();
+        m_recordReads[index].push_back({ m_block, m_module.Code().size() });
+        return word;
+    }
+
+    // Each record word's one load, in the narrowest block that dominates every
+    // read of it -- the block all its reads are in, if they share one, else
+    // the nearest block the blocks they are in all descend from -- and there
+    // ahead of the first read. That is where a driver would sink a load made
+    // in the entry block; RADV does, not every driver does, so none has to: a
+    // straight-line program loads a word at its first read, and the
+    // dispatcher in the one case that reads it, or at the top of the
+    // iteration for several. Loading the words before the dispatcher's loop
+    // instead, once a draw, kept each of them live across the whole loop, and
+    // RADV spilled scalar registers in 1,089 pixel shaders.
+    void Translator::PlaceRecordLoads()
+    {
+        // The blocks' dominator tree: the entry block, then the loop header,
+        // which dominates the dispatch block and the block after the loop;
+        // the dispatch block dominates the cases.
+        const auto parent = [](uint32_t block) -> uint32_t {
+            if (block >= kInCase) return kInDispatch;
+            if (block == kInDispatch || block == kAfterLoop) return kInLoopHeader;
+            return kInEntry;
+        };
+        const auto depth = [](uint32_t block) -> uint32_t {
+            if (block >= kInCase) return 3;
+            if (block == kInDispatch || block == kAfterLoop) return 2;
+            return block == kInLoopHeader ? 1 : 0;
+        };
+        struct Load { size_t at; uint32_t index; };
+        std::vector<Load> loads;
+        for (uint32_t index = 0; index < bindings::kRecordWords; index++)
+        {
+            const std::vector<RecordRead>& reads = m_recordReads[index];
+            if (reads.empty()) continue;
+            uint32_t common = reads[0].block;
+            for (const RecordRead& read : reads)
+            {
+                uint32_t block = read.block;
+                while (depth(block) > depth(common)) block = parent(block);
+                while (depth(common) > depth(block)) common = parent(common);
+                while (block != common) { block = parent(block); common = parent(common); }
+            }
+            // The first read is in that block, or in one it dominates.
+            loads.push_back({ reads[0].block == common ? reads[0].at : m_blockEnd[common], index });
+        }
+        // From the last place back, so the places before stay where they were.
+        std::stable_sort(loads.begin(), loads.end(), [](const Load& a, const Load& b) { return a.at > b.at; });
+        auto& code = m_module.Code();
+        for (const Load& load : loads)
+        {
+            std::vector<uint32_t> words;
+            const Id at = m_module.Allocate(), pointer = m_module.Allocate();
+            Module::Emit(words, Op::IAdd, { m_uint, at, m_record, m_module.ConstantU(load.index) });
+            Module::Emit(words, Op::AccessChain, { m_module.Pointer(StorageClass::Uniform, m_uint), pointer,
+                                                   m_arena, m_module.ConstantS(0), at });
+            Module::Emit(words, Op::Load, { m_uint, m_recordWords[load.index], pointer });
+            code.insert(code.begin() + std::ptrdiff_t(load.at), words.begin(), words.end());
+        }
     }
 
     Id Translator::RecordFloat(uint32_t index)
@@ -2113,12 +2192,15 @@ namespace
             std::vector<Id> blocks(caseCount);
             for (uint32_t i = 0; i < caseCount; i++) blocks[i] = m_module.Allocate();
 
+            m_blockEnd[kInEntry] = m_module.Code().size();
             Module::Emit(m_module.Code(), Op::Branch, { header });
             Module::Emit(m_module.Code(), Op::Label, { header });
+            m_blockEnd[kInLoopHeader] = m_module.Code().size();
             Module::Emit(m_module.Code(), Op::LoopMerge, { merge, continueTarget, kLoopControlNone });
             Module::Emit(m_module.Code(), Op::Branch, { dispatch });
 
             Module::Emit(m_module.Code(), Op::Label, { dispatch });
+            m_blockEnd[kInDispatch] = m_module.Code().size();
             Id current = Emit(Op::Load, m_uint, { m_pc });
             Module::Emit(m_module.Code(), Op::SelectionMerge, { caseMerge, kSelectionControlNone });
             {
@@ -2136,6 +2218,7 @@ namespace
             for (uint32_t i = 0; i < caseCount; i++)
             {
                 Module::Emit(m_module.Code(), Op::Label, { blocks[i] });
+                m_block = kInCase + i;
                 EmitControlFlow(m_flow[i], i);
                 if (!m_result.error.empty()) return;
                 Module::Emit(m_module.Code(), Op::Branch, { caseMerge });
@@ -2149,6 +2232,7 @@ namespace
             Module::Emit(m_module.Code(), Op::Label, { continueTarget });
             Module::Emit(m_module.Code(), Op::Branch, { header });
             Module::Emit(m_module.Code(), Op::Label, { merge });
+            m_block = kAfterLoop;
         }
 
         // The alpha test, folded into the same discard. The three comparison
@@ -2311,6 +2395,7 @@ namespace
 
         Module::Emit(m_module.Code(), Op::Return, {});
         Module::Emit(m_module.Code(), Op::FunctionEnd, {});
+        PlaceRecordLoads();
     }
 
     shader::Translation Translator::Run()
