@@ -1,0 +1,57 @@
+// What Find Game offers on a relay, in the title's playlist format.
+version 1
+
+gametype tdm
+name english "Team Deathmatch"
+script war
+teambased
+
+gametype ffa
+name english "Free-for-all"
+script dm
+
+playlist 0
+name english "Team Deathmatch"
+description english "Two teams, most kills wins."
+minparty 1
+maxparty 9
+rule party_hostmigration 0
+mp_afghan,tdm,1
+mp_derail,tdm,1
+mp_estate,tdm,1
+mp_favela,tdm,1
+mp_highrise,tdm,1
+mp_invasion,tdm,1
+mp_checkpoint,tdm,1
+mp_quarry,tdm,1
+mp_rundown,tdm,1
+mp_rust,tdm,1
+mp_boneyard,tdm,1
+mp_nightshift,tdm,1
+mp_subbase,tdm,1
+mp_terminal,tdm,1
+mp_underpass,tdm,1
+mp_brecourt,tdm,1
+
+playlist 1
+name english "Free-for-all"
+description english "Every player for themselves."
+minparty 1
+maxparty 8
+rule party_hostmigration 0
+mp_afghan,ffa,1
+mp_derail,ffa,1
+mp_estate,ffa,1
+mp_favela,ffa,1
+mp_highrise,ffa,1
+mp_invasion,ffa,1
+mp_checkpoint,ffa,1
+mp_quarry,ffa,1
+mp_rundown,ffa,1
+mp_rust,ffa,1
+mp_boneyard,ffa,1
+mp_nightshift,ffa,1
+mp_subbase,ffa,1
+mp_terminal,ffa,1
+mp_underpass,ffa,1
+mp_brecourt,ffa,1

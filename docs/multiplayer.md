@@ -121,6 +121,8 @@ sockets, ports -- and asks the service only for what a service does:
 | `Advertise`, `NextJoin` | optional: system-link invitations as the title's `connect` console line |
 | `Friends`, `InviteFriend`, `InviteFriends` | optional: the friends screen's list and one invitation; or, without a list, everyone invited at once |
 | `Lobbies`, `SetJoinable`, `NextInvite` | optional: Xbox LIVE parties and private matches |
+| `Matchmaking`, `List`, `Search`, `SearchResults` | optional: Find Game |
+| `TitleFile` | optional: a file of the title's every player must share (the playlists) |
 
     MW2_NETWORK=none     # default: system link on this machine
     MW2_NETWORK=lan      # plain UDP between machines
@@ -315,6 +317,53 @@ or of `dev` for a build without one. The low half stays the title's.
 
 The campaign's co-op has no version check.
 
+## Find Game
+
+PLAY ONLINE's Find Game works on the server service, where every player is on one
+relay ([relay.md](relay.md)). Elsewhere a search finds nothing and there are no
+playlists to choose from.
+
+The title's matchmaking is Live's, not IWNet's: `iwnet_searching` is off, so
+LSP stays unused. It goes:
+
+1. `xstartlobby` takes the chosen playlist and creates a lobby's session with no
+   public slots.
+2. `XSessionSearchEx` (`000B001C`) asks for 50 sessions. The search's meaning
+   was on Live's servers, so `kernel/xam.cpp` takes what the title passes: its
+   contexts and integer properties must all match, and the room for the party
+   (`0x1000001A`) is a lower bound. They are the game mode, ranked or not, the
+   playlist, the protocol (so a search finds only its own release), the map packs
+   and the playlists' version. The skill bounds are doubles, and are left out.
+   The title sends procedure 8 or 9 and fills them in alike.
+3. `XNetQosLookup` is answered from the search, at once: the round trip,
+   and a wide line. The title reads nothing else of a probe, and drops a host over
+   its limit, which starts at `ping_default_min` (50 ms) and rises by
+   `ping_increment` every `ping_searches_per` searches.
+4. It joins the nearest host over the party's own protocol, the one private
+   matches use, or, after `session_advertiseFailedSearchCount` failed searches,
+   opens its own lobby's public slots and goes on searching.
+5. With a lobby of `party_minplayers`, open `party_minLobbyTime`, the host starts
+   the match, and a player who finds it running joins it.
+
+What a host lists comes from `XUserSetContext`, `XUserSetProperty` and the
+session: the newest it hosts with matchmaking and stats, which leaves out the
+party's own session (`0x29`). `XSessionJoinRemote` and `XSessionLeaveRemote` count
+the players in it. Once started, a session that takes nobody (`0x400`) leaves the
+list. A search takes a moment, so it stays pending on its overlapped block,
+finished by `online::Frame`, and `XMsgCancelIORequest` withdraws it, since the
+title reuses the block.
+
+The title update's playlists are named `playlists.patch2`, the disc's
+`playlists.info`; both come from the relay ([relay.md](relay.md#playlists)). The
+table's walk stops at the first playlist with no entries, so numbering starts at 0.
+
+Not there: `XSessionMigrateHost`, which fails because the title tests
+`XamGetSystemVersion` first, so the playlist turns off `party_hostmigration` and a
+match ends with its host. `XSessionModifySkill` fails for the same reason, and
+the title tries again every frame while it hosts a lobby; nothing comes of it but
+a line in a diagnostic log. `XUserReadStats` returns nothing, so the title
+balances no teams by skill.
+
 ## Xbox LIVE private matches
 
 A service whose `Lobbies()` is true (lan and steam) has the player signed in to
@@ -350,7 +399,7 @@ listener.
 
 | directory | contents |
 |---|---|
-| `title/` | the title's own files -- message of the day, `playlists.info`. Nothing publishes them, so each reads as empty |
+| `title/` | the title's own files -- message of the day, playlists. Each reads as empty, unless the service holds it (`TitleFile`) |
 | `user/<xuid>/` | what the title uploads: the player's multiplayer rank and stats (`mpdata`), starting at level 1 |
 
 Enumerations of Live title servers and downloadable content end at once, empty.

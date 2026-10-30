@@ -101,6 +101,31 @@ GUEST_HOOK(T_Com_Printf)
     GUEST_ORIG(T_Com_Printf)(ctx, base);
 }
 
+// The title's other prints, with the same arguments: its parsers report through
+// these, and without them a playlist that fails says nothing.
+#ifdef T_Com_PrintError
+GUEST_HOOK(T_Com_DPrintf)
+{
+    static const bool verbose = diag::Flag("MW2_ENGINE_LOG");
+    if (verbose) LOGK("Com_DPrintf(%u): %s", ctx.r3.u32, Format(ctx, ctx.r4.u32).c_str());
+    GUEST_ORIG(T_Com_DPrintf)(ctx, base);
+}
+
+GUEST_HOOK(T_Com_PrintError)
+{
+    static const bool verbose = diag::Flag("MW2_ENGINE_LOG");
+    if (verbose) LOGK("Com_PrintError(%u): %s", ctx.r3.u32, Format(ctx, ctx.r4.u32).c_str());
+    GUEST_ORIG(T_Com_PrintError)(ctx, base);
+}
+
+GUEST_HOOK(T_Com_PrintWarning)
+{
+    static const bool verbose = diag::Flag("MW2_ENGINE_LOG");
+    if (verbose) LOGK("Com_PrintWarning(%u): %s", ctx.r3.u32, Format(ctx, ctx.r4.u32).c_str());
+    GUEST_ORIG(T_Com_PrintWarning)(ctx, base);
+}
+#endif
+
 // Cbuf_AddText(localClientNum, text): what the menus and the title's own code
 // queue for the console. MW2_TRACE_CBUF shows the commands a menu runs, so a
 // flow the player clicks through can be typed instead.

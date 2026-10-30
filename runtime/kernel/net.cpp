@@ -264,6 +264,11 @@ void kernel::TitleXnAddr(void* out36)
     if (auto* service = online::Get()) WritePeer(*addr, service->LocalId());
 }
 
+void kernel::SetXnAddrPeer(void* addr36, uint64_t peer)
+{
+    WritePeer(*static_cast<XNADDR*>(addr36), peer);
+}
+
 // Signed in to Live, the address says so: the title's party refuses to add a
 // player -- itself included -- whose address has no online part.
 PPC_FUNC(__imp__NetDll_XNetGetTitleXnAddr)
@@ -427,6 +432,78 @@ PPC_FUNC(__imp__NetDll_XNetQosServiceLookup)
     *reinterpret_cast<be32*>(info + 20) = 100000000;     // and down
     *out = qos;
     if (const uint32_t event = ctx.r5.u32)
+        if (auto signal = kernel::LookupHandleAs<kernel::Event>(event)) signal->Set();
+    ctx.r3.u64 = 0;
+}
+
+namespace
+{
+    std::mutex g_lagLock;
+    std::map<std::array<uint8_t, 8>, uint32_t> g_sessionLags;
+}
+
+void kernel::ForgetSessionLags()
+{
+    std::lock_guard g(g_lagLock);
+    g_sessionLags.clear();
+}
+
+void kernel::NoteSessionLag(const void* id8, uint32_t milliseconds)
+{
+    std::array<uint8_t, 8> id;
+    std::memcpy(id.data(), id8, id.size());
+    std::lock_guard g(g_lagLock);
+    g_sessionLags[id] = milliseconds;
+}
+
+// (xnet, count, XNADDR*[], XNKID*[], XNKEY*[], services, ids, service ids,
+// probes, bits a second, flags, event, XNQOS** out), the last five on the stack.
+// The title probes what a search found, to rank the hosts by their round trip
+// and drop those over its limit. It reads the flags, the round trips and the
+// speed up, none of what a host offers with XNetQosListen. A search's answer
+// already holds the round trip, so every probe here is complete at once; a
+// host no search found reads as one that does not answer probes. The line
+// is not what limits a match on a relay, so it reads as wide, as in
+// XNetQosServiceLookup.
+PPC_FUNC(__imp__NetDll_XNetQosLookup)
+{
+    const uint32_t count = ctx.r4.u32;
+    const auto* ids = GuestPtr<be32>(ctx.r6.u32);
+    const auto* stack = GuestPtr<be32>(ctx.r1.u32 + 108);
+    const uint32_t event = stack[0];
+    auto* out = GuestPtr<be32>(uint32_t(stack[2]));
+    if (!ids || !out || !count || count > 64) { ctx.r3.u64 = X_WSAENETDOWN; return; }
+    const uint32_t size = 8 + 24 * count;
+    const uint32_t qos = kernel::AllocateGuest(size, 16);
+    if (!qos) { ctx.r3.u64 = X_WSAENETDOWN; return; }
+    auto* p = GuestPtr<uint8_t>(qos);
+    std::memset(p, 0, size);
+    *reinterpret_cast<be32*>(p + 0) = count;             // cxnqos
+    {
+        std::lock_guard g(g_lagLock);
+        for (uint32_t i = 0; i < count; i++)
+        {
+            uint8_t* info = p + 8 + 24 * i;
+            std::array<uint8_t, 8> id{};
+            if (const auto* kid = GuestPtr<uint8_t>(uint32_t(ids[i]))) std::memcpy(id.data(), kid, id.size());
+            const auto lag = g_sessionLags.find(id);
+            if (lag == g_sessionLags.end())
+            {
+                info[0] = 0x01 | 0x04;                   // COMPLETE | DISABLED
+                continue;
+            }
+            const uint16_t ms = uint16_t(std::min<uint32_t>(lag->second, 0xFFFF));
+            info[0] = 0x01 | 0x02;                       // COMPLETE | TARGETCONTACTED
+            *reinterpret_cast<be16*>(info + 2) = 1;      // probes sent
+            *reinterpret_cast<be16*>(info + 4) = 1;      // and answered
+            *reinterpret_cast<be16*>(info + 12) = ms;
+            *reinterpret_cast<be16*>(info + 14) = ms;
+            *reinterpret_cast<be32*>(info + 16) = 100000000;
+            *reinterpret_cast<be32*>(info + 20) = 100000000;
+        }
+    }
+    *out = qos;
+    if (event)
         if (auto signal = kernel::LookupHandleAs<kernel::Event>(event)) signal->Set();
     ctx.r3.u64 = 0;
 }

@@ -46,6 +46,9 @@
 // the engine
 #define T_Com_Error            82281FA0
 #define T_Com_Printf           8227F448
+#define T_Com_DPrintf          8227F540
+#define T_Com_PrintError       8227F5E0
+#define T_Com_PrintWarning     8227F708
 #define T_Cbuf_AddText         82275C60
 #define T_Memcard_InitializeSystem 8233D890
 #define T_Image_FlushMove      823DE738

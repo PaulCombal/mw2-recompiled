@@ -33,6 +33,21 @@ namespace online
         // The next packet that arrived and who from, without waiting: its
         // size, or -1 when nothing is waiting.
         virtual long Next(void* bytes, size_t size, uint64_t& from) = 0;
+
+        // Optional, as on Service: what only a server everyone shares can do.
+        virtual bool Matchmaking() { return false; }
+        virtual void List(const SessionListing* listing) { (void)listing; }
+        virtual uint32_t Search(const SessionSearch& search) { (void)search; return 0; }
+        virtual bool SearchResults(uint32_t search, std::vector<SessionFound>& out)
+        {
+            (void)search; (void)out;
+            return false;
+        }
+        virtual bool TitleFile(const std::string& name, std::vector<uint8_t>& out)
+        {
+            (void)name; (void)out;
+            return false;
+        }
     };
 
     // The service over a transport (players.cpp).

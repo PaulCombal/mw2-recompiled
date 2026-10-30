@@ -43,6 +43,38 @@ namespace online
         bool fromInvite = false;   // an invitation, not the player choosing to join
     };
 
+    // A session listed for matchmaking. Its numbers are the title's contexts and
+    // properties, which a search compares; the service compares them without
+    // knowing what they mean.
+    struct SessionNumber
+    {
+        uint32_t id = 0, value = 0;
+    };
+    struct SessionListing
+    {
+        uint8_t session[kSessionInfoSize]{};
+        uint32_t openPublic = 0, openPrivate = 0, filledPublic = 0, filledPrivate = 0;
+        std::vector<SessionNumber> numbers;
+    };
+    struct SessionWant
+    {
+        uint32_t id = 0, value = 0;
+        bool atLeast = false;   // no less than `value`, not equal to it
+    };
+    struct SessionSearch
+    {
+        uint32_t room = 0;      // open public slots a session must have
+        uint32_t most = 0;
+        std::vector<SessionWant> wants;
+    };
+    struct SessionFound
+    {
+        uint64_t host = 0;      // the service's id for the player listing it
+        uint8_t session[kSessionInfoSize]{};
+        uint32_t openPublic = 0, openPrivate = 0, filledPublic = 0, filledPrivate = 0;
+        uint32_t lag = 0;       // the round trip between the two players, in ms
+    };
+
     // A friend running this game, as the friends screen shows them.
     struct Friend
     {
@@ -120,6 +152,29 @@ namespace online
         // The next invitation this player accepted, or friend they chose to
         // join, without waiting. Polled once a frame on the title's main thread.
         virtual bool NextInvite(Invite& out) { (void)out; return false; }
+
+        // Optional: matchmaking. Without it a search finds nothing, and the
+        // title lists a lobby nobody will see and waits in it.
+        virtual bool Matchmaking() { return false; }
+        // What this player lists now; null when nothing.
+        virtual void List(const SessionListing* listing) { (void)listing; }
+        // Starts a search, and gives what the results are asked by.
+        virtual uint32_t Search(const SessionSearch& search) { (void)search; return 0; }
+        // Its results once it has finished, without waiting. A search that
+        // gets no answer finishes empty, as one that found nothing.
+        virtual bool SearchResults(uint32_t search, std::vector<SessionFound>& out)
+        {
+            (void)search; (void)out;
+            return false;
+        }
+
+        // Optional: a file of the title's the service holds for everyone, so
+        // that all its players have the same bytes.
+        virtual bool TitleFile(const std::string& name, std::vector<uint8_t>& out)
+        {
+            (void)name; (void)out;
+            return false;
+        }
     };
 
     // One per backend, in its file.

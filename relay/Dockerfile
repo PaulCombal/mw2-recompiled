@@ -3,15 +3,20 @@
 #   docker build -t mw2-relay relay/
 #   docker run -d --restart unless-stopped -p 3074:3074/udp -e MW2_RELAY_PASSWORD=secret mw2-relay
 #
-# The release workflow builds it for amd64 and arm64 and pushes it to
+# The image holds playlists.info, what Find Game offers; another file mounted
+# in the container and named with --playlists replaces it.
+#
+# The release workflow builds it for amd64 and pushes it to
 # ghcr.io/paulcombal/mw2-relay, tagged with the release.
-FROM alpine:3.20 AS build
-RUN apk add --no-cache g++
-COPY protocol.h relay.cpp /src/
-RUN g++ -std=c++20 -O2 -Wall -static -o /mw2-relay /src/relay.cpp && strip /mw2-relay
+FROM rust:1.97-alpine AS build
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY src src
+RUN cargo build --release --locked && cp target/release/mw2-relay /mw2-relay
 
 FROM scratch
 COPY --from=build /mw2-relay /mw2-relay
+COPY playlists.info /playlists.info
 USER 65534:65534
 EXPOSE 3074/udp
-ENTRYPOINT ["/mw2-relay"]
+ENTRYPOINT ["/mw2-relay", "--playlists", "/playlists.info"]

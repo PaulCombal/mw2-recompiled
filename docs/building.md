@@ -398,7 +398,7 @@ kept between runs; each title's own PGO profile is part of a compile's key, so
 the two titles share little of the compiler's. It then packages `mw2-sp` and
 `mw2-mp` with the README per platform,
 and drafts a GitHub Release. A third job builds the relay's image
-([relay.md](relay.md)) for amd64 and arm64, pushes it to
+([relay.md](relay.md)) for amd64, pushes it to
 `ghcr.io/<owner>/mw2-relay:<tag>` with the workflow's own token, and adds the
 amd64 binary to the release. The registry makes a new package private: it is
 made public once, in the package's settings on GitHub. The two executables come from a

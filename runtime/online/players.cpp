@@ -148,6 +148,23 @@ namespace
             return true;
         }
 
+        bool Matchmaking() override { return transport_->Matchmaking(); }
+        void List(const online::SessionListing* listing) override { transport_->List(listing); }
+        uint32_t Search(const online::SessionSearch& search) override { return transport_->Search(search); }
+        // Results arrive with everything else the transport holds.
+        bool SearchResults(uint32_t search, std::vector<online::SessionFound>& out) override
+        {
+            {
+                std::lock_guard g(lock_);
+                Drain();
+            }
+            return transport_->SearchResults(search, out);
+        }
+        bool TitleFile(const std::string& name, std::vector<uint8_t>& out) override
+        {
+            return transport_->TitleFile(name, out);
+        }
+
         void InviteFriends() override
         {
             std::lock_guard g(lock_);

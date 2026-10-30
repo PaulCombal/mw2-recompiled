@@ -359,6 +359,7 @@ namespace
     {
         uint32_t result = X_ERROR_SUCCESS;
         uint32_t extended = X_ERROR_SUCCESS;
+        bool pending = false;   // the overlapped block is completed later
     };
     Reply Result(uint32_t result) { return { result, result }; }
 
@@ -390,7 +391,8 @@ namespace
     }
 
     // XSESSION_CREATE_* flags.
-    constexpr uint32_t kHost = 0x01, kPresence = 0x02, kInvitesDisabled = 0x100;
+    constexpr uint32_t kHost = 0x01, kPresence = 0x02, kStats = 0x04, kMatchmaking = 0x08;
+    constexpr uint32_t kInvitesDisabled = 0x100, kJoinInProgressDisabled = 0x400;
     constexpr uint32_t kLiveFeatures = 0x02 | 0x04 | 0x08 | 0x10;   // presence, stats, matchmaking, arbitration
 
     // Every session the title has made, by the session object it names them
@@ -404,10 +406,20 @@ namespace
         uint64_t made = 0;
         bool systemLink = false;   // a system-link game this machine hosts
         bool on = false;           // and it is on: from its creation or start to its end
+        std::map<uint64_t, bool> members;   // who joined, and whether in a private slot
     };
     std::mutex g_sessionLock;
     std::map<uint32_t, Session> g_sessions;
     uint64_t g_sessionsMade = 0;
+
+    // The contexts and properties the title's searches compare, as the player
+    // last set them: the game mode, ranked or not and the playlist; the
+    // protocol, the map packs, the playlists' version and the room for a party.
+    // What Live kept with a session comes from these on the console too.
+    constexpr uint32_t kPartyRoom = 0x1000001A;
+    constexpr uint32_t kSearched[] = { 0x800B, 0x800A, 0x0006, 0x10000014, 0x10000015, 0x10000017, kPartyRoom };
+    std::map<uint32_t, uint32_t> g_searchedNumbers;
+    std::mutex g_listingLock;              // held from choosing what to list to telling the service
     std::array<uint8_t, 8> g_joinable{};   // the id of the session last handed to the service
     std::mutex g_advertLock;               // held from choosing what to advertise to telling the service
     std::string g_advert;                  // the connect line last told it
@@ -460,6 +472,38 @@ namespace
         else
             LOGI("online: hosting; another machine joins with \"%s\"", line.c_str());
         service->Advertise(line);
+    }
+
+    // What matchmaking lists: the newest session this machine hosts that uses
+    // matchmaking and stats, which the party's own session (0x29) does not. A
+    // session that takes nobody once it has started leaves the list then, as it
+    // leaves Live's. A lobby is listed from its creation, with no public slots
+    // until the title's searches have failed and it opens them.
+    void PublishListing()
+    {
+        auto* service = online::Get();
+        if (!service || !service->Matchmaking()) return;
+        std::lock_guard a(g_listingLock);
+        online::SessionListing listing;
+        const Session* best = nullptr;
+        {
+            std::lock_guard g(g_sessionLock);
+            constexpr uint32_t kListed = kHost | kStats | kMatchmaking;
+            for (const auto& [object, s] : g_sessions)
+                if ((s.flags & kListed) == kListed && !(s.on && (s.flags & kJoinInProgressDisabled)) &&
+                    (!best || s.made > best->made))
+                    best = &s;
+            if (best)
+            {
+                std::memcpy(listing.session, &best->info, sizeof listing.session);
+                for (const auto& [xuid, inPrivate] : best->members)
+                    (inPrivate ? listing.filledPrivate : listing.filledPublic)++;
+                listing.openPublic = best->publicSlots - std::min(best->publicSlots, listing.filledPublic);
+                listing.openPrivate = best->privateSlots - std::min(best->privateSlots, listing.filledPrivate);
+                for (const auto& [id, value] : g_searchedNumbers) listing.numbers.push_back({ id, value });
+            }
+        }
+        service->List(best ? &listing : nullptr);
     }
 
     // What a friend joins over Live: the newest session this machine hosts that
@@ -536,8 +580,10 @@ namespace
             g_sessions[object] = s;
         }
         if (info) kernel::NoteSessionId(info->sessionId);
+        LOGI("online: session %08x created, flags %x, %u public and %u private slots", object, flags, s.publicSlots, s.privateSlots);
         PublishHosted();
         PublishJoinable();
+        PublishListing();
         return {};
     }
 
@@ -550,6 +596,7 @@ namespace
             it->second.on = on;
         }
         PublishHosted();
+        PublishListing();
     }
 
     // (session, flags, ...)
@@ -576,7 +623,153 @@ namespace
         }
         PublishHosted();
         PublishJoinable();
+        PublishListing();
         return {};
+    }
+
+    // (session, count, xuids, 0, private flags): players joining this session
+    // on this machine's say-so. It counts them, which is all Live did for the
+    // slots a search sees.
+    Reply XgiSessionJoinRemote(uint32_t buffer, uint32_t length)
+    {
+        const auto* words = GuestPtr<be32>(buffer);
+        if (!words || length < 20) return Result(X_ERROR_INVALID_PARAMETER);
+        const auto* xuids = GuestPtr<be64>(words[2]);
+        const auto* inPrivate = GuestPtr<be32>(words[4]);
+        {
+            std::lock_guard g(g_sessionLock);
+            const auto it = g_sessions.find(words[0]);
+            if (it != g_sessions.end() && xuids)
+                for (uint32_t i = 0; i < words[1]; i++)
+                    it->second.members[uint64_t(xuids[i])] = inPrivate && uint32_t(inPrivate[i]) != 0;
+        }
+        PublishListing();
+        return {};
+    }
+
+    // (session, count, xuids, 0, 0)
+    Reply XgiSessionLeaveRemote(uint32_t buffer, uint32_t length)
+    {
+        const auto* words = GuestPtr<be32>(buffer);
+        if (!words || length < 12) return Result(X_ERROR_INVALID_PARAMETER);
+        const auto* xuids = GuestPtr<be64>(words[2]);
+        {
+            std::lock_guard g(g_sessionLock);
+            const auto it = g_sessions.find(words[0]);
+            if (it != g_sessions.end() && xuids)
+                for (uint32_t i = 0; i < words[1]; i++) it->second.members.erase(uint64_t(xuids[i]));
+        }
+        PublishListing();
+        return {};
+    }
+
+    void NoteSearched(uint32_t id, uint32_t value)
+    {
+        if (std::find(std::begin(kSearched), std::end(kSearched), id) == std::end(kSearched)) return;
+        {
+            std::lock_guard g(g_sessionLock);
+            g_searchedNumbers[id] = value;
+        }
+        PublishListing();
+    }
+
+    // (user, pad, xuid, property, size, value): the title sets one the way it
+    // sets a context, and only numbers of 32 bits are compared.
+    Reply XgiUserSetProperty(uint32_t buffer)
+    {
+        const auto* words = GuestPtr<be32>(buffer);
+        if (!words) return Result(X_ERROR_INVALID_PARAMETER);
+        if (words[5] == 4)
+            if (const auto* value = GuestPtr<be32>(words[6])) NoteSearched(words[4], *value);
+        return {};
+    }
+
+    // Searches the title is waiting on, and what it asked for.
+    struct Search
+    {
+        uint32_t id = 0, overlapped = 0, results = 0, capacity = 0, most = 0;
+    };
+    std::mutex g_searchLock;
+    std::vector<Search> g_searches;
+
+    constexpr uint32_t kFindingSize = 92;   // XSESSION_SEARCHRESULT
+
+    // (procedure, user, most, properties << 16 | contexts, properties, contexts,
+    // size of the results, results, users). The search's meaning was Live's:
+    // the procedure named a query on its servers, so what is asked for here is
+    // what the title passes, and each must match. The title sends two
+    // procedures, which it fills in alike. The numbers that are no integers
+    // are skill bounds, which nothing here keeps, and the room for a party is a
+    // lower bound.
+    Reply XgiSessionSearch(uint32_t buffer, uint32_t length, uint32_t overlapped)
+    {
+        const auto* words = GuestPtr<be32>(buffer);
+        if (!words || length < 36) return Result(X_ERROR_INVALID_PARAMETER);
+        auto* service = online::Get();
+        // The title's wrapper has cleared the header: nothing found.
+        if (!service || !service->Matchmaking() || !overlapped) return {};
+
+        online::SessionSearch search;
+        search.most = words[2];
+        const uint32_t counts = words[3];
+        const auto* contexts = GuestPtr<be32>(words[5]);
+        for (uint32_t i = 0; contexts && i < (counts & 0xFFFF); i++)
+            search.wants.push_back({ contexts[2 * i], contexts[2 * i + 1], false });
+        // XUSER_PROPERTY { id, pad, XUSER_DATA { type at 8, value at 16 } }
+        const auto* properties = GuestPtr<uint8_t>(words[4]);
+        for (uint32_t i = 0; properties && i < (counts >> 16); i++)
+        {
+            const uint8_t* property = properties + 24 * i;
+            if (property[8] != 1) continue;
+            const uint32_t id = *reinterpret_cast<const be32*>(property);
+            const uint32_t value = *reinterpret_cast<const be32*>(property + 16);
+            search.wants.push_back({ id, value, id == kPartyRoom });
+            if (id == kPartyRoom) search.room = value;
+        }
+        kernel::ForgetSessionLags();
+        const uint32_t id = service->Search(search);
+        {
+            std::lock_guard g(g_searchLock);
+            g_searches.push_back({ id, overlapped, words[7], words[6], words[2] });
+        }
+        LOGI("online: searching for sessions, procedure %u, room for %u", uint32_t(words[0]), search.room);
+        Reply reply;
+        reply.pending = true;
+        return reply;
+    }
+
+    // XSESSION_SEARCHRESULT_HEADER, then the results:
+    // { XSESSION_INFO, open public, open private, filled public, filled private,
+    //   properties, contexts, their pointers }. The title reads no property a
+    // search result can leave out. The host's address is rebuilt from the id
+    // the server stamped on the listing, so nobody can list a session in
+    // another player's name.
+    void AnswerSearch(const Search& search, const std::vector<online::SessionFound>& found)
+    {
+        uint32_t count = 0;
+        if (auto* header = GuestPtr<be32>(search.results); header && search.capacity >= 8)
+        {
+            const uint32_t first = search.results + 8;
+            for (const online::SessionFound& one : found)
+            {
+                if (count >= search.most || 8 + (count + 1) * kFindingSize > search.capacity) break;
+                auto* p = GuestPtr<uint8_t>(first + count * kFindingSize);
+                std::memset(p, 0, kFindingSize);
+                std::memcpy(p, one.session, sizeof one.session);
+                kernel::SetXnAddrPeer(p + 8, one.host);
+                auto* slots = reinterpret_cast<be32*>(p + 60);
+                slots[0] = one.openPublic;
+                slots[1] = one.openPrivate;
+                slots[2] = one.filledPublic;
+                slots[3] = one.filledPrivate;
+                kernel::NoteSessionLag(one.session, one.lag);
+                count++;
+            }
+            header[0] = count;
+            header[1] = first;
+        }
+        LOGI("online: search found %u sessions", count);
+        CompleteOverlappedEx(search.overlapped, X_ERROR_SUCCESS, X_ERROR_SUCCESS, 0);
     }
 
     // (session, flags, publicSlots, privateSlots)
@@ -599,6 +792,7 @@ namespace
         }
         PublishHosted();   // the slots are in the connect line
         PublishJoinable();
+        PublishListing();
         return {};
     }
 
@@ -743,7 +937,11 @@ namespace
         }
         std::vector<char> bytes;
         std::error_code ec;
-        if (fs::exists(file.path, ec))
+        std::vector<uint8_t> shared;
+        auto* service = online::Get();
+        if (file.title && service && service->TitleFile(file.path.filename().string(), shared))
+            bytes.assign(shared.begin(), shared.end());
+        else if (fs::exists(file.path, ec))
         {
             std::ifstream in(file.path, std::ios::binary);
             bytes.assign(std::istreambuf_iterator<char>(in), {});
@@ -754,7 +952,10 @@ namespace
             return { kFunctionFailed, X_ONLINE_E_STORAGE_FILE_NOT_FOUND };
         }
         if (bytes.size() > request.size)
+        {
+            LOGW("online: %s has %zu bytes, and the title has room for %u", request.path.c_str(), bytes.size(), request.size);
             return { kFunctionFailed, 0x8007007A };   // HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER)
+        }
         if (auto* to = GuestPtr<char>(request.buffer); to && !bytes.empty())
             std::memcpy(to, bytes.data(), bytes.size());
         if (auto* results = GuestPtr<uint8_t>(request.results); results && request.resultsSize >= 20)
@@ -849,14 +1050,17 @@ namespace
                 if (const Who who = WhoIs(index); who.state && (who.offline == xuid || who.online == xuid))
                     user = index;
         presence::SetContext(user, set[4], set[5]);
+        NoteSearched(set[4], set[5]);
         return {};
     }
 
     bool Handled(uint32_t app, uint32_t message)
     {
         if (app == kAppXGI)
-            return message == 0x000B0006 || message == 0x000B0010 || message == 0x000B0011 || message == 0x000B0014 ||
-                   message == 0x000B0015 || message == 0x000B0018;
+            return message == 0x000B0006 || message == 0x000B0007 || message == 0x000B0010 ||
+                   message == 0x000B0011 || message == 0x000B0012 || message == 0x000B0013 ||
+                   message == 0x000B0014 || message == 0x000B0015 || message == 0x000B0018 ||
+                   message == 0x000B001C;
         if (app == kAppXLiveBase)
             return message == 0x00050009 || message == 0x0005000B || message == 0x00058004 ||
                    message == 0x00058006 ||
@@ -864,7 +1068,7 @@ namespace
         return false;
     }
 
-    Reply XamMessage(uint32_t app, uint32_t message, uint32_t param1, uint32_t param2)
+    Reply XamMessage(uint32_t app, uint32_t message, uint32_t param1, uint32_t param2, uint32_t overlapped = 0)
     {
         if (!Handled(app, message))
         {
@@ -882,11 +1086,15 @@ namespace
             switch (message)
             {
             case 0x000B0006: return XgiUserSetContext(param1);
+            case 0x000B0007: return XgiUserSetProperty(param1);
             case 0x000B0010: return XgiSessionCreate(param1, param2);
             case 0x000B0011: return XgiSessionDelete(param1);
+            case 0x000B0012: return XgiSessionJoinRemote(param1, param2);
+            case 0x000B0013: return XgiSessionLeaveRemote(param1, param2);
             case 0x000B0014: return XgiSessionStart(param1);
             case 0x000B0015: return XgiSessionEnd(param1);
             case 0x000B0018: return XgiSessionModify(param1, param2);
+            case 0x000B001C: return XgiSessionSearch(param1, param2, overlapped);
             }
         }
         return XLiveBase(message, param1, param2);
@@ -977,14 +1185,46 @@ PPC_FUNC(__imp__XMsgStartIORequest)
     // (app, message, overlapped, buffer, length). The asynchronous form of the
     // same call: it finishes inline here, but the caller polls the overlapped
     // block, so the answer has to go there and the call itself say "pending".
-    const Reply reply = XamMessage(ctx.r3.u32, ctx.r4.u32, ctx.r6.u32, ctx.r7.u32);
     const uint32_t overlapped = ctx.r5.u32;
+    const Reply reply = XamMessage(ctx.r3.u32, ctx.r4.u32, ctx.r6.u32, ctx.r7.u32, overlapped);
+    if (reply.pending) { ctx.r3.u64 = X_ERROR_IO_PENDING; return; }
     if (!overlapped) { ctx.r3.u64 = reply.result; return; }
     CompleteOverlappedEx(overlapped, reply.result, reply.extended, 0);
     ctx.r3.u64 = X_ERROR_IO_PENDING;
 }
 
-PPC_FUNC(__imp__XMsgCancelIORequest)  { ctx.r3.u64 = X_ERROR_SUCCESS; }
+void kernel::FinishSearches()
+{
+    auto* service = online::Get();
+    if (!service) return;
+    std::lock_guard g(g_searchLock);
+    for (auto it = g_searches.begin(); it != g_searches.end();)
+    {
+        std::vector<online::SessionFound> found;
+        if (!service->SearchResults(it->id, found)) { ++it; continue; }
+        AnswerSearch(*it, found);
+        it = g_searches.erase(it);
+    }
+}
+
+// (overlapped, wait). The only call that can still be running is a search; the
+// title may reuse its block once this returns, so its answer must not come.
+PPC_FUNC(__imp__XMsgCancelIORequest)
+{
+    const uint32_t overlapped = ctx.r3.u32;
+    {
+        std::lock_guard g(g_searchLock);
+        const auto it = std::find_if(g_searches.begin(), g_searches.end(),
+                                     [&](const Search& s) { return s.overlapped == overlapped; });
+        if (it != g_searches.end())
+        {
+            g_searches.erase(it);
+            constexpr uint32_t X_ERROR_CANCELLED = 1223;
+            CompleteOverlappedEx(overlapped, X_ERROR_CANCELLED, 0x80070000 | X_ERROR_CANCELLED, 0);
+        }
+    }
+    ctx.r3.u64 = X_ERROR_SUCCESS;
+}
 
 // Enumerators: the title asks XAM for a list -- content packages, Live's
 // title servers, friends -- by a handle it then pages through. Nothing here

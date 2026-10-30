@@ -338,13 +338,6 @@ if(Vulkan_FOUND)
 endif()
 endif()
 
-# ---- relay -----------------------------------------------------------------
-# The server players choose with NETWORK SERVER (relay/): a program of its own,
-# for Linux, which its Dockerfile builds too. Built here for trying it locally.
-if(NOT WIN32)
-    add_executable(mw2-relay "${CMAKE_SOURCE_DIR}/relay/relay.cpp")
-endif()
-
 # ---- launcher --------------------------------------------------------------
 # What a player opens (launcher/): it installs the game and starts it. One
 # executable with nothing beside it, like the game's: Dear ImGui on SDL's own

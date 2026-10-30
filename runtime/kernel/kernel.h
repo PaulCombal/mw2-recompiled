@@ -109,6 +109,16 @@ namespace kernel
     // XNetInAddrToXnAddr names for a player the title did not look up itself.
     void NoteSessionId(const void* id8);
 
+    // A search's answer, for XNetQosLookup: the round trip to the player
+    // hosting a session, by its id, until the next search.
+    void ForgetSessionLags();
+    void NoteSessionLag(const void* id8, uint32_t milliseconds);
+    // Puts a service's id for a peer into a 36-byte XNADDR.
+    void SetXnAddrPeer(void* addr36, uint64_t peer);
+
+    // Once a frame: hands the title the searches that finished.
+    void FinishSearches();
+
     // Called by generated stubs; logs the first hit and counts the rest.
     void Unimplemented(const char* name);
 

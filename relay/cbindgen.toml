@@ -1,0 +1,39 @@
+# protocol.h, which the game includes, is made from src/protocol.rs: `cargo test`
+# fails when the two differ, and writes the new one when BLESS=1 is set.
+language = "C++"
+namespace = "relay"
+pragma_once = true
+no_includes = true
+sys_includes = ["cstddef", "cstdint"]
+usize_is_size_t = true
+documentation_style = "c++"
+autogen_warning = "// Made from relay/src/protocol.rs by cbindgen: BLESS=1 cargo test. Do not edit."
+trailer = """
+namespace relay
+{
+    inline uint16_t Big16(uint16_t value) { return __builtin_bswap16(value); }
+    inline uint32_t Big32(uint32_t value) { return __builtin_bswap32(value); }
+    inline uint64_t Big64(uint64_t value) { return __builtin_bswap64(value); }
+
+    static_assert(sizeof(Header) == 24);
+    static_assert(sizeof(Hello) == 68);
+    static_assert(sizeof(Advert) == 84);
+    static_assert(sizeof(Want) == 12);
+    static_assert(sizeof(Search) == 12);
+    static_assert(sizeof(Found) == 88);
+    static_assert(sizeof(ResultsPage) == 12);
+}
+"""
+
+[enum]
+enum_class = false
+prefix_with_name = true
+
+[export]
+include = ["Header", "Hello", "Attribute", "Advert", "Want", "Search", "Found", "ResultsPage", "FileAsk", "FileChunk", "Kind"]
+exclude = ["Be16", "Be32", "Be64"]
+
+[export.rename]
+Be16 = "uint16_t"
+Be32 = "uint32_t"
+Be64 = "uint64_t"

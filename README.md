@@ -30,7 +30,7 @@
 - **Custom maps (beta)**: maps made for the PC game, converted by the launcher.
 - **Xbox 360-style controllers**, with rumble.
 
-Not supported: public matchmaking and ranked playlists, which needed Activision's servers.
+Not supported: ranked playlists and matchmaking without a [server](#online), and moving a match to another host when its host leaves.
 
 <a id="requirements" href="#requirements"><img src="docs/images/readme/h-requirements.svg" alt="Requirements" height="56"></a>
 
@@ -88,7 +88,7 @@ Everyone runs `mw2-mp` from the same release, with the same NETWORK chosen in th
 
 **Steam.** With Steam running, the game shows as *Spacewar*. SYSTEM LINK lists the games every Steam player hosts, worldwide, and anyone can join yours. For a game among friends, host PLAY ONLINE → PRIVATE MATCH and choose *Invite friends* (or press `F6`): it lists your Steam friends who are playing. Your friend accepts in Steam's chat while their game is running. Other players see your Steam name. Without Steam running, it plays as LAN.
 
-**Server.** Everyone on the same server sees each other's games in SYSTEM LINK and can join each other's private matches, from anywhere. Whoever hosts a match plays in it. Enter the server's address and password under NETWORK; nobody but the server's owner needs to open a port. To run one, see [docs/relay.md](docs/relay.md).
+**Server.** Everyone on the same server sees each other's games in SYSTEM LINK, can join each other's private matches, and finds games together with FIND GAME, from anywhere. Whoever hosts a match plays in it. Enter the server's address and password under NETWORK; nobody but the server's owner needs to open a port. To run one, see [docs/relay.md](docs/relay.md).
 
 **LAN.** SYSTEM LINK finds games on the network by itself. In a private match, the lobby's *Invite friends* invites everyone on the network; start the others with `MW2_LAN_ACCEPT=1`. Two copies of `mw2-mp` on one PC can play a system link match, each with the controller that chose SYSTEM LINK in it.
 

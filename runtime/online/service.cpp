@@ -131,6 +131,7 @@ void online::Frame()
 {
     auto* service = Get();
     if (!service) return;
+    kernel::FinishSearches();
     Invite invite;
     if (service->NextInvite(invite))
     {

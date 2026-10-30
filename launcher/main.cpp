@@ -1229,8 +1229,9 @@ namespace
             add(Action::NextNetwork, std::string("NETWORK ") + settings::NetworkName(network), "NETWORK",
                 std::string("How the multiplayer reaches other players: now ") + now +
                 "\n\nLAN: SYSTEM LINK finds the games on your local network."
-                "\n\nSERVER: everyone on the same server sees each other's games in SYSTEM LINK, and can join each "
-                "other's private matches, wherever they are. Whoever runs the server gives you its address and password."
+                "\n\nSERVER: everyone on the same server sees each other's games in SYSTEM LINK, can join each "
+                "other's private matches, and finds games with FIND GAME, wherever they are. Whoever runs the server "
+                "gives you its address and password."
                 "\n\nSTEAM: invite your Steam friends to a private match. SYSTEM LINK lists the games every Steam "
                 "player hosts, and anyone on Steam can join yours. The game shows as Spacewar. Without Steam "
                 "running, it plays as LAN."
