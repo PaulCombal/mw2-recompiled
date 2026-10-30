@@ -155,11 +155,13 @@ int main(int argc, char** argv)
     }
 
     // Each upload's place in the texture set, which is the other half of the
-    // path: an image nothing can bind is not uploaded, it is leaked.
+    // path: an image nothing can bind is not uploaded, it is leaked. It comes
+    // after the stand-ins (bindings.h).
     bool bound = vk::textures::Set() != nullptr;
     for (uint64_t id : uploaded)
         bound = bound && (vk::textures::Handle(id, 0) &
-                          ((1u << vk::bindings::kHandleImageBits) - 1)) == id;
+                          ((1u << vk::bindings::kHandleImageBits) - 1)) ==
+                         id + vk::bindings::kImageKinds - 1;
 
     std::printf("\n%u formats: %u exact, %u wrong, %u with no Vulkan equivalent\n",
                 tried, matched, failed, skipped);

@@ -196,7 +196,8 @@ namespace
         UploadSlot uploadSlots[vk::textures::kUploadSlots];
         UploadSlot* open = nullptr;   // uploads open between BeginUploads and EndSubmission
         uint64_t uploadsBatched = 0, uploadsAlone = 0, stagingOverflows = 0;
-        // Set 1: every image at its id, every sampler at its slot (bindings.h).
+        // Set 1: every image two past its id, after the stand-ins, every
+        // sampler at its slot (bindings.h).
         VkDescriptorPool bindlessPool = VK_NULL_HANDLE;
         VkDescriptorSet bindless = VK_NULL_HANDLE;
 
@@ -610,15 +611,27 @@ namespace
         return image.volume ? 2 : image.layers > 1 ? 1 : 0;
     }
 
-    // The bindless set's entry for `id`: its view, in the array of its kind.
-    void WriteImage(uint64_t id, Image& image)
+    // An id is an image and, above bit 32, the sampler it is bound with: an
+    // index into State::samplerList plus one, or zero for the image's own.
+    constexpr uint64_t kImageBits = 0xFFFFFFFFull;
+    constexpr uint32_t kSamplerShift = 32;
+
+    // An image's place in the bindless set's array: after the stand-in of
+    // each kind (bindings.h), so its id, one-based, plus two.
+    uint32_t ElementOf(uint64_t id)
+    {
+        return uint32_t(id & kImageBits) + vk::bindings::kImageKinds - 1;
+    }
+
+    // The bindless set's entry at `element`: the image's view.
+    void WriteImage(uint32_t element, Image& image)
     {
         VkDescriptorImageInfo info{ VK_NULL_HANDLE, image.view,
                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
         write.dstSet = g.bindless;
-        write.dstBinding = KindOf(image);
-        write.dstArrayElement = uint32_t(id);
+        write.dstBinding = vk::bindings::kImages;
+        write.dstArrayElement = element;
         write.descriptorCount = 1;
         write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         write.pImageInfo = &info;
@@ -717,11 +730,11 @@ namespace
                (uint64_t(fetch.Dimension() == gpu::TextureDimension::Cube) << 24);
     }
 
-    // Element 0 of each of set 1's image arrays, for a slot with nothing bound
-    // and for one bound to a texture of another kind than the module declares:
-    // a view of the wrong kind is invalid, and the title does bind a 2D
-    // texture where a program fetches a volume, and a 2D one where it fetches
-    // a cube.
+    // The stand-in of each kind, at its kind's element of set 1's image array,
+    // for a slot with nothing bound and for one bound to a texture of another
+    // kind than the module declares: a view of the wrong kind is invalid, and
+    // the title does bind a 2D texture where a program fetches a volume, and a
+    // 2D one where it fetches a cube.
     bool MakeFallbackOf(Image& out, uint32_t layers, bool volume)
     {
         out.format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -738,7 +751,7 @@ namespace
         out.sampler = sampler.sampler;
         out.samplerSlot = sampler.slot;
         if (!out.sampler) return false;
-        WriteImage(0, out);
+        WriteImage(KindOf(out), out);
         return true;
     }
 
@@ -764,17 +777,16 @@ namespace
             g.freeIds.pop_back();
             return id;
         }
-        // An id is also the image's place in the bindless set, which has
-        // room for so many.
-        if (g.images.size() + 1 >= vk::bindings::kImageCount) return 0;
+        // An id also places the image in the bindless set, which has room
+        // for so many.
+        if (ElementOf(g.images.size() + 1) >= vk::bindings::kImageCount) return 0;
         g.images.emplace_back();
         return uint64_t(g.images.size());
     }
 
-    uint64_t Store(Image& image)
+    // `id` from NewSlot.
+    void Store(uint64_t id, Image& image)
     {
-        const uint64_t id = NewSlot();
-        if (!id) return vk::textures::kNone;
         image.lastBound = g.frame;
         image.boundSegment = g.segment;
         g.uploads++;
@@ -782,14 +794,8 @@ namespace
         g.liveBytes += image.bytes;
         Image& stored = g.images[size_t(id - 1)];
         stored = image;
-        WriteImage(id, stored);
-        return id;
+        WriteImage(ElementOf(id), stored);
     }
-
-    // An id is an image and, above bit 32, the sampler it is bound with: an
-    // index into State::samplerList plus one, or zero for the image's own.
-    constexpr uint64_t kImageBits = 0xFFFFFFFFull;
-    constexpr uint32_t kSamplerShift = 32;
 
     Image* Find(uint64_t id)
     {
@@ -896,27 +902,30 @@ namespace
         image.bytes = data.bytes.size();
         image.levels = data.levels;
 
-        if (!MakeImage(image, error)) { DestroyImage(image); return vk::textures::kNone; }
-        if (!StageInto(image, data.bytes.data(), data.bytes.size(), error))
-        {
-            DestroyImage(image);
-            return vk::textures::kNone;
-        }
+        // The sampler and the id before the image: once its upload is
+        // recorded, the image may not be destroyed until that has run.
         const State::Sampler sampler = SamplerFor(samplerKey);
         image.sampler = sampler.sampler;
         image.samplerSlot = sampler.slot;
         if (!image.sampler)
         {
-            DestroyImage(image);
             Fail("no sampler", error);
             return vk::textures::kNone;
         }
-        const uint64_t id = Store(image);
+        const uint64_t id = NewSlot();
         if (!id)
         {
-            DestroyImage(image);
             Fail("no room in the bindless set", error);
+            return vk::textures::kNone;
         }
+        if (!MakeImage(image, error) ||
+            !StageInto(image, data.bytes.data(), data.bytes.size(), error))
+        {
+            DestroyImage(image);
+            g.freeIds.push_back(id);
+            return vk::textures::kNone;
+        }
+        Store(id, image);
         return id;
     }
 }
@@ -927,7 +936,7 @@ namespace
     bool MakeBindlessSet()
     {
         const VkDescriptorPoolSize sizes[2] = {
-            { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, vk::bindings::kImageCount * vk::bindings::kImageKinds },
+            { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, vk::bindings::kImageCount },
             { VK_DESCRIPTOR_TYPE_SAMPLER, vk::bindings::kSamplerCount } };
         VkDescriptorPoolCreateInfo info{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
         info.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
@@ -1744,7 +1753,7 @@ uint64_t vk::textures::Adopt(uint64_t key, void* view, const gpu::TextureFetch& 
     image.view = static_cast<VkImageView>(view);
     // A copy's view changes only once the GPU is done with the old one
     // (ForgetViews), so nothing pending reads the entry being rewritten.
-    if (image.written != image.view) WriteImage(id, image);
+    if (image.written != image.view) WriteImage(ElementOf(id), image);
     return id | (uint64_t(sampler) << kSamplerShift);
 }
 
@@ -1760,7 +1769,7 @@ uint32_t vk::textures::Handle(uint64_t id, uint8_t kind)
     if (image && !image->written) image = nullptr;   // released
     if (image && KindOf(*image) != kind) { image = nullptr; g.kindMismatches++; }
     const uint32_t sampler = SamplerSlotOf(id, image ? *image : FallbackOf(kind));
-    return (image ? uint32_t(id & kImageBits) : 0u) | (sampler << vk::bindings::kHandleImageBits);
+    return (image ? ElementOf(id) : uint32_t(kind)) | (sampler << vk::bindings::kHandleImageBits);
 }
 
 void* vk::textures::Set() { return g.bindless; }

@@ -77,15 +77,18 @@ namespace vk::renderer::detail
         return uint32_t(h >> 58);
     }
 
-    // What the draw's record holds for each slot either shader samples
-    // (vk::textures::Handle); slots neither names are left as they are.
+    // What the draw's record holds for each slot a shader samples
+    // (vk::textures::Handle), in the stage's own words (bindings.h), each
+    // with the kind that stage declares the slot as; slots neither names are
+    // left as they are.
     //
     // `scaled` gets a bit for each slot bound to a resolve's copy, whose image
     // is a whole number of times the size the title gave it: [0] for the
     // frame's scale, [1] for the shadow maps' where it differs.
-    void TexturesFor(const gpu::RegisterFile& r, uint32_t mask, const uint8_t* kinds,
-                     uint32_t* handles, uint32_t (&scaled)[2])
+    void TexturesFor(const gpu::RegisterFile& r, const shader::Translation& vertex,
+                     const shader::Translation& pixel, uint32_t* record, uint32_t (&scaled)[2])
     {
+        const uint32_t mask = vertex.textureMask | pixel.textureMask;
         scaled[0] = scaled[1] = 0;
         const auto note = [&](uint32_t slot, uint32_t copyScale) {
             if (copyScale) scaled[copyScale == g.scale ? 0 : 1] |= 1u << slot;
@@ -197,10 +200,16 @@ namespace vk::renderer::detail
                     ids[slot] = vk::textures::NoteDrawnInWorld(ids[slot]);
             if (g.drawRecord) NoteDrawTexture(slot, fetch, ids[slot], false);
         }
-        for (uint32_t bits = mask; bits; bits &= bits - 1)
+        for (uint32_t bits = pixel.textureMask; bits; bits &= bits - 1)
         {
             const uint32_t slot = uint32_t(std::countr_zero(bits));
-            handles[slot] = vk::textures::Handle(ids[slot], kinds[slot]);
+            record[bindings::kRecordTextures + slot] = vk::textures::Handle(ids[slot], pixel.textureKinds[slot]);
+        }
+        for (uint32_t bits = vertex.textureMask; bits; bits &= bits - 1)
+        {
+            const uint32_t slot = uint32_t(std::countr_zero(bits));
+            record[bindings::kRecordVertexTextures + slot] =
+                vk::textures::Handle(ids[slot], vertex.textureKinds[slot]);
         }
     }
 
@@ -635,25 +644,15 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
                                key.topology, depthControl, key.blendControl,
                                key.colourMask, modeCntl, key.samples });
 
-    // What each slot is declared as, so a texture of another kind is not bound
-    // there. The two stages share the handle; where both sample a slot as
-    // different kinds, either would index an array the image was never
-    // written into, so the slot gets the stand-in (Handle counts it). The
-    // title has not been seen to disagree.
-    uint8_t kinds[vk::textures::kSlots];
-    std::memcpy(kinds, vertex->translation.textureKinds, sizeof kinds);
-    for (uint32_t bits = pixel->translation.textureMask; bits; bits &= bits - 1)
-    {
-        const uint32_t s = uint32_t(std::countr_zero(bits));
-        const uint8_t kind = pixel->translation.textureKinds[s];
-        kinds[s] = (vertex->translation.textureMask >> s & 1) && kinds[s] != kind ? 0xFF : kind;
-    }
     // The draw's record (bindings.h), filled from here on and written into
-    // the arena just before the draw.
-    uint32_t values[bindings::kRecordWords]{};
-    const uint32_t textureMask = vertex->translation.textureMask | pixel->translation.textureMask;
+    // the arena just before the draw. The vertex shader's texture words are
+    // there only when it samples a texture.
+    const uint32_t pixelTextures = pixel->translation.textureMask;
+    const uint32_t vertexTextures = vertex->translation.textureMask;
+    uint32_t values[bindings::kRecordWords];
+    std::memset(values, 0, (vertexTextures ? bindings::kRecordWords : bindings::kRecordVertexTextures) * 4);
     uint32_t scaledSlots[2]{};
-    TexturesFor(r, textureMask, kinds, values + bindings::kRecordTextures, scaledSlots);
+    TexturesFor(r, vertex->translation, pixel->translation, values, scaledSlots);
 
     VkViewport viewport{};
     ViewportOf(r, scissor, viewport);
@@ -738,8 +737,9 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
     // The record, as far as the highest slot sampled. Draws come in runs with
     // the same state, and a run shares one.
     {
-        const uint32_t words = bindings::kRecordTextures +
-                               (textureMask ? 32 - uint32_t(std::countl_zero(textureMask)) : 0);
+        const uint32_t words =
+            vertexTextures ? bindings::kRecordVertexTextures + 32 - uint32_t(std::countl_zero(vertexTextures))
+                           : bindings::kRecordTextures + (pixelTextures ? 32 - uint32_t(std::countl_zero(pixelTextures)) : 0);
         if (!bound.recordValid || bound.recordWords != words ||
             std::memcmp(bound.record, values, words * 4))
         {

@@ -143,7 +143,7 @@ namespace
         bool m_textures[32]{};          // the slots sampled
         Id m_textureTypes[32]{};        // the sampled image a slot's fetches go through
         Id m_textureImageTypes[32]{};   // and the image behind it
-        Id m_imageArrays[bindings::kImageKinds]{};   // set 1's arrays, of the kinds sampled
+        Id m_imageArrays[bindings::kImageKinds]{};   // set 1's image array, as each kind sampled
         Id m_samplers = 0;
         // A slot is only ever sampled at one dimensionality within one program.
         FetchDimension m_textureDimensions[32]{};
@@ -482,8 +482,8 @@ namespace
             m_textureImageTypes[slot] = image;
             m_textureTypes[slot] = m_module.SampledImage(image);
             m_textures[slot] = true;
-            // Set 1's array of this kind, and the samplers (bindings.h). The
-            // kind is the binding.
+            // Set 1's image array, as this kind, and the samplers (bindings.h).
+            // Every kind's variable names the same binding.
             auto declare = [&](Id element, uint32_t count, uint32_t binding, const char* name) {
                 Id pointer = m_module.Pointer(StorageClass::UniformConstant,
                                               m_module.ArrayOf(element, count));
@@ -498,7 +498,7 @@ namespace
                 return variable;
             };
             if (!m_imageArrays[kind])
-                m_imageArrays[kind] = declare(image, bindings::kImageCount, kind,
+                m_imageArrays[kind] = declare(image, bindings::kImageCount, bindings::kImages,
                                               kind == 2 ? "volumes" : kind == 1 ? "cubes" : "images");
             if (!m_samplers)
                 m_samplers = declare(m_module.Sampler(), bindings::kSamplerCount,
@@ -1563,7 +1563,8 @@ namespace
         // unnormalised coordinates are texels of it.
         m_module.RequireCapability(kCapabilityImageQuery);
         // The slot's image and sampler, by the indices the record holds for it.
-        Id handle = RecordWord(bindings::kRecordTextures + slot);
+        Id handle = RecordWord((m_type == shader::Type::Vertex ? bindings::kRecordVertexTextures
+                                                                : bindings::kRecordTextures) + slot);
         Id imageIndex = Emit(Op::BitwiseAnd, m_uint,
                              { handle, m_module.ConstantU((1u << bindings::kHandleImageBits) - 1) });
         Id samplerIndex = Emit(Op::ShiftRightLogical, m_uint,

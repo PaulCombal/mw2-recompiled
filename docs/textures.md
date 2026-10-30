@@ -146,7 +146,8 @@ swizzle is composed through that (`ComposeSwizzle`).
 describes, uploading it the first time it is seen.
 
 - **One set for everything.** Set 1 holds every image the cache has, in the
-  array of its kind at its id, and every sampler at its own slot
+  image array after the three stand-ins (at its id plus two), and every
+  sampler at its own slot
   ([shaders.md](shaders.md#the-module-interface)). An entry is written when
   the image is made, or when a resolve's copy lends a new view, and the set
   stays bound: a draw only names, per slot, an image and a sampler
@@ -156,8 +157,9 @@ describes, uploading it the first time it is seen.
 - **Kinds.** 1D textures are 2D images one row tall (the translator samples
   every 1D fetch as 2D). Cubes are cube images, volumes 3D images. A view
   must match the kind the shader declares; where the title binds a 2D texture
-  to a slot the program reads as a cube or volume, element 0 of the declared
-  kind's array, a 1x1 stand-in, is named instead. So are unbound slots.
+  to a slot the program reads as a cube or volume, the declared kind's 1x1
+  stand-in (element 0, 1 or 2 of the image array: 2D, cube, volume) is named
+  instead. So are unbound slots.
 - **Size limit.** An extent beyond `maxImageDimension2D` is rejected before
   anything is created: creating one is undefined behaviour, not an error, and
   a misparsed fetch constant can describe one. Failures are cached per fetch

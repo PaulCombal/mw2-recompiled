@@ -537,10 +537,13 @@ topology, `RB_BLENDCONTROL0`, `RB_COLOR_MASK` and the sample count. Culling and
 the depth and stencil tests are dynamic state. Dynamic rendering and extended
 dynamic state are required, and so are what the module interface is built on
 ([shaders.md](shaders.md#the-module-interface)): descriptor indexing with
-update-after-bind and partially bound sampled images, room for 196,608 of them
-and 4,096 samplers in one set, shader draw parameters, subgroup ballot in
-pixel shaders and seventeen interpolators. A device without one says which at
-the start. `VK_EXT_multi_draw` is used where there is one.
+update-after-bind and partially bound sampled images, room for 65,536 of them
+and 4,096 samplers in one set (counted, with set 2's two storage buffers and
+the colour target, against each per-stage, per-set and pool limit as the
+specification sums it), shader
+draw parameters, subgroup ballot in pixel shaders and seventeen interpolators.
+A device without one says which at the start. `VK_EXT_multi_draw` is used where
+there is one.
 
 On the console a shader is ready as soon as it is loaded. With
 `VK_EXT_graphics_pipeline_library` the runtime compiles it at that point too

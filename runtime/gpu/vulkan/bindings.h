@@ -34,18 +34,24 @@ namespace vk::bindings
     constexpr uint32_t kConstantTableWords = 4 + kConstantFileBlocks;
     constexpr uint32_t kFetchSlots = 96;
 
-    // Set 1: every texture the cache holds, and every sampler. A sampled image
-    // array for each kind a shader declares a slot as -- 2D, a cube map, a
-    // volume -- indexed by the texture's id, and one array of samplers; the
-    // draw's record says, for each fetch slot, which image and which sampler
-    // (kRecordTextures). Element 0 of each image array is a 1x1 stand-in, for
-    // a slot with nothing bound or with a texture of another kind. An entry is
-    // written once, when the texture is made, and the set stays bound.
+    // Set 1: every texture the cache holds, and every sampler. One array of
+    // sampled images, indexed by the texture's place in it, and one of
+    // samplers; the draw's record says, for each fetch slot, which image and
+    // which sampler (kRecordTextures). A shader declares the image array once
+    // for each kind it samples a slot as -- 2D, a cube map, a volume -- all at
+    // the same binding: Vulkan lets variables share a binding when each is of
+    // a type its descriptor type allows, and a sampled image's descriptor is
+    // the same whatever its view's kind. An element is only read as the kind
+    // its view was made as: elements 0 to 2 are 1x1 stand-ins, one of each
+    // kind in its number's place, for a slot with nothing bound or with a
+    // texture of another kind, and every other element holds one texture. An
+    // entry is written once, when the texture is made, and the set stays
+    // bound.
     constexpr uint32_t kTextureSet = 1;
     constexpr uint32_t kTextureSlots = 32;
-    constexpr uint32_t kImages2D = 0, kImagesCube = 1, kImages3D = 2, kSamplers = 3;
-    constexpr uint32_t kImageKinds = 3;          // the binding is the kind
-    constexpr uint32_t kImageCount = 65536;      // each kind's array; ids are below this
+    constexpr uint32_t kImages = 0, kSamplers = 1;
+    constexpr uint32_t kImageKinds = 3;          // 2D, cube, volume: the stand-ins
+    constexpr uint32_t kImageCount = 65536;
     constexpr uint32_t kSamplerCount = 4096;
     // A slot's word in the record: the image's index, then the sampler's.
     constexpr uint32_t kHandleImageBits = 16;
@@ -87,10 +93,14 @@ namespace vk::bindings
     // the size the title gave it -- the frame's scale, or the shadow maps' --
     // and the reciprocal of each scale.
     constexpr uint32_t kRecordScaled = 13;
-    // Both: a word per fetch slot, up to the highest either shader samples
-    // (kHandleImageBits).
+    // Pixel: a word per fetch slot, up to the highest the pixel shader
+    // samples (kHandleImageBits).
     constexpr uint32_t kRecordTextures = 17;
-    constexpr uint32_t kRecordWords = kRecordTextures + kTextureSlots;
+    // Vertex: the same for the vertex shader's slots, present only when it
+    // samples any. A stage's own, because the two may declare one slot as
+    // different kinds, and an element of set 1 is read as one kind only.
+    constexpr uint32_t kRecordVertexTextures = kRecordTextures + kTextureSlots;
+    constexpr uint32_t kRecordWords = kRecordVertexTextures + kTextureSlots;
     // After the title's sixteen interpolators.
     constexpr uint32_t kRecordLocation = 16;
 }

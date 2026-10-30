@@ -116,11 +116,11 @@ shader and nothing is reflected at bind time.
 
 ```
 set 0  nothing
-set 1  binding 0  texture2D[65536]    every 2D texture the cache holds, at its id
-       binding 1  textureCube[65536]  every cube map
-       binding 2  texture3D[65536]    every volume
-       binding 3  sampler[4096]       every sampler state
-       element 0 of each image array is a 1x1 stand-in
+set 1  binding 0  texture2D[65536]    every texture the cache holds, at its id + 2,
+                  textureCube[65536]  declared once for each kind a shader samples:
+                  texture3D[65536]    one array, each element read only as its kind
+       binding 1  sampler[4096]       every sampler state
+       elements 0, 1 and 2 of the image array are 1x1 stand-ins: 2D, cube, volume
 set 2  binding 0  uint[]   the frame arena, as dwords
        binding 1  vec4[]   the same, as vec4
 no push constants
@@ -137,8 +137,10 @@ the draw's record, in the arena at the dword the draw passes as its base vertex
   13  (4)        both: a bit per texture slot bound to a resolve's copy at the frame's
                  scale, the same at the shadow maps' scale, and the reciprocal of each
                  scale; read only by shaders built under MW2_SCALE or MW2_SHADOW_SCALE
-  17  (1 a slot) both: per fetch slot up to the highest sampled, the image's index
-                 (low 16 bits) and the sampler's (high 16)
+  17  (1 a slot) pixel: per fetch slot up to the highest it samples, the image's
+                 index (low 16 bits) and the sampler's (high 16)
+  49  (1 a slot) vertex: the same for its own slots, only when it samples any; a
+                 stage's own because the two may declare a slot as different kinds
 ```
 
 - **Finding the record.** The vertex shader reads `BaseVertex`, the same for
@@ -188,6 +190,11 @@ the draw's record, in the arena at the dword the draw passes as its base vertex
   fetch's coordinates included: some are read by nothing else.
 - Set 1 declares a slot as 2D, cube or 3D according to how the program fetches
   it (`Translation::textureKinds`); 1D fetches are sampled as 2D at v = 0.
+  The three kinds' variables share binding 0, which Vulkan allows for
+  variables whose types the binding's descriptor type admits: a sampled
+  image's descriptor is the same whatever its view's kind, and ids are shared
+  across kinds, so one array of 65536 serves them all where one of each kind
+  would leave two thirds of the descriptors unreachable.
 
 ## Translation
 

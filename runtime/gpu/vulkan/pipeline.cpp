@@ -284,7 +284,15 @@ bool vk::pipeline::CreateDevice(void* physicalDevice, uint32_t family,
         properties2.pNext = &limits;
         vkGetPhysicalDeviceProperties2(physical, &properties2);
 
-        constexpr uint32_t kImages = bindings::kImageCount * bindings::kImageKinds;
+        // A layout with an update-after-bind set is held to these limits for
+        // every descriptor in it, set 2's included. A stage's resources are
+        // what it can reach other than samplers, which that limit leaves out:
+        // set 1's images, set 2's two views of the arena, and for the pixel
+        // stage the one colour target the renderer draws into. Set 1's pool,
+        // samplers and all, counts against what all such pools may hold.
+        constexpr uint32_t kTextures = bindings::kImageCount + bindings::kSamplerCount;
+        constexpr uint32_t kArenaViews = 2;
+        constexpr uint32_t kStageResources = bindings::kImageCount + kArenaViews + 1;
         const char* missing =
             properties.apiVersion < VK_API_VERSION_1_1 ? "Vulkan 1.1"
             : !indexing.descriptorBindingSampledImageUpdateAfterBind ||
@@ -294,11 +302,14 @@ bool vk::pipeline::CreateDevice(void* physicalDevice, uint32_t family,
             : !drawParameters.shaderDrawParameters ? "shader draw parameters"
             : !(subgroup.supportedStages & VK_SHADER_STAGE_FRAGMENT_BIT) ||
               !(subgroup.supportedOperations & VK_SUBGROUP_FEATURE_BALLOT_BIT) ? "subgroup ballot in pixel shaders"
-            : limits.maxPerStageDescriptorUpdateAfterBindSampledImages < kImages ||
-              limits.maxDescriptorSetUpdateAfterBindSampledImages < kImages ||
+            : limits.maxPerStageDescriptorUpdateAfterBindSampledImages < bindings::kImageCount ||
+              limits.maxDescriptorSetUpdateAfterBindSampledImages < bindings::kImageCount ||
               limits.maxPerStageDescriptorUpdateAfterBindSamplers < bindings::kSamplerCount ||
               limits.maxDescriptorSetUpdateAfterBindSamplers < bindings::kSamplerCount ||
-              limits.maxPerStageUpdateAfterBindResources < kImages + bindings::kSamplerCount
+              limits.maxPerStageDescriptorUpdateAfterBindStorageBuffers < kArenaViews ||
+              limits.maxDescriptorSetUpdateAfterBindStorageBuffers < kArenaViews ||
+              limits.maxPerStageUpdateAfterBindResources < kStageResources ||
+              limits.maxUpdateAfterBindDescriptorsInAllPools < kTextures
                 ? "room for every texture in one set"
             : properties.limits.maxVertexOutputComponents < 4 * (bindings::kRecordLocation + 1) ||
               properties.limits.maxFragmentInputComponents < 4 * (bindings::kRecordLocation + 1)
@@ -437,9 +448,9 @@ namespace
         // command buffers that bind the set are being recorded and run, each
         // entry before the first draw that names it and never while one that
         // names it is pending; most entries are empty.
-        VkDescriptorSetLayoutBinding textures[4]{};
-        VkDescriptorBindingFlags textureFlags[4]{};
-        for (uint32_t i = 0; i < 4; i++)
+        VkDescriptorSetLayoutBinding textures[2]{};
+        VkDescriptorBindingFlags textureFlags[2]{};
+        for (uint32_t i = 0; i < 2; i++)
         {
             textures[i].binding = i;
             textures[i].descriptorType = i == bindings::kSamplers ? VK_DESCRIPTOR_TYPE_SAMPLER
@@ -453,7 +464,7 @@ namespace
         }
         VkDescriptorSetLayoutBindingFlagsCreateInfo textureBindingFlags{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO };
-        textureBindingFlags.bindingCount = 4;
+        textureBindingFlags.bindingCount = 2;
         textureBindingFlags.pBindingFlags = textureFlags;
 
         VkDescriptorSetLayoutBinding memory[2]{};
@@ -468,7 +479,7 @@ namespace
         struct Set { const VkDescriptorSetLayoutBinding* bindings; uint32_t count; };
         Set sets[3];
         sets[bindings::kConstantSet] = { nullptr, 0 };    // the constants are in the arena
-        sets[bindings::kTextureSet] = { textures, 4 };
+        sets[bindings::kTextureSet] = { textures, 2 };
         sets[bindings::kArenaSet] = { memory, 2 };
         for (uint32_t i = 0; i < 3; i++)
         {
