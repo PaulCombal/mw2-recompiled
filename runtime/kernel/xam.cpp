@@ -53,6 +53,7 @@ namespace
 
     constexpr uint32_t kSignedInLocally = 1, kSignedInToLive = 2;
     constexpr uint32_t kFunctionFailed = 1627;   // ERROR_FUNCTION_FAILED
+    constexpr uint32_t kNotLoggedOn = 1245;      // ERROR_NOT_LOGGED_ON
 
     // The player at the first controller: the profile there (signin.h), which
     // the online service knows by the same number -- plus one for a second copy
@@ -283,12 +284,17 @@ PPC_FUNC(__imp__XamUserGetSigninInfo)
     ctx.r3.u64 = X_ERROR_SUCCESS;
 }
 
-// Offline every Live privilege is denied, which is what "no gold" looks like;
-// signed in to Live, the player has them all.
+// (user, privilege, result). Signed in to Live, the player has them all. A
+// profile that is not on Live is not logged on, which the title tells from a
+// privilege it was refused.
 PPC_FUNC(__imp__XamUserCheckPrivilege)
 {
-    if (auto* result = GuestPtr<be32>(ctx.r5.u32)) *result = WhoIs(ctx.r3.u32).state == kSignedInToLive ? 1 : 0;
-    ctx.r3.u64 = X_ERROR_SUCCESS;
+    const uint32_t user = ctx.r3.u32;
+    bool local = false;
+    for (uint32_t index = 0; index < 4; index++)
+        if (user == index || user == 0xFF) local |= WhoIs(index).state == kSignedInLocally;
+    if (auto* result = GuestPtr<be32>(ctx.r5.u32)) *result = !local && WhoIs(user).state == kSignedInToLive ? 1 : 0;
+    ctx.r3.u64 = local ? kNotLoggedOn : X_ERROR_SUCCESS;
 }
 
 PPC_FUNC(__imp__XamUserAreUsersFriends)
@@ -587,6 +593,42 @@ namespace
         return {};
     }
 
+    // (session, info, user, ...): the session has another host. With a player's
+    // index that is this machine, which fills in `info` for the title to send the
+    // others; with XUSER_INDEX_NONE `info` is the new host's. Only the host's
+    // address changes: everyone keeps the session's id and key.
+    Reply XgiSessionMigrateHost(uint32_t buffer, uint32_t length)
+    {
+        const auto* words = GuestPtr<be32>(buffer);
+        if (!words || length < 12) return Result(X_ERROR_INVALID_PARAMETER);
+        auto* info = GuestPtr<XSessionInfo>(words[1]);
+        if (!info) return Result(X_ERROR_INVALID_PARAMETER);
+        const bool host = words[2] < 4;
+        {
+            std::lock_guard g(g_sessionLock);
+            const auto it = g_sessions.find(words[0]);
+            if (it == g_sessions.end()) return Result(X_ERROR_INVALID_PARAMETER);
+            Session& s = it->second;
+            if (host)
+            {
+                kernel::TitleXnAddr(s.info.hostAddress);
+                *info = s.info;
+                s.flags |= kHost;
+            }
+            else
+            {
+                s.info = *info;
+                s.flags &= ~kHost;
+            }
+        }
+        LOGI("online: session %08x migrated, this machine %s", uint32_t(words[0]), host ? "hosts it now" : "follows the new host");
+        PublishJoinable();
+        PublishListing();
+        if (uint64_t peer; !host && kernel::XnAddrPeer(info->hostAddress, peer))
+            if (auto* service = online::Get()) service->HostMoved(peer);
+        return {};
+    }
+
     void SetOn(uint32_t object, bool on)
     {
         {
@@ -782,8 +824,8 @@ namespace
             auto it = g_sessions.find(words[0]);
             if (it != g_sessions.end())
             {
-                // The flags that say who hosts and what the session uses are
-                // fixed at creation; the rest can change.
+                // The flags that say who hosts and what the session uses do not
+                // change here; the rest can.
                 constexpr uint32_t kFixed = 0x3F;
                 it->second.flags = (it->second.flags & kFixed) | (words[1] & ~kFixed);
                 it->second.publicSlots = words[2];
@@ -1060,7 +1102,7 @@ namespace
             return message == 0x000B0006 || message == 0x000B0007 || message == 0x000B0010 ||
                    message == 0x000B0011 || message == 0x000B0012 || message == 0x000B0013 ||
                    message == 0x000B0014 || message == 0x000B0015 || message == 0x000B0018 ||
-                   message == 0x000B001C;
+                   message == 0x000B001C || message == 0x000B001E || message == 0x000B001F;
         if (app == kAppXLiveBase)
             return message == 0x00050009 || message == 0x0005000B || message == 0x00058004 ||
                    message == 0x00058006 ||
@@ -1095,6 +1137,8 @@ namespace
             case 0x000B0015: return XgiSessionEnd(param1);
             case 0x000B0018: return XgiSessionModify(param1, param2);
             case 0x000B001C: return XgiSessionSearch(param1, param2, overlapped);
+            case 0x000B001E: return XgiSessionMigrateHost(param1, param2);
+            case 0x000B001F: return {};   // XSessionModifySkill: no service keeps a skill
             }
         }
         return XLiveBase(message, param1, param2);

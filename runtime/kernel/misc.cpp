@@ -137,11 +137,10 @@ PPC_FUNC(__imp__XamLoaderLaunchTitle)
 }
 PPC_FUNC(__imp__XamLoaderTerminateTitle) { EndTitle("the title ended itself"); }
 
-// Below every version the multiplayer tests for. What a newer one turns on is
-// XSessionMigrateHost and XSessionModifySkill, which only its Live parties use
-// -- a system-link game has no party, and ends when its host leaves -- and a
-// look into xam.xex for newer entry points, which it falls back from anyway.
-PPC_FUNC(__imp__XamGetSystemVersion)    { ctx.r3.u64 = 0; }
+// The lowest version with both XSessionMigrateHost and XSessionModifySkill, which
+// the multiplayer does not send on an older one. Newer ones add nothing the title
+// can use: it looks for one more entry point in xam.xex at 0x20211000.
+PPC_FUNC(__imp__XamGetSystemVersion)    { ctx.r3.u64 = 0x200ED800; }
 
 // No system module is there to load or look into. The title's own wrappers
 // take "not found" as the answer to fall back from; a success that wrote no

@@ -1,5 +1,5 @@
 // What Find Game offers on a relay, in the title's playlist format.
-version 1
+version 2
 
 gametype tdm
 name english "Team Deathmatch"
@@ -15,7 +15,6 @@ name english "Team Deathmatch"
 description english "Two teams, most kills wins."
 minparty 1
 maxparty 9
-rule party_hostmigration 0
 mp_afghan,tdm,1
 mp_derail,tdm,1
 mp_estate,tdm,1
@@ -38,7 +37,6 @@ name english "Free-for-all"
 description english "Every player for themselves."
 minparty 1
 maxparty 8
-rule party_hostmigration 0
 mp_afghan,ffa,1
 mp_derail,ffa,1
 mp_estate,ffa,1

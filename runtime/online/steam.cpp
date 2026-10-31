@@ -139,7 +139,7 @@ namespace
         constexpr int CreateLobby = 13, JoinLobby = 14, LeaveLobby = 15, MemberCount = 17,
                       Member = 18, GetLobbyData = 19, SetLobbyData = 20, Owner = 35,
                       RequestLobbyList = 4, AddStringFilter = 5, AddDistanceFilter = 9,
-                      LobbyByIndex = 12, InviteToLobby = 16, SetJoinable = 34;
+                      LobbyByIndex = 12, InviteToLobby = 16, SetJoinable = 34, SetOwner = 36;
     }
     namespace messages   // SteamNetworkingMessages002
     {
@@ -654,6 +654,17 @@ namespace
             PublishLocked();
         }
 
+        // The lobby carries its owner's game, so it goes with the party. Steam
+        // tells every member, the new owner included (OwnerChanged).
+        void HostMoved(uint64_t peer) override
+        {
+            std::lock_guard g(lock_);
+            if (!owner_ || !lobby_ || peer == self_) return;
+            const bool moved = Call<bool>(matchmaking_, matchmaking::SetOwner, lobby_.load(), peer);
+            LOGI("online: lobby %016llx goes to %016llx%s", (unsigned long long)lobby_.load(),
+                 (unsigned long long)peer, moved ? "" : ", which Steam refused");
+        }
+
         bool NextInvite(online::Invite& out) override
         {
             std::lock_guard g(lock_);
@@ -769,7 +780,9 @@ namespace
             case kLobbyDataUpdate:
             {
                 const auto& update = *reinterpret_cast<const LobbyDataUpdate*>(message.param);
-                if (update.lobby == lobby_ && update.member == update.lobby) Follow();
+                if (update.lobby != lobby_ || update.member != update.lobby) break;
+                OwnerChanged();
+                Follow();
                 break;
             }
             case kSessionRequest:
@@ -839,6 +852,19 @@ namespace
             Call<bool>(friends_, friends::SetRichPresence, "connect", connect);
             LOGI("online: in lobby %016llx%s", (unsigned long long)lobby, mine ? ", its owner" : "");
             Follow();
+        }
+
+        // A player who hands the lobby on was in its game already, and is not
+        // sent back to it.
+        void OwnerChanged()
+        {
+            const bool mine = CallSteamId(matchmaking_, matchmaking::Owner, lobby_.load()) == self_;
+            std::lock_guard g(lock_);
+            if (mine == owner_) return;
+            LOGI("online: %s lobby %016llx", mine ? "now owns" : "no longer owns", (unsigned long long)lobby_.load());
+            owner_ = mine;
+            followed_ = !mine;
+            PublishLocked();
         }
 
         // The owner's game, once per lobby entered: a friend who accepted an

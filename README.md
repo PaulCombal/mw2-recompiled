@@ -30,7 +30,7 @@
 - **Custom maps (beta)**: maps made for the PC game, converted by the launcher.
 - **Xbox 360-style controllers**, with rumble.
 
-Not supported: ranked playlists and matchmaking without a [server](#online), and moving a match to another host when its host leaves.
+Not supported: ranked playlists, matchmaking without a [server](#online), and keeping a match going when its host crashes or loses the connection.
 
 <a id="requirements" href="#requirements"><img src="docs/images/readme/h-requirements.svg" alt="Requirements" height="56"></a>
 

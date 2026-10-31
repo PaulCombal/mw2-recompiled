@@ -357,12 +357,42 @@ The title update's playlists are named `playlists.patch2`, the disc's
 `playlists.info`; both come from the relay ([relay.md](relay.md#playlists)). The
 table's walk stops at the first playlist with no entries, so numbering starts at 0.
 
-Not there: `XSessionMigrateHost`, which fails because the title tests
-`XamGetSystemVersion` first, so the playlist turns off `party_hostmigration` and a
-match ends with its host. `XSessionModifySkill` fails for the same reason, and
-the title tries again every frame while it hosts a lobby; nothing comes of it but
-a line in a diagnostic log. `XUserReadStats` returns nothing, so the title
-balances no teams by skill.
+`XUserReadStats` returns nothing, so the title balances no teams by skill.
+
+## Host migration
+
+The title moves a Live party, a lobby or a running match to another player by
+itself. Nothing in the runtime decides who hosts; `kernel/xam.cpp` answers
+`XSessionMigrateHost` (`000B001E`) and the title does the rest over its own
+packets, which reach every player the way its game traffic does. The system
+version says `0x200ED800`, the lowest with both this call (`0x200CE900`) and
+`XSessionModifySkill`, since the title sends neither on an older one. A
+system-link game has no party, and ends with its host.
+
+`XSessionMigrateHost` changes only the host's address: the session keeps its id
+and key. The new host passes a player's index and gets the session's info back;
+it sends that to the others (`sessinfo`), who pass it in with no player. The listing
+moves by itself, since a copy lists what it hosts ([relay.md](relay.md)). On
+Steam the old host gives the new one the lobby too (`SetLobbyOwner`), since a
+friend invited to a lobby joins its owner's game.
+
+A lobby moves whenever the title finds a better host, so the player who opened
+it may not host the match: a host can change seconds after a lobby fills.
+
+What happens to a running match depends on how the host goes:
+
+| | what the title does | |
+|---|---|---|
+| Ends the game from the pause menu | `hostmigration_start`: the players rate each other, the server streams its game state to the best one (`mstart`, `mhead`, `mdata`), and everyone reconnects to it | the match goes on without the old host, who is back at the Xbox LIVE menu; a spawned player stays where it was |
+| The title's own "we suck as host" check | the same | the match goes on |
+| Leaves with `disconnect`, crashes, or loses the connection | no state was sent. Players notice after 12 seconds without a packet from the host, choose a new one among themselves (`findbest`, `nominee`, `migrateto`) | the match is lost; the lobby goes on and starts another |
+
+The stream needs the old host alive, so the last row cannot be improved from
+outside the title. `migration_limit` and `migration_timeBetween` end a match
+that migrates too often.
+
+`XSessionModifySkill` (`000B001F`) comes with the same version. It succeeds and
+keeps nothing, as nothing here keeps a skill.
 
 ## Xbox LIVE private matches
 

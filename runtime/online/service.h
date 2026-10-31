@@ -149,6 +149,8 @@ namespace online
         // the kernel describes in bytes the service only stores and hands back.
         // Null when there is nothing to join.
         virtual void SetJoinable(const Joinable* joinable) { (void)joinable; }
+        // The party this player is in has moved to that player.
+        virtual void HostMoved(uint64_t peer) { (void)peer; }
         // The next invitation this player accepted, or friend they chose to
         // join, without waiting. Polled once a frame on the title's main thread.
         virtual bool NextInvite(Invite& out) { (void)out; return false; }

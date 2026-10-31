@@ -4,7 +4,8 @@ A relay is what players choose with NETWORK SERVER in the launcher. Everyone
 connected to the same relay sees each other's System Link games, can join
 each other's private matches, and finds games with PLAY ONLINE's Find Game,
 wherever they are. The relay plays no match itself: whoever hosts a match plays
-in it, as on the console, and the match ends when the host leaves.
+in it, as on the console, and a host who ends the game hands the match to another
+player ([multiplayer.md](multiplayer.md#host-migration)).
 
 Every packet goes through the relay. Players connect out to it, so only the
 relay's machine needs an open port, and no player learns another's address.
@@ -98,13 +99,12 @@ joins a party, so raise it when the file changes.
     description english "Two teams, most kills wins."
     minparty 1                         // smallest group of friends it accepts
     maxparty 9                         // largest
-    rule party_hostmigration 0         // a dvar, set when the playlist is
+    rule party_minplayers 2            // a dvar, set when the playlist is
     mp_afghan,tdm,1                    // map, game type, weight: no spaces
 
 A flag `ranked` on a playlist makes it arbitrated, which nothing here answers.
-`party_hostmigration 0` keeps the lobby's first host: moving a lobby or a match
-to another host needs `XSessionMigrateHost`, which is not there yet, so a match
-ends when its host leaves.
+`rule party_hostmigration 0` keeps a lobby's first host, so a match ends when it
+leaves ([host migration](multiplayer.md#host-migration)).
 
 An error in the file does not stop anything: the title drops the line, or the
 playlist. A diagnostic build logs why with `MW2_ENGINE_LOG=1`.

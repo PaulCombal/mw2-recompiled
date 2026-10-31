@@ -105,6 +105,8 @@ namespace kernel
     // bytes of XNADDR. XSessionCreate has to put the same one in the session it
     // hands out, so the two answers come from one place.
     void TitleXnAddr(void* out36);
+    // The peer an address names; false for one that did not come from here.
+    bool XnAddrPeer(const void* addr36, uint64_t& peer);
     // The 8-byte id of the session this machine hosts or joined, which
     // XNetInAddrToXnAddr names for a player the title did not look up itself.
     void NoteSessionId(const void* id8);

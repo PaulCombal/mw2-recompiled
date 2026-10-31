@@ -269,6 +269,11 @@ void kernel::SetXnAddrPeer(void* addr36, uint64_t peer)
     WritePeer(*static_cast<XNADDR*>(addr36), peer);
 }
 
+bool kernel::XnAddrPeer(const void* addr36, uint64_t& peer)
+{
+    return ReadPeer(*static_cast<const XNADDR*>(addr36), peer);
+}
+
 // Signed in to Live, the address says so: the title's party refuses to add a
 // player -- itself included -- whose address has no online part.
 PPC_FUNC(__imp__NetDll_XNetGetTitleXnAddr)
