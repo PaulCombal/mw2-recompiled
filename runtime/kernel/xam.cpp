@@ -434,11 +434,23 @@ namespace
     // makes one. The top bits of the id say what kind of session it is: clear
     // for system link, 0x80 for one peers hold over Live. A session id of all
     // zeroes is what the title reads as "the service never gave us one".
-    void MakeHostInfo(XSessionInfo& info, bool live)
+    // A player sent to a friend's private match gets the flags of a Find Game
+    // session, as they are the host's to know. So the host says which it is in the
+    // id, which every player is given however they came and which stays through
+    // a migration.
+    constexpr uint32_t kFindGameSession = kStats | kMatchmaking;
+    constexpr uint8_t kFindGameId = 0x01;   // in the id's last byte
+    bool IsFindGame(const Session& s)
+    {
+        return (s.flags & kFindGameSession) == kFindGameSession && (s.info.sessionId[7] & kFindGameId);
+    }
+
+    void MakeHostInfo(XSessionInfo& info, bool live, bool findGame)
     {
         RandomBytes(info.sessionId, sizeof info.sessionId);
         info.sessionId[0] = live ? uint8_t(0x80 | (info.sessionId[0] & 0x0F))
                                  : uint8_t((info.sessionId[0] & 0x7F) | 0x01);
+        info.sessionId[7] = uint8_t((info.sessionId[7] & ~kFindGameId) | (findGame ? kFindGameId : 0));
         kernel::TitleXnAddr(info.hostAddress);
         RandomBytes(info.keyExchangeKey, sizeof info.keyExchangeKey);
     }
@@ -492,13 +504,17 @@ namespace
         std::lock_guard a(g_listingLock);
         online::SessionListing listing;
         const Session* best = nullptr;
+        bool playing = false;
         {
             std::lock_guard g(g_sessionLock);
             constexpr uint32_t kListed = kHost | kStats | kMatchmaking;
             for (const auto& [object, s] : g_sessions)
-                if ((s.flags & kListed) == kListed && !(s.on && (s.flags & kJoinInProgressDisabled)) &&
+            {
+                playing |= IsFindGame(s);
+                if (IsFindGame(s) && (s.flags & kListed) == kListed && !(s.on && (s.flags & kJoinInProgressDisabled)) &&
                     (!best || s.made > best->made))
                     best = &s;
+            }
             if (best)
             {
                 std::memcpy(listing.session, &best->info, sizeof listing.session);
@@ -510,6 +526,7 @@ namespace
             }
         }
         service->List(best ? &listing : nullptr);
+        service->InGame(playing);
     }
 
     // What a friend joins over Live: the newest session this machine hosts that
@@ -570,7 +587,7 @@ namespace
         const bool host = !flags || (flags & kHost);
         if (host)
         {
-            if (info) MakeHostInfo(*info, live);
+            if (info) MakeHostInfo(*info, live, (flags & kFindGameSession) == kFindGameSession);
             if (nonce) RandomBytes(nonce, 8);
         }
         Session s;
@@ -769,6 +786,9 @@ namespace
             if (id == kPartyRoom) search.room = value;
         }
         kernel::ForgetSessionLags();
+        // The title polls this block, and takes anything but pending as the
+        // answer, in the frame after asking.
+        GuestPtr<XOverlapped>(overlapped)->result = X_ERROR_IO_PENDING;
         const uint32_t id = service->Search(search);
         {
             std::lock_guard g(g_searchLock);
@@ -784,8 +804,8 @@ namespace
     // { XSESSION_INFO, open public, open private, filled public, filled private,
     //   properties, contexts, their pointers }. The title reads no property a
     // search result can leave out. The host's address is rebuilt from the id
-    // the server stamped on the listing, so nobody can list a session in
-    // another player's name.
+    // the service gives for the listing: a relay stamps it, so nobody can list a
+    // session in another player's name there. A Steam listing says it itself.
     void AnswerSearch(const Search& search, const std::vector<online::SessionFound>& found)
     {
         uint32_t count = 0;

@@ -206,10 +206,10 @@ lobby's "Invite friends" invites every player seen; a copy started with
 ### Steam
 
 `runtime/online/steam.cpp` talks to the Steam client the player already runs.
-It loads the client library from the install -- on Linux `MW2_STEAMCLIENT`,
-else the install the running `steam` process has its `steamclient.so` mapped
-from, else the first of the usual location, the snap and the Flatpak;
-`steamclient64.dll` from the registry's `SteamPath` on Windows -- and calls its
+It loads the client library from the install -- on Linux the one the running
+`steam` process has its `steamclient.so` mapped from, else the first of the usual
+location, the snap and the Flatpak; `steamclient64.dll` from the registry's
+`SteamPath` on Windows; `MW2_STEAM_ROOT` names the install instead -- and calls its
 versioned interfaces through their vtables, as `libsteam_api` does. Nothing of
 Valve's is built in or shipped; the Steamworks SDK is a reference for slots and
 structures only. Another install's library than the running Steam's connects
@@ -239,7 +239,8 @@ controller from a game Steam did not start.
 - Every player starts in a friends-only lobby of their own. The lobby is what
   the title's broadcasts reach, so a game a member hosts shows in every other
   member's System Link list. Networking sessions are accepted only from lobby
-  members, since Spacewar is shared by everyone, except by a host (below).
+  members, since Spacewar is shared by everyone, except by a host and in Find
+  Game (below).
 - System Link is also shared with every Steam player. A player hosting a
   system-link game is listed: an invisible lobby of its own (`mw2recomp` = the
   release's number (Versions, below), `host` = its SteamID; 250 members, since a search never
@@ -253,10 +254,22 @@ controller from a game Steam did not start.
   - a host, while it hosts: it accepts anyone's session, and its broadcasts
     reach the strangers whose sessions are open;
   - a player who searched, on the ports its searches went to, from a host it
-    found. Anyone can make a listing, with any `host`, so a listed host is a
+    found, for the rest of the run. Anyone can make a listing, with any `host`, so a listed host is a
     stranger like any other; a stranger can also join a listing and, once its
     host leaves, keep it listed under the host's id (there is no kick);
-  - a player who chose to join a listed host's game (sent to it on its own).
+  - a player who chose to join a listed host's game (sent to it on its own),
+    for the rest of the run;
+  - a player listed for Find Game, while it is, which is from opening Find
+    Game, with no public slots yet;
+  - a player in a Find Game game (`InGame`). A party's members reach each other,
+    any can be the next host, and the title tells each copy only some of their
+    addresses, so such a game takes anyone's link. This lasts until the title
+    deletes the session, about 40 seconds after leaving the match: it queues
+    the delete. A friend's private match gives its invited players the same
+    session flags, so the host marks a Find Game session in the last bit of its
+    id. Every player has the id, however they came, and it stays through a
+    migration; a session without the mark takes no stranger's link and is not
+    listed, whoever comes to host it.
   Everything else from a stranger is dropped as it arrives (`Reaches`), so a
   player who stops hosting is closed to the strangers it played with. Their
   sessions are not closed: a host's map change ends its game and starts the
@@ -294,6 +307,36 @@ controller from a game Steam did not start.
 - Steam cannot launch the game from an invitation (it would start Spacewar), so
   the friend must already be running it.
 
+#### Two accounts on one machine
+
+Two Steam installs, each logged in to its own account, can run side by side, so
+one person can test Steam play with a copy on each: the snap and the Flatpak, for
+example, keep separate data and logins.
+
+Every Steam listens for its clients on `127.0.0.1:57343`. The Flatpak shares the
+host's network, so whichever Steam starts second is left without that address:
+it logs in as usual and reports nothing, but a game on it reaches the other Steam
+and crashes in `steamclient.so`. The environment variable
+`steam_master_ipc_name_override` gives a Steam and its clients another address.
+Both must have the same value, and it must be set when that Steam starts: one
+started without it has to be restarted.
+
+    flatpak run --env=steam_master_ipc_name_override=127.0.0.1:57344 com.valvesoftware.Steam
+
+A copy on that Steam names the install and the address; a copy on the other names
+only its install. `MW2_STEAM_ROOT` keeps each copy on its own Steam, library and
+process namespace alike. Each runs in a folder of its own, as its saves are
+relative to it, and has the other options as usual:
+
+    MW2_NETWORK=steam MW2_STEAM_ROOT=~/.var/app/com.valvesoftware.Steam/.local/share/Steam \
+      steam_master_ipc_name_override=127.0.0.1:57344 mw2 ...
+    MW2_NETWORK=steam MW2_STEAM_ROOT=~/snap/steam/common/.local/share/Steam mw2 ...
+
+The log's `online: steam as "<name>"` says which account a copy reached. The
+accounts must be Steam friends for an invitation. The two copies talk through
+Steam on one machine, so this tests invitations, lobbies and host migration, not
+a poor connection between players.
+
 ## Versions
 
 Only copies of the same release play together, by the title's own check
@@ -320,8 +363,8 @@ The campaign's co-op has no version check.
 ## Find Game
 
 PLAY ONLINE's Find Game works on the server service, where every player is on one
-relay ([relay.md](relay.md)). Elsewhere a search finds nothing and there are no
-playlists to choose from.
+relay ([relay.md](relay.md)), and on Steam. On `lan` a search finds nothing and
+there are no playlists to choose from.
 
 The title's matchmaking is Live's, not IWNet's: `iwnet_searching` is off, so
 LSP stays unused. It goes:
@@ -354,10 +397,32 @@ finished by `online::Frame`, and `XMsgCancelIORequest` withdraws it, since the
 title reuses the block.
 
 The title update's playlists are named `playlists.patch2`, the disc's
-`playlists.info`; both come from the relay ([relay.md](relay.md#playlists)). The
+`playlists.info`; both come from the relay ([relay.md](relay.md#playlists)), or
+on Steam from the game (below). The
 table's walk stops at the first playlist with no entries, so numbering starts at 0.
 
 `XUserReadStats` returns nothing, so the title balances no teams by skill.
+
+### On Steam
+
+Nothing stands between the players, so `steam.cpp` does what a relay does:
+
+- A game is listed in an invisible lobby of its own, apart from System Link's:
+  `mw2game` = the release's number, `host` = its SteamID, and `game` = the
+  session, its slots and its numbers, in one value. It is made the first time the
+  player hosts something to list, and is searchable while there is one.
+- A search asks Steam for those lobbies, up to 200, and applies the relay's rule
+  itself. Steam answers one list at a time, so it waits for a System Link search,
+  and the other way round.
+- The round trip is measured, not estimated: the search opens a link to each host
+  it found, with one message on a port no title uses, and takes the link's ping.
+  This also finds the route before the player joins. A host with no link within 4
+  seconds cannot be reached and is left out. A list Steam has not given within 10
+  seconds counts as empty.
+- The playlists are built into the game from `relay/playlists.info`, so a release
+  has one list, and a search finds only its own release.
+
+What a stranger reaches is in [Steam](#steam) and [security.md](security.md).
 
 ## Host migration
 
@@ -452,7 +517,7 @@ refuses as signed out.
 | `MW2_LAN_PORT` | lan: the shared broadcast port (3074) |
 | `MW2_LAN_JOIN=<name>` | lan: join that player's party or lobby when seen |
 | `MW2_LAN_ACCEPT=1` | lan: accept invitations |
-| `MW2_STEAMCLIENT=<path>` | steam: the client library to load |
+| `MW2_STEAM_ROOT=<path>` | steam: the install to use, the folder holding `linux64/steamclient.so`, or `steamclient64.dll` on Windows; on Linux a Steam must be running from it |
 | `MW2_STEAM_APPID` | steam: the app id to run as (480) |
 | `MW2_TRACE_ONLINE=1` | log every datagram (diagnostic builds) |
 

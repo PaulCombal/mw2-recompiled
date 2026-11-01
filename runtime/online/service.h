@@ -160,6 +160,9 @@ namespace online
         virtual bool Matchmaking() { return false; }
         // What this player lists now; null when nothing.
         virtual void List(const SessionListing* listing) { (void)listing; }
+        // Whether this player is in a Find Game game: its players reach each other
+        // as well as their host, and any can be the next host.
+        virtual void InGame(bool playing) { (void)playing; }
         // Starts a search, and gives what the results are asked by.
         virtual uint32_t Search(const SessionSearch& search) { (void)search; return 0; }
         // Its results once it has finished, without waiting. A search that

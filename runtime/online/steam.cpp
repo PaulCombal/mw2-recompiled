@@ -33,16 +33,20 @@
 //     broadcasts -- the answers to a search -- reach them;
 //   - a player who searched, on the ports its searches went to: anyone can
 //     list a game, so a listed host is a stranger like any other;
-//   - a player who chose to join the stranger's game, as on a local network.
+//   - a player who chose to join the stranger's game, as on a local network;
+//   - a player listed for Find Game or in a Find Game game: anyone, since any of
+//     a game's players can be its next host.
 // Everything else from a stranger is dropped as it arrives, so a player who
 // stops hosting is closed to the strangers it played with. Their sessions are
 // not closed, since a host's map change ends its game and starts the next one
-// at once. Every Xbox LIVE party and private match stays among friends.
+// at once. Xbox LIVE parties and private matches stay among friends; Find
+// Game is shared as System Link is, with its own listings.
 #include "service.h"
 #include "../env.h"
 #include "../log.h"
 #include "../signin.h"
 #include "../version.h"
+#include "playlists_data.h"
 
 #include <algorithm>
 #include <cctype>
@@ -139,7 +143,7 @@ namespace
         constexpr int CreateLobby = 13, JoinLobby = 14, LeaveLobby = 15, MemberCount = 17,
                       Member = 18, GetLobbyData = 19, SetLobbyData = 20, Owner = 35,
                       RequestLobbyList = 4, AddStringFilter = 5, AddDistanceFilter = 9,
-                      LobbyByIndex = 12, InviteToLobby = 16, SetJoinable = 34, SetOwner = 36;
+                      ResultCount = 10, LobbyByIndex = 12, InviteToLobby = 16, SetJoinable = 34, SetOwner = 36;
     }
     namespace messages   // SteamNetworkingMessages002
     {
@@ -200,6 +204,23 @@ namespace
         if (title != kTitle) return title == "mp" ? "In multiplayer" : "In the campaign or Spec Ops";
         return playing.substr(colon + 1) == ListingVersion() ? "" : "On another release";
     }
+    // The games Find Game can join: lobbies of their own with this key, again
+    // with the release's value, whose "host" is the SteamID hosting and whose
+    // "game" is what it lists, in one value so that a search reads a whole one.
+    constexpr const char* kGameKey = "mw2game";
+    constexpr int kGamesAsked = 200;
+    // A search opens a link to each host it found, on a port no title uses, and
+    // takes the link's ping as the round trip. A host with no link by then
+    // cannot be reached, and is left out.
+    constexpr uint16_t kProbePort = 65535;
+    constexpr auto kProbeWithin = std::chrono::seconds(4);
+    // A list Steam has not given by then is taken as empty, as a list that never
+    // comes would hold up every later one.
+    constexpr auto kListWithin = std::chrono::seconds(10);
+    // What a listing may say. It is anyone's words, read under the lock the
+    // title's sends take.
+    constexpr size_t kGameMostText = 1024;
+    constexpr auto kHuntsEvery = std::chrono::milliseconds(100);
     // A listing Steam would not make is asked for again this often.
     constexpr auto kListAgainEvery = std::chrono::seconds(5);
     // The title broadcasts a search every few seconds while its list is open;
@@ -325,7 +346,7 @@ namespace
     // The Steam clients running: processes named steam, each with the install
     // it runs from, two folders above the steamclient.so it has mapped. A
     // client of another install than the running one's half connects, then
-    // crashes in its first call.
+    // crashes in its first call. MW2_STEAM_ROOT keeps the one running from it.
     struct Running
     {
         int pid;
@@ -336,6 +357,8 @@ namespace
     {
         std::vector<Running> found;
         std::error_code ec;
+        const char* named = env::Text("MW2_STEAM_ROOT");
+        const auto wanted = named ? std::filesystem::canonical(named, ec) : std::filesystem::path();
         for (const auto& entry : std::filesystem::directory_iterator("/proc", ec))
         {
             const std::string name = entry.path().filename().string();
@@ -354,7 +377,7 @@ namespace
                 const std::filesystem::path library(mapped);
                 if (library.filename() != "steamclient.so") continue;
                 const auto root = std::filesystem::canonical(library.parent_path().parent_path(), ec);
-                if (!ec) found.push_back({ std::stoi(name), root });
+                if (!ec && (!named || root == wanted)) found.push_back({ std::stoi(name), root });
                 break;
             }
         }
@@ -362,28 +385,40 @@ namespace
     }
 #endif
 
-    // Where the player's Steam keeps its client library: MW2_STEAMCLIENT, else
-    // the install the running Steam runs from, else the first of the usual
-    // install, the snap and the Flatpak. On Windows, the folder the registry
-    // says Steam is installed in.
+    // Where the player's Steam keeps its client library: the install the
+    // running Steam runs from, else the first of the usual install, the snap
+    // and the Flatpak. On Windows, the folder the registry says Steam is
+    // installed in. MW2_STEAM_ROOT names the install instead.
     std::string FindClient()
     {
-        if (const char* path = env::Text("MW2_STEAMCLIENT")) return path;
 #ifdef _WIN32
-        wchar_t folder[MAX_PATH];
-        DWORD bytes = sizeof(folder);
-        if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath", RRF_RT_REG_SZ, nullptr,
-                         folder, &bytes) != ERROR_SUCCESS)
-            return {};
+        std::filesystem::path root;
+        if (const char* named = env::Text("MW2_STEAM_ROOT")) root = named;
+        else
+        {
+            wchar_t folder[MAX_PATH];
+            DWORD bytes = sizeof(folder);
+            if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath", RRF_RT_REG_SZ, nullptr,
+                             folder, &bytes) != ERROR_SUCCESS)
+                return {};
+            root = folder;
+        }
         std::error_code ec;
-        const auto path = std::filesystem::path(folder) / "steamclient64.dll";
-        return std::filesystem::exists(path, ec) ? path.string() : std::string();
+        const auto path = root / "steamclient64.dll";
+        if (!std::filesystem::exists(path, ec)) return {};
+        const auto utf8 = path.u8string();   // what platform::OpenLibrary reads
+        return std::string(utf8.begin(), utf8.end());
 #else
         for (const Running& steam : RunningSteams())
         {
             std::error_code ec;
             const auto path = steam.root / "linux64" / "steamclient.so";
             if (std::filesystem::exists(path, ec)) return path.string();
+        }
+        if (const char* named = env::Text("MW2_STEAM_ROOT"))
+        {
+            LOGE("online: no Steam is running from %s", named);
+            return {};
         }
         const char* home = env::Text("HOME");
         if (!home) return {};
@@ -459,6 +494,7 @@ namespace
             if (thread_.joinable()) thread_.join();
             if (lobby_) Call<void>(matchmaking_, matchmaking::LeaveLobby, lobby_.load());
             if (listing_) Call<void>(matchmaking_, matchmaking::LeaveLobby, listing_);
+            if (gameListing_) Call<void>(matchmaking_, matchmaking::LeaveLobby, gameListing_);
             if (client_ && pipe_)
             {
                 if (user_) Call<void>(client_, client::ReleaseUser, pipe_, user_);
@@ -469,7 +505,7 @@ namespace
         bool Start() override
         {
             const std::string path = FindClient();
-            if (path.empty()) { LOGE("online: no Steam install found (MW2_STEAMCLIENT names one)"); return false; }
+            if (path.empty()) { LOGE("online: no Steam install found (MW2_STEAM_ROOT names one)"); return false; }
             // The client reads which game this is from the environment, as it does
             // for a game libsteam_api started, and reads it when it is loaded: set
             // later, its networking asserts and has no interface to give.
@@ -544,7 +580,11 @@ namespace
         {
             {
                 std::lock_guard g(lock_);
-                if (searchedHosts_.contains(peer) && !strangers_.contains(peer)) contacted_.insert(peer);
+                if ((searchedHosts_.contains(peer) || foundHosts_.contains(peer)) && !strangers_.contains(peer))
+                    contacted_.insert(peer);
+                // Sending opens the session with no request to take: a game's
+                // other players are remembered here, to be closed to afterwards.
+                if (playing_) strangers_.insert(peer);
             }
             return SendTo(peer, fromPort, toPort, bytes, size);
         }
@@ -581,8 +621,10 @@ namespace
                 }
                 else
                 {
-                    std::erase_if(strangers_, [&](uint64_t stranger) { return !SessionOpen(stranger); });
-                    to.insert(to.end(), strangers_.begin(), strangers_.end());
+                    // The set stays as it is: it is how this player closes to them
+                    // afterwards, and a link that dropped can come back.
+                    for (const uint64_t stranger : strangers_)
+                        if (SessionOpen(stranger)) to.push_back(stranger);
                 }
             }
             if (const uint64_t lobby = lobby_)
@@ -605,8 +647,14 @@ namespace
                 if (Call<int>(messages_, messages::Receive, int(port), &message, 1) < 1 || !message)
                     return false;
                 const auto* data = static_cast<const uint8_t*>(message->data);
-                const bool whole = message->size >= 2 && message->peer.type == 16 &&
-                                   Reaches(message->peer.steamId, port);
+                const bool from = message->size >= 2 && message->peer.type == 16;
+                const bool whole = from && Reaches(message->peer.steamId, port);
+                if (from && !whole && port != kProbePort)
+                {
+                    std::lock_guard g(lock_);
+                    if (droppedFrom_.insert(message->peer.steamId).second)
+                        LOGI("online: dropping what %016llx sends to port %u", (unsigned long long)message->peer.steamId, port);
+                }
                 if (whole)
                 {
                     out.from = message->peer.steamId;
@@ -658,11 +706,85 @@ namespace
         // tells every member, the new owner included (OwnerChanged).
         void HostMoved(uint64_t peer) override
         {
+            // A party Find Game made is not this lobby's.
+            if (!InLobby(peer)) return;
             std::lock_guard g(lock_);
             if (!owner_ || !lobby_ || peer == self_) return;
             const bool moved = Call<bool>(matchmaking_, matchmaking::SetOwner, lobby_.load(), peer);
             LOGI("online: lobby %016llx goes to %016llx%s", (unsigned long long)lobby_.load(),
                  (unsigned long long)peer, moved ? "" : ", which Steam refused");
+        }
+
+        bool Matchmaking() override { return true; }
+
+        void List(const online::SessionListing* listing) override
+        {
+            std::lock_guard g(lock_);
+            game_.clear();
+            if (listing)
+            {
+                char number[32];
+                for (uint8_t byte : listing->session)
+                {
+                    std::snprintf(number, sizeof number, "%02x", byte);
+                    game_ += number;
+                }
+                std::snprintf(number, sizeof number, "/%u/%u/%u/%u/", listing->openPublic, listing->openPrivate,
+                              listing->filledPublic, listing->filledPrivate);
+                game_ += number;
+                for (const online::SessionNumber& one : listing->numbers)
+                {
+                    std::snprintf(number, sizeof number, "%x=%x,", one.id, one.value);
+                    game_ += number;
+                }
+            }
+            PublishGameLocked();
+        }
+
+        uint32_t Search(const online::SessionSearch& search) override
+        {
+            std::lock_guard g(lock_);
+            // A search the title cancelled is never asked for again.
+            const auto now = std::chrono::steady_clock::now();
+            std::erase_if(hunts_, [&](const auto& entry) { return now - entry.second.created >= 2 * kListWithin; });
+            const uint32_t id = ++lastHunt_;
+            Hunt& hunt = hunts_[id];
+            hunt.search = search;
+            hunt.created = now;
+            StartHuntLocked();
+            return id;
+        }
+
+        bool SearchResults(uint32_t search, std::vector<online::SessionFound>& out) override
+        {
+            std::lock_guard g(lock_);
+            const auto it = hunts_.find(search);
+            if (it == hunts_.end()) return true;
+            if (!it->second.done) return false;
+            out = std::move(it->second.found);
+            hunts_.erase(it);
+            return true;
+        }
+
+        bool TitleFile(const std::string& name, std::vector<uint8_t>& out) override
+        {
+            // playlists.info on the disc, playlists.patch2 after the title update.
+            if (name.rfind("playlists.", 0) != 0) return false;
+            out.assign(kPlaylists, kPlaylists + kPlaylistsSize);
+            return true;
+        }
+
+        void InGame(bool playing) override
+        {
+            std::lock_guard g(lock_);
+            if (playing == playing_) return;
+            playing_ = playing;
+            LOGI("online: %s", playing ? "in a Find Game game" : "no longer in a Find Game game");
+            if (playing) return;
+            for (const uint64_t host : foundHosts_) contacted_.erase(host);
+            // A friend it played with is a friend again.
+            std::erase_if(strangers_, [&](uint64_t peer) { return InLobby(peer); });
+            std::erase_if(foundHosts_, [&](uint64_t peer) { return InLobby(peer); });
         }
 
         bool NextInvite(online::Invite& out) override
@@ -720,6 +842,12 @@ namespace
                     listAsked_ = now;
                     std::lock_guard g(lock_);
                     if (!listing_) ListLocked();
+                    if (!gameListing_) PublishGameLocked();
+                }
+                if (const auto now = std::chrono::steady_clock::now(); now - huntsWatched_ >= kHuntsEvery)
+                {
+                    huntsWatched_ = now;
+                    WatchHunts(now);
                 }
                 if (const auto now = std::chrono::steady_clock::now(); now - linksWatched_ >= kLinksEvery)
                 {
@@ -763,6 +891,8 @@ namespace
                     std::lock_guard g(lock_);
                     if (done.call == listingCall_) Listed(done.call);
                     else if (done.call == searchCall_) Found(done.call);
+                    else if (done.call == gameListingCall_) GameListed(done.call);
+                    else if (done.call == huntCall_) GamesFound(done.call);
                 }
                 break;
             }
@@ -788,9 +918,9 @@ namespace
             case kSessionRequest:
             {
                 // From someone in this player's lobby, or from anyone while this
-                // player hosts a system-link game: Spacewar is everyone's. A
-                // session this player opened, to a host it found, needs no
-                // request.
+                // player hosts a system-link game, is listed for Find Game or is
+                // in a Find Game game: Spacewar is everyone's. A session this
+                // player opened needs no request.
                 const auto& request = *reinterpret_cast<const SessionRequest*>(message.param);
                 if (request.remote.type != 16) break;
                 const uint64_t who = request.remote.steamId;
@@ -799,13 +929,13 @@ namespace
                 if (!take)
                 {
                     std::lock_guard g(lock_);
-                    take = !advert_.empty();
+                    take = !advert_.empty() || !game_.empty() || playing_;
                     if (take) strangers_.insert(who);
                 }
                 if (take) Call<bool>(messages_, messages::Accept, &request.remote);
                 LOGI("online: %s asks for a link: %s", Who(who).c_str(),
-                     member ? "in the lobby, taken" : take ? "taken, as this player hosts a game"
-                                                           : "refused, being neither in the lobby nor at a game hosted here");
+                     member ? "in the lobby, taken" : take ? "taken, for a game here"
+                                                           : "refused, being neither in the lobby nor at a game here");
                 break;
             }
             default:
@@ -952,12 +1082,174 @@ namespace
             ListLocked();
         }
 
+        // The Find Game listing, made the first time this player hosts a game
+        // it lists and kept for the run, searchable while there is one.
+        void PublishGameLocked()
+        {
+            const bool listed = !game_.empty();
+            if (!gameListing_)
+            {
+                if (listed && !gameListingCall_)
+                    gameListingCall_ = Call<SteamAPICall>(matchmaking_, matchmaking::CreateLobby, kInvisible, kListingMembers);
+                return;
+            }
+            if (listed && game_ != gameShown_ &&
+                Call<bool>(matchmaking_, matchmaking::SetLobbyData, gameListing_, "game", game_.c_str()))
+                gameShown_ = game_;
+            if (Call<bool>(matchmaking_, matchmaking::SetJoinable, gameListing_, listed) && listed != gameListed_)
+                LOGI("online: %s", listed ? "this game is listed for Find Game" : "this game is no longer listed for Find Game");
+            gameListed_ = listed;
+        }
+
+        void GameListed(SteamAPICall call)
+        {
+            gameListingCall_ = 0;
+            LobbyCreated created{};
+            bool failed = false;
+            if (!getCallResult_(pipe_, call, &created, sizeof created, kLobbyCreated, &failed) || failed ||
+                created.result != kResultOK)
+            {
+                LOGW("online: Steam would not list this game for Find Game (result %d)", created.result);
+                return;
+            }
+            gameListing_ = created.lobby;
+            const std::string host = std::to_string(self_);
+            Call<bool>(matchmaking_, matchmaking::SetLobbyData, gameListing_, kGameKey, ListingVersion().c_str());
+            Call<bool>(matchmaking_, matchmaking::SetLobbyData, gameListing_, "host", host.c_str());
+            PublishGameLocked();
+        }
+
+        // Steam answers one list at a time, and a request's filters hold for it
+        // alone.
+        void StartHuntLocked()
+        {
+            if (searchCall_ || huntCall_) return;
+            for (auto& [id, hunt] : hunts_)
+            {
+                if (hunt.asked) continue;
+                hunt.asked = true;
+                huntAsked_ = id;
+                Call<void>(matchmaking_, matchmaking::AddStringFilter, kGameKey, ListingVersion().c_str(), kEqual);
+                Call<void>(matchmaking_, matchmaking::AddDistanceFilter, kWorldwide);
+                Call<void>(matchmaking_, matchmaking::ResultCount, kGamesAsked);
+                huntCall_ = Call<SteamAPICall>(matchmaking_, matchmaking::RequestLobbyList);
+                if (!huntCall_) hunt.done = true;
+                return;
+            }
+        }
+
+        // A listing is anyone's words: what does not read as one is passed over,
+        // and what it says about its host is only where the title will ask.
+        static bool ReadGame(const char* text, online::SessionFound& found, std::map<uint32_t, uint32_t>& numbers)
+        {
+            if (!text || std::strlen(text) > kGameMostText) return false;
+            const char* slash = std::strchr(text, '/');
+            if (!slash || !ReadSession(std::string(text, slash).c_str(), found.session)) return false;
+            int used = 0;
+            if (std::sscanf(slash, "/%u/%u/%u/%u/%n", &found.openPublic, &found.openPrivate, &found.filledPublic,
+                            &found.filledPrivate, &used) != 4 || !used)
+                return false;
+            const uint32_t most = kMaxMembers;
+            if (found.openPublic > most || found.openPrivate > most || found.filledPublic > most || found.filledPrivate > most)
+                return false;
+            uint32_t id, value;
+            for (const char* at = slash + used; *at; at += used)
+            {
+                used = 0;
+                if (std::sscanf(at, "%x=%x,%n", &id, &value, &used) != 2 || !used) return false;
+                numbers[id] = value;
+            }
+            return true;
+        }
+
+        void GamesFound(SteamAPICall call)
+        {
+            huntCall_ = 0;
+            const auto it = hunts_.find(huntAsked_);
+            LobbyMatchList list{};
+            bool failed = false;
+            const bool answered = getCallResult_(pipe_, call, &list, sizeof list, kLobbyMatchList, &failed) && !failed;
+            if (it == hunts_.end()) return;
+            Hunt& hunt = it->second;
+            if (!answered) hunt.done = true;
+            for (uint32_t i = 0; answered && i < list.matching && hunt.found.size() < hunt.search.most; i++)
+            {
+                const uint64_t lobby = CallSteamId(matchmaking_, matchmaking::LobbyByIndex, int(i));
+                const char* host = Call<const char*>(matchmaking_, matchmaking::GetLobbyData, lobby, "host");
+                online::SessionFound found;
+                found.host = host ? std::strtoull(host, nullptr, 10) : 0;
+                std::map<uint32_t, uint32_t> numbers;
+                if (!found.host || found.host == self_ ||
+                    !ReadGame(Call<const char*>(matchmaking_, matchmaking::GetLobbyData, lobby, "game"), found, numbers) ||
+                    found.openPublic < hunt.search.room)
+                    continue;
+                const bool fits = std::all_of(hunt.search.wants.begin(), hunt.search.wants.end(), [&](const online::SessionWant& want) {
+                    const auto number = numbers.find(want.id);
+                    return number != numbers.end() && (want.atLeast ? number->second >= want.value : number->second == want.value);
+                });
+                const bool again = std::any_of(hunt.found.begin(), hunt.found.end(),
+                                               [&](const online::SessionFound& other) { return other.host == found.host; });
+                if (!fits || again) continue;
+                hunt.found.push_back(found);
+                foundHosts_.insert(found.host);
+                SendTo(found.host, 0, kProbePort, "", 1);
+            }
+            LOGI("online: Find Game: %u listed on Steam, %zu fit", list.matching, hunt.found.size());
+            hunt.answered = true;
+            hunt.probing = std::chrono::steady_clock::now();
+            StartHuntLocked();
+        }
+
+        // A search ends when every host it found has a link, or the time is up.
+        void WatchHunts(std::chrono::steady_clock::time_point now)
+        {
+            for (online::Datagram probe; Receive(kProbePort, probe);) {}
+            std::lock_guard g(lock_);
+            if (searchCall_ && now - searched_ >= kListWithin) searchCall_ = 0;
+            StartHuntLocked();
+            for (auto& [id, hunt] : hunts_)
+            {
+                if (hunt.done) continue;
+                if (!hunt.answered)
+                {
+                    if (now - hunt.created < kListWithin) continue;
+                    if (hunt.asked && id == huntAsked_) huntCall_ = 0;
+                    hunt.done = true;
+                    continue;
+                }
+                std::map<uint64_t, uint32_t> lags;
+                for (const online::SessionFound& found : hunt.found)
+                {
+                    const Identity identity = SteamIdentity(found.host);
+                    LinkStatus status{};
+                    if (Call<int>(messages_, messages::SessionInfo, &identity, nullptr, &status) == kConnected &&
+                        status.ping >= 0)
+                        lags[found.host] = uint32_t(status.ping);
+                }
+                if (lags.size() < hunt.found.size() && now - hunt.probing < kProbeWithin) continue;
+                std::erase_if(hunt.found, [&](online::SessionFound& found) {
+                    const auto lag = lags.find(found.host);
+                    if (lag == lags.end())
+                    {
+                        LOGI("online: Find Game: no link to %016llx in time", (unsigned long long)found.host);
+                        return true;
+                    }
+                    found.lag = lag->second;
+                    return false;
+                });
+                std::stable_sort(hunt.found.begin(), hunt.found.end(),
+                                 [](const online::SessionFound& a, const online::SessionFound& b) { return a.lag < b.lag; });
+                if (hunt.found.size() > hunt.search.most) hunt.found.resize(hunt.search.most);
+                hunt.done = true;
+            }
+        }
+
         // Asks Steam for the hosts listed, unless it is already asked or was
         // asked a moment ago.
         void SearchLocked()
         {
             const auto now = std::chrono::steady_clock::now();
-            if (searchCall_ || now - searched_ < kSearchEvery) return;
+            if (searchCall_ || huntCall_ || now - searched_ < kSearchEvery) return;
             searched_ = now;
             // The filters hold for the next request only.
             Call<void>(matchmaking_, matchmaking::AddStringFilter, kListingKey, ListingVersion().c_str(), kEqual);
@@ -981,6 +1273,7 @@ namespace
             }
             if (found != hosts_) LOGI("online: %zu system-link game(s) listed on Steam", found.size());
             hosts_ = std::move(found);
+            StartHuntLocked();
         }
 
         // The friends running this game, by the key Start sets, and how many
@@ -1063,17 +1356,18 @@ namespace
         }
 
         // Whether a datagram from this peer reaches the title. Steam opens a
-        // session only to someone this player accepted -- a lobby member, or
-        // a stranger while hosting -- or sent to first.
+        // session only to someone this player accepted, or sent to first. While
+        // it takes anyone's link it takes anyone: two players who search can
+        // have found each other, and the first's session is the second's.
         bool Reaches(uint64_t peer, uint16_t port)
         {
             {
                 std::lock_guard g(lock_);
-                if (contacted_.contains(peer)) return true;
-                const bool stranger = strangers_.contains(peer), listed = searchedHosts_.contains(peer);
-                if (!stranger && !listed) return true;   // a lobby member, or one that was
-                if (stranger && !advert_.empty()) return true;
-                if (listed && searchPorts_.contains(port)) return true;
+                if (contacted_.contains(peer) || !advert_.empty() || !game_.empty() || playing_) return true;
+                const bool system = searchedHosts_.contains(peer);
+                if (!system && !foundHosts_.contains(peer) && !strangers_.contains(peer))
+                    return true;   // a lobby member, or one that was
+                if (system && searchPorts_.contains(port)) return true;
             }
             return InLobby(peer);
         }
@@ -1136,7 +1430,9 @@ namespace
                     link.state = state;
                 }
                 else if (state == kConnected && now - link.told >= kPoorLinkEvery &&
-                         (status.qualityLocal < 0.9f || status.qualityRemote < 0.9f ||
+                         // -1 until Steam has a measure.
+                         ((status.qualityLocal >= 0 && status.qualityLocal < 0.9f) ||
+                          (status.qualityRemote >= 0 && status.qualityRemote < 0.9f) ||
                           status.queueMicroseconds >= 100000))
                 {
                     link.told = now;
@@ -1182,8 +1478,27 @@ namespace
         std::vector<uint64_t> hosts_;           // the hosts listed when Steam was last asked
         std::set<uint64_t> searchedHosts_;      // every listed host a search went to
         std::set<uint16_t> searchPorts_;        // and the ports it went to
-        std::set<uint64_t> strangers_;          // not in the lobby, whose sessions this player accepted hosting
-        std::set<uint64_t> contacted_;          // listed hosts this player sent to on its own
+        std::set<uint64_t> strangers_;          // whose sessions this player accepted, or sent to in a Find Game game
+        std::set<uint64_t> contacted_;          // hosts it found that it sent to on its own
+
+        std::string game_;                      // what this player lists for Find Game
+        std::string gameShown_;                 // what the listing says
+        uint64_t gameListing_ = 0;              // its entry, kept for the run
+        bool gameListed_ = false;               // and whether it shows
+        SteamAPICall gameListingCall_ = 0, huntCall_ = 0;
+        struct Hunt
+        {
+            online::SessionSearch search;
+            std::vector<online::SessionFound> found;
+            std::chrono::steady_clock::time_point created{}, probing{};
+            bool asked = false, answered = false, done = false;
+        };
+        std::map<uint32_t, Hunt> hunts_;        // Find Game's searches
+        uint32_t lastHunt_ = 0, huntAsked_ = 0;
+        std::chrono::steady_clock::time_point huntsWatched_{};   // the callback thread's
+        std::set<uint64_t> foundHosts_;         // every host Find Game found
+        std::set<uint64_t> droppedFrom_;        // told about once each
+        bool playing_ = false;                  // as InGame says
         std::chrono::steady_clock::time_point listAsked_{};   // the callback thread's
         // The links WatchLinks follows, on the callback thread.
         struct Link

@@ -59,7 +59,7 @@ Read by every build; see [multiplayer.md](multiplayer.md).
 | `MW2_LAN_JOIN=<name>` | lan and server: joins that player's party or lobby when it is seen |
 | `MW2_LAN_ACCEPT=1` | lan and server: accepts invitations |
 | `MW2_STEAM_APPID=<id>` | steam: the app id to run as (480, Spacewar) |
-| `MW2_STEAMCLIENT=<path>` | steam: the Steam client library, when it is not found |
+| `MW2_STEAM_ROOT=<path>` | steam: the Steam install to use, when it is not found or several are running |
 | `MW2_TRACE_ONLINE=1` | every datagram through the service (diagnostic) |
 
 ## Moving the player

@@ -57,7 +57,10 @@ bool guest::CommitOnTouch(const void* address)
     const auto* at = static_cast<const uint8_t*>(address);
     if (!g_base || at < g_base || at >= g_base + kSpace) return false;
     MEMORY_BASIC_INFORMATION info;
-    if (!VirtualQuery(at, &info, sizeof(info)) || info.State != MEM_RESERVE) return false;
+    if (!VirtualQuery(at, &info, sizeof(info))) return false;
+    // Another thread touched the same chunk first, and has committed it.
+    if (info.State == MEM_COMMIT) return (info.Protect & PAGE_READWRITE) != 0;
+    if (info.State != MEM_RESERVE) return false;
     constexpr uintptr_t kChunk = 0x10000;
     auto* chunk = reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(at) & ~(kChunk - 1));
     return VirtualAlloc(chunk, kChunk, MEM_COMMIT, PAGE_READWRITE) != nullptr;
