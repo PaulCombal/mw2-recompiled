@@ -15,6 +15,8 @@
 #include <SDL3/SDL.h>
 #endif
 
+// Only x86-64 has levels to check: on arm64 (macOS) every processor does NEON.
+#if defined(__x86_64__) || defined(_M_X64)
 namespace
 {
     __attribute__((constructor(101))) void CheckProcessor()
@@ -33,3 +35,4 @@ namespace
         std::_Exit(1);
     }
 }
+#endif

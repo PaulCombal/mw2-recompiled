@@ -1,3 +1,4 @@
+#include "../platform.h"
 #include "objects.h"
 #include "kernel.h"
 #include "../guest.h"
@@ -167,7 +168,7 @@ namespace
             if (!started)
             {
                 started = true;
-                std::thread([this] { Run(); }).detach();
+                platform::Thread([this] { Run(); }).detach();
             }
             due.emplace(when, Entry{ timer, generation, periodMs });
             wake.notify_one();

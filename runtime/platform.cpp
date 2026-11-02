@@ -13,11 +13,20 @@
 #include <cstring>
 #include <ctime>
 #include <dlfcn.h>
+#include <exception>
+#include <functional>
+#include <memory>
 #include <execinfo.h>
 #include <pthread.h>
 #include <sched.h>
 #include <sys/resource.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#include <dispatch/dispatch.h>
+#include <mach/mach.h>
+#include <sys/sysctl.h>
+#endif
 #endif
 
 #ifdef _WIN32
@@ -89,6 +98,8 @@ void platform::PrintBacktrace(const char* why)
     std::fprintf(stderr, "[E] --------------------------------\n");
     std::fflush(stderr);
 }
+
+int platform::RunMain(int (*entry)(int, char**), int argc, char** argv) { return entry(argc, argv); }
 
 void* platform::OpenLibrary(const char* path)
 {
@@ -169,6 +180,26 @@ void* platform::Symbol(void* library, const char* name)
 
 #else
 
+#ifdef __APPLE__
+void platform::Initialise() {}
+
+uint32_t platform::ThreadId()
+{
+    uint64_t id = 0;
+    pthread_threadid_np(nullptr, &id);
+    return uint32_t(id);
+}
+
+bool platform::IsMainThread() { return pthread_main_np() != 0; }
+
+// macOS names only the calling thread, and keeps 63 characters.
+void platform::SetThreadName(const char* name) { pthread_setname_np(name); }
+
+void platform::LowerThreadPriority() { pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0); }
+
+void platform::IdleThreadPriority() { pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0); }
+
+#else
 void platform::Initialise() {}
 uint32_t platform::ThreadId() { return uint32_t(gettid()); }
 bool platform::IsMainThread() { return gettid() == getpid(); }
@@ -188,6 +219,8 @@ void platform::IdleThreadPriority()
     if (pthread_setschedparam(pthread_self(), SCHED_IDLE, &none) != 0) LowerThreadPriority();
 }
 
+#endif
+
 void platform::PrintBacktrace(const char* why)
 {
     void* frames[64];
@@ -199,6 +232,56 @@ void platform::PrintBacktrace(const char* why)
     std::fflush(stderr);
 }
 
+#ifdef __APPLE__
+// The clock is the thread's Mach port, which any thread can ask the time of.
+// Shifted past 0, which says there is none. The reference mach_thread_self
+// takes is kept: the port must outlive the thread for ThreadTime to say it ended.
+uintptr_t platform::ThreadClock() { return uintptr_t(mach_thread_self()) + 1; }
+
+bool platform::ThreadTime(uintptr_t clock, uint64_t& nanoseconds)
+{
+    if (!clock) return false;
+    thread_basic_info_data_t info;
+    mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
+    if (thread_info(thread_act_t(clock - 1), THREAD_BASIC_INFO, thread_info_t(&info), &count) != KERN_SUCCESS)
+        return false;
+    nanoseconds = (uint64_t(info.user_time.seconds) + uint64_t(info.system_time.seconds)) * 1000000000u +
+                  (uint64_t(info.user_time.microseconds) + uint64_t(info.system_time.microseconds)) * 1000u;
+    return true;
+}
+
+bool platform::ProcessorLoad(Load& load)
+{
+    timespec time;
+    if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &time) != 0) return false;
+    load.process = uint64_t(time.tv_sec) * 1000000000u + uint64_t(time.tv_nsec);
+    host_cpu_load_info_data_t cpu;
+    mach_msg_type_number_t count = HOST_CPU_LOAD_INFO_COUNT;
+    if (host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, host_info_t(&cpu), &count) != KERN_SUCCESS) return false;
+    const uint64_t tick = 1000000000u / uint64_t(sysconf(_SC_CLK_TCK));
+    uint64_t total = 0;
+    for (int state = 0; state < CPU_STATE_MAX; state++) total += cpu.cpu_ticks[state];
+    load.total = total * tick;
+    load.busy = (total - cpu.cpu_ticks[CPU_STATE_IDLE]) * tick;
+    return true;
+}
+
+platform::Memory platform::MemoryState()
+{
+    Memory memory;
+    uint64_t installed = 0;
+    size_t size = sizeof installed;
+    if (sysctlbyname("hw.memsize", &installed, &size, nullptr, 0) == 0) memory.installed = memory.usable = installed;
+    vm_statistics64_data_t vm;
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    if (host_statistics64(mach_host_self(), HOST_VM_INFO64, host_info64_t(&vm), &count) == KERN_SUCCESS)
+        memory.free = (uint64_t(vm.free_count) + uint64_t(vm.inactive_count)) * uint64_t(vm_page_size);
+    rusage usage;
+    if (getrusage(RUSAGE_SELF, &usage) == 0) memory.processPeak = uint64_t(usage.ru_maxrss);   // bytes here, kilobytes on Linux
+    return memory;
+}
+
+#else
 uintptr_t platform::ThreadClock()
 {
     clockid_t clock;
@@ -263,6 +346,120 @@ platform::Memory platform::MemoryState()
     memory.processPeak = Kilobytes("/proc/self/status", "VmHWM");
     return memory;
 }
+
+#endif
+
+#ifdef __APPLE__
+namespace
+{
+    constexpr size_t kThreadStack = 16u << 20;
+
+    void* ThreadMain(void* argument)
+    {
+        std::unique_ptr<std::function<void()>> function(static_cast<std::function<void()>*>(argument));
+        (*function)();
+        return nullptr;
+    }
+}
+
+void platform::Thread::Start(std::function<void()> function)
+{
+    pthread_attr_t attributes;
+    pthread_attr_init(&attributes);
+    pthread_attr_setstacksize(&attributes, kThreadStack);
+    auto* argument = new std::function<void()>(std::move(function));
+    const int error = pthread_create(&thread_, &attributes, ThreadMain, argument);
+    pthread_attr_destroy(&attributes);
+    if (error != 0)
+    {
+        delete argument;
+        std::fprintf(stderr, "[E] could not start a thread (%d)\n", error);
+        std::abort();
+    }
+    started_ = true;
+}
+
+platform::Thread& platform::Thread::operator=(Thread&& other) noexcept
+{
+    if (started_) std::terminate();
+    thread_ = other.thread_;
+    started_ = other.started_;
+    other.started_ = false;
+    return *this;
+}
+
+platform::Thread::~Thread()
+{
+    if (started_) std::terminate();
+}
+
+void platform::Thread::join()
+{
+    if (!started_) return;
+    pthread_join(thread_, nullptr);
+    started_ = false;
+}
+
+void platform::Thread::detach()
+{
+    if (!started_) return;
+    pthread_detach(thread_);
+    started_ = false;
+}
+#endif
+
+
+#ifdef __APPLE__
+namespace
+{
+    // The game's own `main` had 8 MB as the first thread; the recompiled code nests deep.
+    constexpr size_t kMainStack = 64u << 20;
+
+    struct MainCall
+    {
+        int (*entry)(int, char**);
+        int argc;
+        char** argv;
+    };
+
+    void* GameMain(void* argument)
+    {
+        const MainCall call = *static_cast<MainCall*>(argument);
+        const int result = call.entry(call.argc, call.argv);
+        std::fflush(nullptr);
+        std::exit(result);
+        return nullptr;
+    }
+}
+
+int platform::RunMain(int (*entry)(int, char**), int argc, char** argv)
+{
+    static MainCall call;
+    call = { entry, argc, argv };
+    pthread_attr_t attributes;
+    pthread_attr_init(&attributes);
+    pthread_attr_setstacksize(&attributes, kMainStack);
+    pthread_t thread;
+    if (pthread_create(&thread, &attributes, GameMain, &call) != 0)
+    {
+        std::fprintf(stderr, "[E] could not start the game's thread\n");
+        return 1;
+    }
+    pthread_detach(thread);
+    // Serves RunOnMainThread's jobs on this thread (dispatch_main would run them on
+    // another); the process ends with GameMain's exit.
+    CFRunLoopRun();
+    return 0;
+}
+
+void platform::RunOnMainThread(void (*job)())
+{
+    dispatch_async_f(dispatch_get_main_queue(), reinterpret_cast<void*>(job),
+                     [](void* function) { reinterpret_cast<void (*)()>(function)(); });
+}
+#else
+int platform::RunMain(int (*entry)(int, char**), int argc, char** argv) { return entry(argc, argv); }
+#endif
 
 void* platform::OpenLibrary(const char* path) { return dlopen(path, RTLD_NOW | RTLD_LOCAL); }
 void* platform::LoadedLibrary(const char* name) { return dlopen(name, RTLD_NOW | RTLD_NOLOAD); }

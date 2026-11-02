@@ -1,5 +1,6 @@
 // The GPU as the title sees it: the thread that consumes the ring buffer, the
 // vertical blank, and the interrupts both raise into the title's handler.
+#include "../platform.h"
 #include <ppc_recomp_shared.h>
 #include "title.h"
 #include "../pacing_trace.h"
@@ -62,7 +63,7 @@ namespace
         // the two threads that can raise one here take turns.
         std::mutex guestCall;
 
-        std::thread worker, vblank;
+        platform::Thread worker, vblank;
         std::atomic<bool> running{ false };
         std::atomic<uint64_t> frames{ 0 };       // VdSwap calls
         diag::Stat vblanks;
@@ -249,8 +250,8 @@ void gpu::Initialise()
     if (Rendering() && !vk::renderer::Initialise()) LOGW("gpu: no device came up to render on");
     g.gpuPcr = kernel::CreateThreadBlock(0xF000);
     g.vblankPcr = kernel::CreateThreadBlock(0xF001);
-    g.worker = std::thread(Worker);
-    g.vblank = std::thread(VBlankWorker);
+    g.worker = platform::Thread(Worker);
+    g.vblank = platform::Thread(VBlankWorker);
 }
 
 void gpu::Shutdown()

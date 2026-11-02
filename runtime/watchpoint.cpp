@@ -6,7 +6,8 @@
 #include "diagnostics.h"
 #include "crash.h"
 
-#if MW2_DIAGNOSTICS && !defined(_WIN32)
+// Single-steps over a store with the x86 trap flag: not on arm64.
+#if MW2_DIAGNOSTICS && !defined(_WIN32) && (defined(__x86_64__) || defined(__i386__))
 #include <sys/mman.h>
 #include <execinfo.h>
 #include <unistd.h>

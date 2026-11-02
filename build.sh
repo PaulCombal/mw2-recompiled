@@ -1,6 +1,8 @@
 #!/bin/bash
 # End-to-end MW2 (Xbox 360) -> native x86-64 recompilation.
 #   Prereqs: cmake ninja-build clang-18 lld-18   (apt)
+#            on macOS (arm64): brew install cmake ninja, Xcode's command line tools,
+#            and for the GPU: brew install vulkan-headers vulkan-loader molten-vk
 #   Input:   the retail ISO; everything else is derived.
 #   TITLE=sp (default) builds default.xex, the campaign and special ops, into
 #   build/; TITLE=mp builds default_mp.xex, the multiplayer, into build-mp/.
@@ -50,7 +52,22 @@ export MW2_VERSION=$VERSION
 DIAGNOSTICS=ON
 PORTABLE=OFF
 if [ -n "$RELEASE" ] && [ "$RELEASE" != 0 ]; then BUILD=$BUILD-release; DIAGNOSTICS=OFF; PORTABLE=ON; fi
-TOOLCHAIN="-DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18"
+CC=clang-18
+CXX=clang++-18
+NPROC=$(nproc 2>/dev/null || true)
+XENON_FLAGS=""
+if [ "$(uname)" = Darwin ]; then
+    # Apple's own toolchain: its linker reads the bitcode of its clang (ThinLTO),
+    # and links what SDL's Objective-C makes, which lld 23 does not yet.
+    CC=/usr/bin/clang
+    CXX=/usr/bin/clang++
+    NPROC=$(sysctl -n hw.ncpu)
+    # XenonRecomp's fmt predates libc++ not including <cstdlib> for it.
+    XENON_FLAGS="-DCMAKE_CXX_FLAGS=-include cstdlib"
+    CMAKE_EXTRA="$CMAKE_EXTRA -DCMAKE_PREFIX_PATH=$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
+fi
+NPROC=${NPROC:-4}
+TOOLCHAIN="-DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX"
 EXE=mw2
 if [ -n "$WINDOWS" ] && [ "$WINDOWS" != 0 ]; then
     [ -d "$LLVM_MINGW" ] || { echo "WINDOWS=1 needs LLVM_MINGW=<llvm-mingw folder>"; exit 1; }
@@ -76,8 +93,8 @@ fi
 
 echo "==> 2. build XenonRecomp / XenonAnalyse"
 cmake -B XenonRecomp/build -S XenonRecomp -G Ninja -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18 >/dev/null
-cmake --build XenonRecomp/build -j"$(nproc)" >/dev/null
+      -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX ${XENON_FLAGS:+"$XENON_FLAGS"} >/dev/null
+cmake --build XenonRecomp/build -j"$NPROC" >/dev/null
 
 echo "==> 3. extract the executables from the ISO (XDVDFS)"
 mkdir -p $DISC
@@ -124,7 +141,7 @@ if [ "$VERSION" = tu6 ]; then
     # XenonRecomp's own patcher, from the command line: XenonAnalyse reads the
     # patched executable before XenonRecomp would make it.
     if [ ! -x XenonRecomp/build/xexpatch ]; then
-        clang++-18 -std=c++20 -O1 -IXenonRecomp/XenonUtils -IXenonRecomp/thirdparty/simde tools/xexpatch.cpp \
+        $CXX -std=c++20 -O1 -IXenonRecomp/XenonUtils -IXenonRecomp/thirdparty/simde tools/xexpatch.cpp \
             XenonRecomp/build/XenonUtils/libXenonUtils.a XenonRecomp/build/thirdparty/disasm/libdisasm.a \
             -o XenonRecomp/build/xexpatch
     fi
@@ -178,7 +195,7 @@ if [ "$BUILD" != build ]; then
 fi
 cmake -B $BUILD -G Ninja -DCMAKE_BUILD_TYPE=Release -DMW2_TITLE=$TITLE -DMW2_VERSION=$VERSION -DMW2_DIAGNOSTICS=$DIAGNOSTICS -DMW2_PORTABLE=$PORTABLE -DMW2_RELEASE_TAG=${RELEASE_TAG:-} $FETCHED $CMAKE_EXTRA \
       $TOOLCHAIN >/dev/null
-cmake --build $BUILD -j"$(nproc)" ${TARGETS:+--target $TARGETS}
+cmake --build $BUILD -j"$NPROC" ${TARGETS:+--target $TARGETS}
 ls -la $BUILD/$EXE
 
 echo

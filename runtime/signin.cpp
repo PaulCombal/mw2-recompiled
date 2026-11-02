@@ -19,6 +19,9 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <unistd.h>
+#include <uuid/uuid.h>
 #endif
 
 
@@ -125,6 +128,15 @@ namespace
         if (RegGetValueA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Cryptography", "MachineGuid", RRF_RT_REG_SZ,
                          nullptr, text, &size) == ERROR_SUCCESS)
             id = text;
+#elif defined(__APPLE__)
+        uuid_t uuid;
+        const timespec wait{ 1, 0 };
+        if (gethostuuid(uuid, &wait) == 0)
+        {
+            char text[37];
+            uuid_unparse(uuid, text);
+            id = text;
+        }
 #else
         std::ifstream("/etc/machine-id") >> id;
 #endif

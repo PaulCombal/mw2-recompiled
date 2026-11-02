@@ -75,11 +75,15 @@
 #include <cerrno>
 #include <csignal>
 #include <fcntl.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#ifdef __APPLE__
+#include <crt_externs.h>
+#else
 #include <sched.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
-#include <sys/wait.h>
-#include <unistd.h>
+#endif
 #endif
 
 namespace
@@ -342,7 +346,7 @@ namespace
     using FreeLastCallbackFn = void (*)(HSteamPipe);
     using GetCallResultFn = bool (*)(HSteamPipe, SteamAPICall, void*, int, int, bool*);
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__APPLE__)
     // The Steam clients running: processes named steam, each with the install
     // it runs from, two folders above the steamclient.so it has mapped. A
     // client of another install than the running one's half connects, then
@@ -408,6 +412,9 @@ namespace
         if (!std::filesystem::exists(path, ec)) return {};
         const auto utf8 = path.u8string();   // what platform::OpenLibrary reads
         return std::string(utf8.begin(), utf8.end());
+#elif defined(__APPLE__)
+        // Not looked for yet: the game plays without Steam (LAN, or a relay).
+        return {};
 #else
         for (const Running& steam : RunningSteams())
         {
@@ -462,6 +469,9 @@ namespace
                 FreeEnvironmentStringsA(block);
             }
 #else
+#ifdef __APPLE__
+            char** const environ = *_NSGetEnviron();
+#endif
             for (char** entry = environ; *entry; entry++) keep(*entry);
 #endif
             return settings;
@@ -1522,7 +1532,7 @@ namespace
 
 std::unique_ptr<online::Service> online::MakeSteam() { return std::make_unique<Steam>(); }
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
 bool online::EnterSteamNamespace(int& exitCode)
 {
     (void)exitCode;

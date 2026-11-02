@@ -1,5 +1,6 @@
 // Guest threads. Each gets a host thread, its own guest stack, its own KPCR
 // block for r13, and its own PPCContext.
+#include "../platform.h"
 #include <ppc_recomp_shared.h>
 #include "kernel.h"
 #include "objects.h"
@@ -44,7 +45,7 @@ namespace
         // The host thread holds the object for as long as it runs.
         static void Launch(const std::shared_ptr<GuestThread>& thread)
         {
-            std::thread([thread] { thread->Body(); }).detach();
+            platform::Thread([thread] { thread->Body(); }).detach();
         }
 
         void Exit()

@@ -54,7 +54,15 @@ namespace
         // the process dying, so it must be asked first.
         if (sig == SIGSEGV && watchpoint::HandleWrite(info, uctx)) return;
         // A write to a page the GPU's shadow of guest memory watches.
-        if (sig == SIGSEGV && info->si_code == SEGV_ACCERR && gpu::watch::HandleFault(info->si_addr)) return;
+#ifdef __APPLE__
+        // A write to a read-only page is a SIGBUS here as often as a SIGSEGV, and
+        // the code does not say which kind of fault it was: HandleFault knows the
+        // pages it watches.
+        const bool protection = sig == SIGSEGV || sig == SIGBUS;
+#else
+        const bool protection = sig == SIGSEGV && info->si_code == SEGV_ACCERR;
+#endif
+        if (protection && gpu::watch::HandleFault(info->si_addr)) return;
         if (sig == SIGTRAP && watchpoint::HandleStep(uctx)) return;
 
         uint8_t* base = guest::Base();
