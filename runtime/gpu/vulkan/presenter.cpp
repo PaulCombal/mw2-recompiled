@@ -942,6 +942,23 @@ namespace
         g.presented.fetch_add(1, std::memory_order_relaxed);
     }
 
+    // AppKit traps a window hidden or closed off the process's first thread, and
+    // the run ends on a thread of its own: there the first thread does it.
+    void DestroyWindow()
+    {
+#ifdef __APPLE__
+        if (!platform::IsMainThread())
+        {
+            static std::atomic<bool> destroyed;
+            destroyed = false;
+            platform::RunOnMainThread([] { SDL_DestroyWindow(g.window); destroyed = true; });
+            while (!destroyed.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            return;
+        }
+#endif
+        SDL_DestroyWindow(g.window);
+    }
+
     void Teardown()
     {
         if (g.device)
@@ -973,7 +990,7 @@ namespace
             g_messenger = VK_NULL_HANDLE;
         }
         if (g.instance) vkDestroyInstance(g.instance, nullptr);
-        if (g.window) SDL_DestroyWindow(g.window);
+        if (g.window) DestroyWindow();
         g.surface = VK_NULL_HANDLE;
         g.instance = VK_NULL_HANDLE;
         g.window = nullptr;

@@ -7,6 +7,9 @@
 #include "../../report.h"
 
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <string>
 
 #ifdef MW2_HAVE_VULKAN
 
@@ -287,8 +290,28 @@ namespace vk::renderer::detail
     // place that state exists.
     const char* ShaderCachePath()
     {
+#ifdef __APPLE__
+        // MoltenVK has no pipeline libraries: every pipeline is compiled at its first
+        // draw, a hitch each. So here the cache is kept without being asked for, in
+        // the system's cache folder, one per title.
+        static const std::string kept = [] {
+            if (const char* asked = env::Text("MW2_SHADER_CACHE")) return std::string(asked);
+            const char* home = std::getenv("HOME");
+            if (!home || !*home) return std::string();
+            const std::filesystem::path folder = std::filesystem::path(home) / "Library/Caches/mw2-recompiled";
+            std::error_code ignored;
+            std::filesystem::create_directories(folder, ignored);
+#ifdef MW2_TITLE_MP
+            return (folder / "shader_cache_mp.bin").string();
+#else
+            return (folder / "shader_cache_sp.bin").string();
+#endif
+        }();
+        return kept.empty() ? nullptr : kept.c_str();
+#else
         static const char* path = env::Text("MW2_SHADER_CACHE");
         return path;
+#endif
     }
 
     constexpr uint32_t kCacheMagic = 0x32574D53;   // 'SMW2'
