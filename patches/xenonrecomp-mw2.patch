@@ -269,7 +269,7 @@ index f5db6d1..9c3d7b6 100644
      "recompiler_config.cpp")
  
 diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
-index fa91527..deae41d 100644
+index fa91527..a7fc570 100644
 --- a/XenonRecomp/recompiler.cpp
 +++ b/XenonRecomp/recompiler.cpp
 @@ -1,5 +1,6 @@
@@ -385,7 +385,7 @@ index fa91527..deae41d 100644
              println("\t}}");
  
              switchTable = config.switchTables.end();
-@@ -827,23 +837,23 @@ bool Recompiler::Recompile(
+@@ -827,29 +837,29 @@ bool Recompiler::Recompile(
          break;
  
      case PPC_INST_DIVD:
@@ -413,6 +413,22 @@ index fa91527..deae41d 100644
          if (strchr(insn.opcode->name, '.'))
              println("\t{}.compare<int32_t>({}.s32, 0, {});", cr(0), r(insn.operands[0]), xer());
          break;
+ 
+     case PPC_INST_EIEIO:
+-        // no op
++        println("\tPPC_EIEIO();");
+         break;
+ 
+     case PPC_INST_EXTSB:
+@@ -1209,7 +1219,7 @@ bool Recompiler::Recompile(
+         break;
+ 
+     case PPC_INST_LWSYNC:
+-        // no op
++        println("\tPPC_LWSYNC();");
+         break;
+ 
+     case PPC_INST_LWZ:
 @@ -1260,7 +1270,7 @@ bool Recompiler::Recompile(
          break;
  
@@ -435,6 +451,15 @@ index fa91527..deae41d 100644
      case PPC_INST_STBX:
          print("{}", mmioStore() ? "\tPPC_MM_STORE_U8(" : "\tPPC_STORE_U8(");
          if (insn.operands[1] != 0)
+@@ -1711,7 +1727,7 @@ bool Recompiler::Recompile(
+         break;
+ 
+     case PPC_INST_SYNC:
+-        // no op
++        println("\tPPC_SYNC();");
+         break;
+ 
+     case PPC_INST_TDLGEI:
 @@ -1995,9 +2011,30 @@ bool Recompiler::Recompile(
      }
  
@@ -2450,7 +2475,7 @@ index 0000000..2902237
 +// in a register the calling convention does not carry. See register_flow.cpp.
 +std::unordered_set<size_t> FindFunctionsKeepingRegistersInContext(const Recompiler& recompiler);
 diff --git a/XenonUtils/ppc_context.h b/XenonUtils/ppc_context.h
-index 31a86cd..2a6c22e 100644
+index 31a86cd..2f3bc07 100644
 --- a/XenonUtils/ppc_context.h
 +++ b/XenonUtils/ppc_context.h
 @@ -11,6 +11,8 @@
@@ -2462,7 +2487,29 @@ index 31a86cd..2a6c22e 100644
  
  #include <x86/avx.h>
  #include <x86/sse.h>
-@@ -682,6 +684,22 @@ inline simde__m128i simde_mm_vctsxs(simde__m128 src1)
+@@ -21,6 +23,21 @@
+ #define _MM_DENORMALS_ZERO_MASK 0x0040
+ #endif
+ 
++// The console's memory barriers. x86 keeps stores and loads in the order the
++// program gave them closely enough that they cost nothing there; arm64 does not,
++// and the title's locks, ring buffers and flags are written for a machine that
++// orders only where it is told to.
++#if defined(__aarch64__) || defined(_M_ARM64)
++#include <atomic>
++#define PPC_SYNC() std::atomic_thread_fence(std::memory_order_seq_cst)
++#define PPC_LWSYNC() std::atomic_thread_fence(std::memory_order_acq_rel)
++#define PPC_EIEIO() std::atomic_thread_fence(std::memory_order_release)
++#else
++#define PPC_SYNC()
++#define PPC_LWSYNC()
++#define PPC_EIEIO()
++#endif
++
+ #define PPC_JOIN(x, y) x##y
+ #define PPC_XSTRINGIFY(x) #x
+ #define PPC_STRINGIFY(x) PPC_XSTRINGIFY(x)
+@@ -682,6 +699,22 @@ inline simde__m128i simde_mm_vctsxs(simde__m128 src1)
      return simde_mm_andnot_si128(simde_mm_castps_si128(xmm2), simde_mm_castps_si128(dest));
  }
  
@@ -2485,7 +2532,7 @@ index 31a86cd..2a6c22e 100644
  inline simde__m128i simde_mm_vsr(simde__m128i a, simde__m128i b)
  {
      b = simde_mm_srli_epi64(simde_mm_slli_epi64(b, 61), 61);
-@@ -700,4 +718,28 @@ inline uint64_t __rdtsc()
+@@ -700,4 +733,28 @@ inline uint64_t __rdtsc()
  #   error "Missing implementation for __rdtsc()"
  #endif
  

@@ -12,7 +12,8 @@
 // Diagnostics only.
 namespace watchpoint
 {
-#if MW2_DIAGNOSTICS && !defined(_WIN32)
+// (single-steps with the x86 trap flag: not on arm64)
+#if MW2_DIAGNOSTICS && !defined(_WIN32) && (defined(__x86_64__) || defined(__i386__))
     void Install();
 
     // Around a write this runtime makes itself. Without it the first memmove

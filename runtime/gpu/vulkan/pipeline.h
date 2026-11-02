@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <mutex>
 #include <string>
+#include <vector>
 
 // The Vulkan device the runtime draws on, the pipeline layout every translated
 // shader is built against, and the pipeline cache. The translator emits a fixed
@@ -30,6 +31,11 @@ namespace vk::pipeline
     bool CreateDevice(void* physical, uint32_t queueFamily,
                       const char* const* extraExtensions, uint32_t extraCount,
                       void** device, void** queue, void* features = nullptr);
+    // MoltenVK (macOS) is a "portability" implementation: the loader hides it
+    // from an instance that does not ask for it. Adds the extension to
+    // `extensions` when the loader offers it, and says whether it did; the
+    // instance is then created with VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR.
+    bool PortabilityEnumeration(std::vector<const char*>& extensions);
     // Whether the physical device (a VkPhysicalDevice) offers a device extension.
     bool DeviceHasExtension(void* physical, const char* name);
     // Its first queue family that can draw; UINT32_MAX if none.

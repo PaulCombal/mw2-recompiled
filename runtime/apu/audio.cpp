@@ -6,6 +6,7 @@
 // frames are dropped (the device has stalled, or there is none); the callback
 // still runs at the nominal rate either way, because the title's sound state
 // machines advance inside it and a silent run must still finish its sounds.
+#include "../platform.h"
 #include <ppc_recomp_shared.h>
 #include "audio.h"
 #include "../diagnostics.h"
@@ -61,7 +62,7 @@ namespace
     std::mutex g_lock;
     std::condition_variable g_wake;
     Client g_clients[kMaxClients];
-    std::thread g_worker;
+    platform::Thread g_worker;
     bool g_workerStarted = false;
 
     diag::Stat g_callbacks, g_frames, g_dropped, g_earlyPumps;   // the audio thread's
@@ -208,7 +209,7 @@ namespace
     {
         if (g_workerStarted) return;
         g_workerStarted = true;
-        g_worker = std::thread(WorkerMain);
+        g_worker = platform::Thread(WorkerMain);
         g_worker.detach();
     }
 }

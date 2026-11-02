@@ -1,4 +1,5 @@
 #include "guest_memory.h"
+#include <cstdio>
 #include <initializer_list>
 #include "log.h"
 #include <ppc_config.h>
@@ -20,6 +21,10 @@
 #  include <sys/mman.h>
 #  include <unistd.h>
 #  include <sys/syscall.h>
+#  ifdef __APPLE__
+#    include <fcntl.h>
+#    include <sys/stat.h>
+#  endif
 #endif
 
 namespace
@@ -149,8 +154,18 @@ namespace
     bool MapPhysicalAperture()
     {
         const size_t size = size_t(guest::kPhysicalEnd - guest::kPhysicalBase);
+#ifdef __APPLE__
+        // No memfd here: a POSIX shared memory object, unlinked at once so that
+        // only the descriptor and the mappings name it.
+        char name[32];
+        std::snprintf(name, sizeof name, "/mw2-physical-%d", int(getpid()));
+        const int fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+        if (fd < 0) { LOGE("shm_open failed"); return false; }
+        shm_unlink(name);
+#else
         const int fd = int(syscall(SYS_memfd_create, "mw2-physical", 0));
         if (fd < 0) { LOGE("memfd_create failed"); return false; }
+#endif
         bool ok = ftruncate(fd, off_t(size)) == 0;
         for (uint32_t window : { guest::kPhysicalBase, guest::kApertureBase })
         {

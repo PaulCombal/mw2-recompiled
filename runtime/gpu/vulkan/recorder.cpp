@@ -16,6 +16,7 @@
 // whole core spinning, which on a four-core machine is a core the consumer
 // and the title's threads are short of. A wake is a system call, so it is not
 // made per call either.
+#include "../../platform.h"
 #include "recorder.h"
 #include "../../diagnostics.h"
 #include "../../crash.h"
@@ -26,7 +27,12 @@
 #include <atomic>
 #include <thread>
 
+#if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
+#define MW2_SPIN_PAUSE() _mm_pause()
+#else
+#define MW2_SPIN_PAUSE() __asm__ __volatile__("yield")
+#endif
 
 namespace vk::record::detail
 {
@@ -69,7 +75,7 @@ namespace
         // The recorder's.
         alignas(64) bool stopping = false;
         std::atomic<uint64_t> calls{ 0 }, sleeps{ 0 };
-        std::thread thread;
+        platform::Thread thread;
     };
     Queue q;
 
@@ -147,7 +153,7 @@ namespace
         Wake();
         for (uint32_t i = 0; i < kSpins; i++)
         {
-            _mm_pause();
+            MW2_SPIN_PAUSE();
             if (q.made.load(std::memory_order_acquire) >= position) return;
         }
         q.waiters.fetch_add(1, std::memory_order_seq_cst);
@@ -228,7 +234,7 @@ void vk::record::Start(void (*settle)())
     q.wokenFrom = ~0ull;
     q.stopping = false;
     detail::threaded = true;
-    q.thread = std::thread(Run);
+    q.thread = platform::Thread(Run);
 }
 
 void vk::record::Stop()

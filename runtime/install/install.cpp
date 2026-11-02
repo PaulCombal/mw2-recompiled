@@ -12,6 +12,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
 #endif
 #ifdef MW2_USE_SDL
 #include <SDL3/SDL.h>
@@ -51,6 +53,12 @@ namespace
         wchar_t path[MAX_PATH * 4];
         const DWORD length = GetModuleFileNameW(nullptr, path, DWORD(std::size(path)));
         return fs::path(std::wstring(path, length)).parent_path();
+#elif defined(__APPLE__)
+        char path[4096];
+        uint32_t size = sizeof path;
+        if (_NSGetExecutablePath(path, &size) != 0) return {};
+        std::error_code ec;
+        return fs::canonical(path, ec).parent_path();
 #else
         std::error_code ec;
         return fs::read_symlink("/proc/self/exe", ec).parent_path();

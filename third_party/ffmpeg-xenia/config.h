@@ -79,6 +79,32 @@
   #define HAVE_SIMD_ALIGN_16 1
   #define HAVE_SIMD_ALIGN_32 0
   #define HAVE_SIMD_ALIGN_64 0
+  /* The portable C only: CMake defines MW2_FFMPEG_NO_ASM where the NEON
+     assembly of FFmpeg is not built, so no init function that calls it is. */
+  #ifdef MW2_FFMPEG_NO_ASM
+    #undef ARCH_AARCH64
+    #define ARCH_AARCH64 0
+    #undef HAVE_ARMV8
+    #define HAVE_ARMV8 0
+    #undef HAVE_NEON
+    #define HAVE_NEON 0
+    #undef HAVE_VFP
+    #define HAVE_VFP 0
+    #undef HAVE_ARMV8_EXTERNAL
+    #define HAVE_ARMV8_EXTERNAL 0
+    #undef HAVE_NEON_EXTERNAL
+    #define HAVE_NEON_EXTERNAL 0
+    #undef HAVE_VFP_EXTERNAL
+    #define HAVE_VFP_EXTERNAL 0
+    #undef HAVE_ARMV8_INLINE
+    #define HAVE_ARMV8_INLINE 0
+    #undef HAVE_NEON_INLINE
+    #define HAVE_NEON_INLINE 0
+    #undef HAVE_VFP_INLINE
+    #define HAVE_VFP_INLINE 0
+    #undef HAVE_INTRINSICS_NEON
+    #define HAVE_INTRINSICS_NEON 0
+  #endif
 #elif defined(__x86_64__) || defined(_M_X64)
   /* x86_64 (Windows, Linux, Android x86_64) */
   #if defined(_WIN32)

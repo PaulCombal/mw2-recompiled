@@ -151,7 +151,7 @@ namespace
     }
 }
 
-int main(int argc, char** argv)
+static int GameMain(int argc, char** argv)
 {
     platform::Initialise();
 
@@ -282,3 +282,5 @@ int main(int argc, char** argv)
     ReportAll();
     return 0;
 }
+
+int main(int argc, char** argv) { return platform::RunMain(GameMain, argc, argv); }

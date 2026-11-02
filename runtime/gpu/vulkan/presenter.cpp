@@ -1,3 +1,4 @@
+#include "../../platform.h"
 #include "presenter.h"
 #include "../../diagnostics.h"
 #include "../../env.h"
@@ -114,7 +115,11 @@ namespace
             std::chrono::steady_clock::time_point drawn{};
         } overlay;
 
-        std::thread worker;
+        platform::Thread worker;
+#ifdef __APPLE__
+        // The window belongs to the process's first thread there (platform::RunMain).
+        std::atomic<bool> onMain{ false }, mainDone{ false };
+#endif
         std::atomic<bool> running{ false };
         std::atomic<bool> ready{ false };
         std::atomic<bool> showAsked{ false };
@@ -141,7 +146,7 @@ namespace
         // thread of its own, which is what the guest's blank follows.
         bool presentWait = false;
         PFN_vkWaitForPresentKHR waitForPresent = nullptr;
-        std::thread waiter;
+        platform::Thread waiter;
         std::mutex waitLock;
         std::condition_variable waitWake;
         std::deque<uint64_t> waiting;        // present ids not yet seen on screen
@@ -220,6 +225,9 @@ namespace
         VkInstanceCreateInfo info{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
         info.pNext = validating ? &messenger : nullptr;   // instance creation's own messages
         info.pApplicationInfo = &app;
+        info.enabledExtensionCount = uint32_t(extensions.size());
+        if (vk::pipeline::PortabilityEnumeration(extensions))
+            info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
         info.enabledExtensionCount = uint32_t(extensions.size());
         info.ppEnabledExtensionNames = extensions.data();
         if (!Check(vkCreateInstance(&info, nullptr, &g.instance), "vkCreateInstance")) return false;
@@ -491,7 +499,7 @@ namespace
         else
             LOGI("vulkan: the display runs at %.3f Hz, not 60; the guest's blank keeps its own"
                  " clock", hz);
-        g.waiter = std::thread(Waiter);
+        g.waiter = platform::Thread(Waiter);
     }
 
     // How much longer the guest's blank may be than the display's while
@@ -934,6 +942,23 @@ namespace
         g.presented.fetch_add(1, std::memory_order_relaxed);
     }
 
+    // AppKit traps a window hidden or closed off the process's first thread, and
+    // the run ends on a thread of its own: there the first thread does it.
+    void DestroyWindow()
+    {
+#ifdef __APPLE__
+        if (!platform::IsMainThread())
+        {
+            static std::atomic<bool> destroyed;
+            destroyed = false;
+            platform::RunOnMainThread([] { SDL_DestroyWindow(g.window); destroyed = true; });
+            while (!destroyed.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            return;
+        }
+#endif
+        SDL_DestroyWindow(g.window);
+    }
+
     void Teardown()
     {
         if (g.device)
@@ -965,7 +990,7 @@ namespace
             g_messenger = VK_NULL_HANDLE;
         }
         if (g.instance) vkDestroyInstance(g.instance, nullptr);
-        if (g.window) SDL_DestroyWindow(g.window);
+        if (g.window) DestroyWindow();
         g.surface = VK_NULL_HANDLE;
         g.instance = VK_NULL_HANDLE;
         g.window = nullptr;
@@ -1132,7 +1157,13 @@ bool vk::Start()
     if (!window) return false;
 
     g.running = true;
-    g.worker = std::thread(Worker);
+#ifdef __APPLE__
+    g.mainDone = false;
+    g.onMain = true;
+    platform::RunOnMainThread([] { Worker(); g.mainDone = true; });
+#else
+    g.worker = platform::Thread(Worker);
+#endif
     while (!g.ready.load(std::memory_order_acquire)) std::this_thread::yield();
     return g.running.load();
 }
@@ -1184,11 +1215,20 @@ uint64_t vk::GuestBlankPeriod()
 // stopping and destroying are two steps rather than one.
 void vk::StopPresenting()
 {
+#ifdef __APPLE__
+    if (!g.onMain.load()) return;
+#else
     if (!g.worker.joinable()) return;
+#endif
     g.running = false;
     { std::lock_guard lock(g.lock); g.wake.notify_all(); g.takenWake.notify_all(); }
     { std::lock_guard lock(g.waitLock); g.waitWake.notify_all(); }
+#ifdef __APPLE__
+    while (!g.mainDone.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    g.onMain = false;
+#else
     g.worker.join();
+#endif
     if (g.waiter.joinable())
     {
         g.waiter.join();

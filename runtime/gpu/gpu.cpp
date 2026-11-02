@@ -1,5 +1,6 @@
 // The GPU as the title sees it: the thread that consumes the ring buffer, the
 // vertical blank, and the interrupts both raise into the title's handler.
+#include "../platform.h"
 #include <ppc_recomp_shared.h>
 #include "title.h"
 #include "../pacing_trace.h"
@@ -62,7 +63,7 @@ namespace
         // the two threads that can raise one here take turns.
         std::mutex guestCall;
 
-        std::thread worker, vblank;
+        platform::Thread worker, vblank;
         std::atomic<bool> running{ false };
         std::atomic<uint64_t> frames{ 0 };       // VdSwap calls
         diag::Stat vblanks;
@@ -122,6 +123,11 @@ namespace
             const uint32_t wptr = *GuestPtr<be32>(kCpRbWptr) & g.ring.mask;
             if (wptr != g.ring.readIndex)
             {
+                // The title wrote the packets before it moved the write pointer, and
+                // saw to their order (its sync and eieio are fences now): this makes
+                // the reads of them follow the read of the pointer, which arm64 does
+                // not do of itself.
+                std::atomic_thread_fence(std::memory_order_acquire);
                 const uint32_t available = (wptr - g.ring.readIndex) & g.ring.mask;
                 std::chrono::steady_clock::time_point began;
                 if constexpr (diag::kOn) began = std::chrono::steady_clock::now();
@@ -148,6 +154,8 @@ namespace
                     }
                 }
                 g.ring.readIndex = wptr;
+                // The packets are read before the title is told it may reuse their room.
+                std::atomic_thread_fence(std::memory_order_release);
                 if (g.rptrWriteBack) *GuestPtr<be32>(g.rptrWriteBack) = g.ring.readIndex;
                 idleLaps = 0;
                 continue;
@@ -249,8 +257,8 @@ void gpu::Initialise()
     if (Rendering() && !vk::renderer::Initialise()) LOGW("gpu: no device came up to render on");
     g.gpuPcr = kernel::CreateThreadBlock(0xF000);
     g.vblankPcr = kernel::CreateThreadBlock(0xF001);
-    g.worker = std::thread(Worker);
-    g.vblank = std::thread(VBlankWorker);
+    g.worker = platform::Thread(Worker);
+    g.vblank = platform::Thread(VBlankWorker);
 }
 
 void gpu::Shutdown()
