@@ -447,9 +447,14 @@ int platform::RunMain(int (*entry)(int, char**), int argc, char** argv)
     }
     pthread_detach(thread);
     // Serves RunOnMainThread's jobs on this thread (dispatch_main would run them on
-    // another); the process ends with GameMain's exit.
-    CFRunLoopRun();
-    return 0;
+    // another); the process ends with GameMain's exit, or the run's own _exit. A run
+    // loop with nothing left to wait for returns, and returning from main would run
+    // the static destructors under the threads that are still shutting down: so it
+    // is given a timer that never fires, and told to run again if it returns anyway.
+    CFRunLoopTimerRef never = CFRunLoopTimerCreate(kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + 1e9, 1e9, 0, 0,
+                                                   [](CFRunLoopTimerRef, void*) {}, nullptr);
+    CFRunLoopAddTimer(CFRunLoopGetMain(), never, kCFRunLoopCommonModes);
+    for (;;) CFRunLoopRun();
 }
 
 void platform::RunOnMainThread(void (*job)())
