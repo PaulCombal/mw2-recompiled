@@ -6,8 +6,9 @@ would sample at the moment a draw executes.
 
 | Piece | Where |
 |---|---|
-| Fetch constant, tiling, level layout, untiling | `runtime/gpu/texture.{h,cpp}` |
-| Xenos to Vulkan formats and swizzles | `runtime/gpu/vulkan/texture_formats.{h,cpp}` |
+| Fetch constant, tiling, level layout, untiling | `src/runtime/gpu/texture.rs`; the C++ renderer's `runtime/gpu/texture.h` calls it (`runtime/rust_renderer.cpp`), and `texture.cpp` is the `--renderer cpp` build's |
+| Xenos to Vulkan formats and swizzles | `src/runtime/gpu/vulkan/texture_formats.rs`, called the same way; `texture_formats.cpp` is the `--renderer cpp` build's |
+| The Rust against the C++ | `tools/gpu_diff.py <build> --rig tiling,texture,formats` (`tools/gpu_diff/texture.cpp`), through the build's forwarders too; `--rig texture_bench --bench` for MB/s |
 | Images, samplers, the texture set, re-reads | `runtime/gpu/vulkan/texture_cache.{h,cpp}` |
 | The images' memory, in blocks | `runtime/gpu/vulkan/image_memory.{h,cpp}` |
 | Write watch on guest pages | `runtime/gpu/memory_watch.{h,cpp}` |
@@ -64,6 +65,15 @@ the base were a power of two on each side, so a level's stride is not its own
 size. Pitch and height are rounded up to a 32x32-block tile, for linear
 textures too; a linear mip's rows are also 256-byte aligned. Each cube face or
 array slice of a level starts on a 4 KB boundary.
+
+**What the extents leave out.** The byte counts end the last slice at rows x
+pitch, but the reader can go further: a tiled slice under 4 KB has addresses
+past that (a 32x32 8-bit one up to 2560 bytes of its 1024), and a 1D texture's
+packed tail puts levels on rows its one-row slice does not count. The reads
+stay in guest memory; what the counts feed, the write watch and the source
+signature, misses those bytes. Xenia bounds a tiled slice by its highest tiled
+address instead. The rig measures the reader's real reach
+(`tools/gpu_diff/texture_reach.cpp`).
 
 Which levels exist:
 

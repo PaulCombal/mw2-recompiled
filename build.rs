@@ -411,7 +411,7 @@ fn check_sdl(root: &Path, sdl: &Path) {
 // stands in for it (its hooks, its exports, bridge.rs's routes), and the files that
 // exist only to forward the C++ renderer's calls to Rust are compiled. Without the
 // feature the C++ renderer is built whole, as it was.
-const RUST_OWNS: &[&str] = &[];
+const RUST_OWNS: &[&str] = &["runtime/gpu/texture.cpp", "runtime/gpu/vulkan/texture_formats.cpp"];
 const RUST_ONLY: &[&str] = &["runtime/rust_renderer.cpp"];
 
 fn main() {

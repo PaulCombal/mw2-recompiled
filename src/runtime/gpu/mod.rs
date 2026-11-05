@@ -6,3 +6,9 @@
 // runtime/rust_renderer.cpp, which forwards its own declarations to exports.rs, and the
 // Rust calls what is still C++ through runtime/rust_calls.cpp. The plan and the proofs
 // of each step: docs/building.md, "The renderer moves to Rust".
+
+// The C interface the C++ renderer calls while the two share the game.
+mod exports;
+// Texture layouts and the untiler: raw guest reads, so not under deny(unsafe_code).
+pub mod texture;
+pub mod vulkan;
