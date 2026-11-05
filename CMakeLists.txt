@@ -143,6 +143,9 @@ file(GLOB RUNTIME_SOURCES CONFIGURE_DEPENDS
 
 # What the Rust build alone has: its calls into the renderer.
 list(REMOVE_ITEM RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/rust_calls.cpp")
+# What the Rust renderer alone has: the C++ renderer's calls into it.
+list(REMOVE_ITEM RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/rust_renderer.cpp"
+                                 "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_translator_rust.cpp")
 # FFmpeg's decoder behind C calls, which only tools/xma_diff.py builds.
 list(REMOVE_ITEM RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/apu/xma_codec.cpp")
 

@@ -74,6 +74,7 @@ before the guest code it depends on is generated.
 | `--release-tag <tag>` | the release the build is published as (`v0.3.0`): the launcher looks for a newer one than it. Without it the launcher does not |
 | `--cmake-extra <arg>` | one argument for CMake's configure step (a compiler launcher, `-DFETCHCONTENT_BASE_DIR=...`), passed as it is, not split at spaces; repeated for more |
 | `--cpp` | builds the game from the C++ tree with CMake, for as long as the C++ build exists |
+| `--renderer rust\|cpp` | `rust` (default): the renderer's files Rust has taken over are its. `cpp`: the C++ renderer whole, with the Rust runtime; adds `-cppgpu` to the build directory. Not with `--cpp` ([The renderer moves to Rust](#the-renderer-moves-to-rust)) |
 
 Build directories:
 
@@ -82,6 +83,7 @@ Build directories:
 | diagnostic | `build/` | `build-mp/` |
 | `--release` | `build-release/` | `build-mp-release/` |
 | `--windows` | `build-win/`, `build-win-release/` | `build-win-mp/`, `build-win-mp-release/` |
+| `--renderer cpp` | each of the above with `-cppgpu` (`build-cppgpu/`) | `build-mp-cppgpu/`, ... |
 
 A second build directory reuses the SDL3 and FFmpeg sources `build/` fetched.
 
@@ -314,11 +316,60 @@ above all:
 
 Rust code that builds these crates needs `panic = "abort"` and
 `-Ctarget-cpu=x86-64-v2`, set here in the top workspace; the generated workspace's
-own settings do not apply. `cargo build --features` chooses `diagnostics` (on by
-default) and `portable`. `MW2_BUILD_DIR` and `MW2_RELEASE_TAG` pass the rest of what
+own settings do not apply. `cargo build --features` chooses `diagnostics` and
+`rust-renderer` (both on by default) and `portable`. `MW2_BUILD_DIR` and `MW2_RELEASE_TAG` pass the rest of what
 `cargo xtask` decides, and `MW2_LOGGING`, `MW2_LTO`, `MW2_LTO_CACHE`, `MW2_PGO` and
 `MW2_PGO_TRAINING` in the environment are the options below, as `ON` or `OFF`;
 `cargo xtask` refuses them in `--cmake-extra`, which only CMake's part reads.
+
+### The renderer moves to Rust
+
+The renderer, `runtime/gpu/` and `runtime/gpu/vulkan/`, moves to `src/runtime/gpu/`
+a file at a time, each Rust module named after the C++ file it takes over. Until it
+is all there, two renderers build from one tree:
+
+| build | renderer |
+|---|---|
+| `cargo xtask build` | the Rust of every file taken over so far, the rest C++ (feature `rust-renderer`) |
+| `cargo xtask build --renderer cpp` | the C++ renderer whole, with the Rust runtime, in `<build>-cppgpu` |
+| `cargo xtask build --cpp` | the all-C++ game, as before |
+
+`build.rs` keeps two lists. `RUST_OWNS` holds the C++ files Rust has taken over:
+with the feature they are not compiled, and each gives rustc the cfg
+`mw2_owns_<stem>` (`mw2_owns_texture` for `runtime/gpu/texture.cpp`). Every Rust
+hook, export and `bridge.rs` route that stands in for such a file is under that cfg,
+never under the feature alone, so each function exists once in every build, and
+taking a file back out of the list unwires its Rust with it. `RUST_ONLY` holds the
+C++ that exists only beside the Rust renderer: `runtime/rust_renderer.cpp` defines
+the C++ declarations of what moved as calls to `src/runtime/gpu/exports.rs`, so no
+header and no caller of the C++ renderer changes. Calls from the Rust into the C++
+that is left go through `runtime/rust_calls.cpp` and `src/runtime/bridge.rs`. A
+`RUST_ONLY` file is wrapped whole in `#if MW2_RUST_RENDERER`, which only `build.rs`
+defines, and CMake leaves it out. `build.rs` checks that every listed file exists,
+and that what `RUST_OWNS` names is a file it compiles. It writes `renderer_cfgs.txt`
+(`renderer rust` or `renderer cpp`, then the cfgs) beside `link.rsp` and `build.txt`
+in its OUT_DIR, and `cargo xtask` copies the three into the build folder from the
+run cargo used, with that OUT_DIR's path in `out_dir.txt`: one folder can be built
+with either renderer, and cargo keeps a build-script run for each.
+
+The C++ renderer stays as it is: the executables of `--renderer cpp` and `--cpp`
+come out the same, byte for byte, whatever has moved. The only C++ changes allowed
+are diagnostics-only instruments (under `MW2_DIAGNOSTICS`), linkage the rigs need,
+and the memory watch's inline read under `#if MW2_RUST_RENDERER`; each is checked
+against that identity.
+
+The Rust renderer uses `ash` for Vulkan, linked to the loader by name (`vulkan`, or
+`vulkan-1` on Windows, whose import library `build.rs` makes) as the C++ is. A
+machine without the Vulkan development files builds the window-less game only with
+`--renderer cpp`; `build.rs` says so. `cargo xtask` clears `VULKAN_SDK`, which ash's
+build script would add to the link, so the game links the system's loader.
+
+Whatever decides the shaders' SPIR-V is part of the shader build's hash
+([shaders.md](shaders.md)), so when the translator moves, its Rust folder joins the
+C++ files in `build.rs`'s and CMake's lists alike, while the launcher keeps compiling
+the C++ copy, which stays hashed too. Built-in shaders (the backdrop, the display
+table, the drawn resolve) are made outside that folder, so they do not change the
+hash.
 
 ### Title update 6
 

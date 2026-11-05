@@ -16,11 +16,15 @@ name = "mw2"
 path = "src/main.rs"
 
 [features]
-default = ["diagnostics"]
+default = ["diagnostics", "rust-renderer"]
 # The traces, dumps, statistics and test harness (runtime/diagnostics.h).
 diagnostics = []
 # The C++ standard library linked in, for a binary that runs on other machines.
 portable = []
+# The renderer in Rust (src/runtime/gpu/), which takes over runtime/gpu/ a file at a
+# time; without it, the C++ renderer whole (docs/building.md, "The renderer moves to
+# Rust").
+rust-renderer = ["dep:ash"]
 
 [dependencies]
 ppc_recomp = { path = "generated/ppc_recomp" }
@@ -28,6 +32,9 @@ ppc_rt = { path = "generated/ppc_rt" }
 # SDL, built from its source (the sdl3-src crate, the version named in its own) and
 # linked statically: cmake/sdl.cmake says how.
 sdl3-sys = { version = "=0.7.2", default-features = false, features = ["build-from-source-static"] }
+# Vulkan for the Rust renderer: the loader linked by name as the C++ links it, not
+# loaded at run time (its default "loaded" would bring libloading).
+ash = { version = "=0.38.0", default-features = false, features = ["std", "linked"], optional = true }
 
 [workspace]
 # Each of these is a workspace of its own.

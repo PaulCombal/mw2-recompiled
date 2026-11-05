@@ -22,6 +22,9 @@ mod exports;
 #[cfg(not(windows))]
 mod fault_text;
 pub mod guest_memory;
+// The renderer, taking over runtime/gpu/ a file at a time (build.rs, RUST_OWNS).
+#[cfg(feature = "rust-renderer")]
+pub mod gpu;
 pub mod platform;
 #[cfg(feature = "diagnostics")]
 mod scan;

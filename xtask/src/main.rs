@@ -32,6 +32,8 @@ const USAGE: &str = "usage: cargo xtask <prepare|recompile|build> [options]
   --windows              cross-compile for Windows with llvm-mingw
   --llvm-mingw <dir>     llvm-mingw's folder (or LLVM_MINGW in the environment)
   --cpp                  the C++ build of the game, with CMake, instead of cargo's
+  --renderer rust|cpp    rust (default): the renderer's files Rust has taken over are
+                         its; cpp: today's C++ renderer whole, in <build>-cppgpu
   --build-dir <dir>      build there instead of build, build-mp, build-release, ...
   --targets <names>      build only these (mw2, launcher, ...), space-separated
   --release-tag <tag>    the release the build is published as (v0.3.0)
@@ -65,6 +67,7 @@ struct Options {
     windows: bool,
     llvm_mingw: Option<String>,
     cpp: bool,
+    renderer: Option<String>,
     build_dir: Option<String>,
     targets: Vec<String>,
     release_tag: String,
@@ -90,6 +93,7 @@ fn parse() -> Result<Options> {
         windows: false,
         llvm_mingw: std::env::var("LLVM_MINGW").ok().filter(|dir| !dir.is_empty()),
         cpp: false,
+        renderer: None,
         build_dir: None,
         targets: Vec::new(),
         release_tag: String::new(),
@@ -112,6 +116,7 @@ fn parse() -> Result<Options> {
             "--windows" => options.windows = true,
             "--llvm-mingw" => options.llvm_mingw = Some(value()?),
             "--cpp" => options.cpp = true,
+            "--renderer" => options.renderer = Some(value()?),
             "--build-dir" => options.build_dir = Some(value()?),
             "--targets" => options.targets.extend(value()?.split_whitespace().map(String::from)),
             "--release-tag" => options.release_tag = value()?,
@@ -133,6 +138,13 @@ fn parse() -> Result<Options> {
     }
     if options.title != "sp" && options.title != "mp" {
         return Err(format!("--title must be sp or mp, not '{}'", options.title));
+    }
+    match options.renderer.as_deref() {
+        None | Some("rust" | "cpp") => {}
+        Some(other) => return Err(format!("--renderer must be rust or cpp, not '{other}'")),
+    }
+    if options.cpp && options.renderer.is_some() {
+        return Err("--renderer is for cargo's build: --cpp is the C++ renderer already".into());
     }
     // The game's options are build.rs's, from the environment: in CMake's
     // arguments they would reach only the launcher and the tools.
@@ -212,6 +224,33 @@ fn run(command: &mut Command) -> Result {
         return Err(format!("{} failed ({status})", command.get_program().to_string_lossy()));
     }
     Ok(())
+}
+
+// cargo build, with the game's build-script run picked out of cargo's messages: its
+// OUT_DIR, whether the run was this time's or an earlier one's.
+fn cargo_build(command: &mut Command) -> Result<PathBuf> {
+    use std::io::BufRead;
+    let mut child = command
+        .arg("--message-format=json-render-diagnostics")
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("cargo: {e}"))?;
+    let mut out_dir = None;
+    for line in std::io::BufReader::new(child.stdout.take().unwrap()).lines() {
+        let line = line.map_err(|e| format!("cargo: {e}"))?;
+        if !line.starts_with('{') {
+            println!("{line}");
+        } else if line.contains("\"reason\":\"build-script-executed\"") && line.contains("#mw2@") {
+            let at = line.find("\"out_dir\":\"").ok_or("cargo named no out_dir")? + "\"out_dir\":\"".len();
+            let end = line[at..].find('"').ok_or("cargo's out_dir has no end")?;
+            out_dir = Some(PathBuf::from(&line[at..at + end]));
+        }
+    }
+    let status = child.wait().map_err(|e| format!("cargo: {e}"))?;
+    if !status.success() {
+        return Err(format!("cargo failed ({status})"));
+    }
+    out_dir.ok_or_else(|| "cargo ran no build script for the game".into())
 }
 
 fn quiet(command: &mut Command) -> Result {
@@ -597,6 +636,10 @@ fn build(options: &Options, title: &Title) -> Result {
     if options.tu0 {
         build += "-tu0";
     }
+    let cpp_renderer = options.renderer.as_deref() == Some("cpp");
+    if cpp_renderer {
+        build += "-cppgpu";
+    }
     let build = options.build_dir.clone().unwrap_or(build);
     let build_path = root().join(&build);
     let exe = if windows { "mw2.exe" } else { "mw2" };
@@ -660,7 +703,12 @@ fn build(options: &Options, title: &Title) -> Result {
         }
         run(&mut command)?;
     } else {
-        let features = if options.release { "portable" } else { "diagnostics" };
+        let features = match (options.release, cpp_renderer) {
+            (false, false) => "diagnostics,rust-renderer",
+            (true, false) => "portable,rust-renderer",
+            (false, true) => "diagnostics",
+            (true, true) => "portable",
+        };
         // rustup's cargo, which takes the compiler rust-toolchain.toml pins: not the one
         // `cargo +<toolchain> xtask` would hand down.
         let cargo_command = || {
@@ -673,7 +721,10 @@ fn build(options: &Options, title: &Title) -> Result {
             .args(["build", "--release", "--offline", "--locked", "--no-default-features", "--features", features])
             .env("CARGO_TARGET_DIR", build_path.join("rust"))
             .env("MW2_BUILD_DIR", &build_path)
-            .env("MW2_RELEASE_TAG", &options.release_tag);
+            .env("MW2_RELEASE_TAG", &options.release_tag)
+            // ash's build script would add the Vulkan SDK's folder to the link: the
+            // game links the system's loader, as the C++ does.
+            .env_remove("VULKAN_SDK");
         let mut rust_dir = build_path.join("rust/release");
         if windows {
             cargo.args(["--target", "x86_64-pc-windows-gnullvm"]);
@@ -687,7 +738,15 @@ fn build(options: &Options, title: &Title) -> Result {
         // registry, at the versions Cargo.lock holds: a build that would change it
         // stops.
         run(cargo_command().args(["fetch", "--locked"]))?;
-        run(&mut cargo)?;
+        let out_dir = cargo_build(&mut cargo)?;
+        // What build.rs left for this build, from the run cargo used: with two
+        // renderers in one folder, a fresh run of the other feature set is not run
+        // again, so files it wrote into the folder itself would be the other's.
+        for file in ["link.rsp", "build.txt", "renderer_cfgs.txt"] {
+            fs::copy(out_dir.join(file), build_path.join(file)).map_err(|e| format!("{file}: {e}"))?;
+        }
+        fs::write(build_path.join("out_dir.txt"), format!("{}\n", out_dir.display()))
+            .map_err(|e| format!("out_dir.txt: {e}"))?;
         let built = build_path.join(exe);
         if built.symlink_metadata().is_ok() {
             fs::remove_file(&built).map_err(|e| format!("{}: {e}", built.display()))?;

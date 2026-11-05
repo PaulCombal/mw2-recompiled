@@ -405,12 +405,22 @@ fn check_sdl(root: &Path, sdl: &Path) {
     assert_eq!(built, fetched, "sdl3-sys builds SDL {built}, and CMakeLists.txt fetches {fetched} for the launcher");
 }
 
+// The renderer moves to Rust a file at a time (docs/building.md, "The renderer moves
+// to Rust"). With the rust-renderer feature, the C++ files Rust has taken over are not
+// compiled, each gives the Rust its cfg mw2_owns_<stem>, which turns on the Rust that
+// stands in for it (its hooks, its exports, bridge.rs's routes), and the files that
+// exist only to forward the C++ renderer's calls to Rust are compiled. Without the
+// feature the C++ renderer is built whole, as it was.
+const RUST_OWNS: &[&str] = &[];
+const RUST_ONLY: &[&str] = &["runtime/rust_renderer.cpp"];
+
 fn main() {
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let windows = env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows";
     let diagnostics = env::var_os("CARGO_FEATURE_DIAGNOSTICS").is_some();
     let portable = env::var_os("CARGO_FEATURE_PORTABLE").is_some();
+    let rust_renderer = env::var_os("CARGO_FEATURE_RUST_RENDERER").is_some();
 
     // What cargo xtask last generated, as "<title> <version>".
     let stamp = root.join("generated.title");
@@ -530,6 +540,9 @@ fn main() {
         [format!("MW2_DIAGNOSTICS={}", u8::from(diagnostics)), "MW2_RUST=1".into(), "MW2_USE_SDL=1".into()]
             .map(|definition| format!("-D{definition}")),
     );
+    if rust_renderer {
+        runtime.push("-DMW2_RUST_RENDERER=1".into());
+    }
     for include in [root.join("runtime"), PathBuf::from(&sdl).join("include"), ppc.clone(), simde.clone()] {
         runtime.push(format!("-I{}", include.display()));
     }
@@ -546,6 +559,9 @@ fn main() {
             runtime.push("-DMW2_HAVE_VULKAN=1".into());
             libraries.push("-lvulkan".into());
         }
+        None if rust_renderer => {
+            panic!("Vulkan's headers are missing: install libvulkan-dev, or build the C++ renderer (--renderer cpp)")
+        }
         None => println!("cargo:warning=Vulkan's headers are missing: the game is built with no window"),
     }
 
@@ -557,6 +573,41 @@ fn main() {
     }
     for file in ["runtime/image_move.cpp", "runtime/shader_preload.cpp", "runtime/rust_calls.cpp"] {
         files.push(root.join(file));
+    }
+    // Every file of the two lists must exist: a misspelt one would leave a file in or
+    // out without a word.
+    for listed in RUST_OWNS.iter().chain(RUST_ONLY) {
+        assert!(root.join(listed).is_file(), "build.rs names {listed}, which is not there");
+    }
+    // What Rust takes over must be a file this build compiles, whose stem names it alone.
+    for owned in RUST_OWNS {
+        assert!(files.contains(&root.join(owned)), "RUST_OWNS names {owned}, which build.rs does not compile");
+        let named = |file: &&PathBuf| file.file_stem() == Path::new(owned).file_stem();
+        assert!(files.iter().filter(named).count() == 1, "RUST_OWNS: another file has the stem of {owned}");
+    }
+    let stem = |path: &str| Path::new(path).file_stem().unwrap().to_str().unwrap().to_string();
+    for file in &files {
+        let relative = file.strip_prefix(&root).unwrap().to_str().unwrap();
+        if !RUST_ONLY.contains(&relative) {
+            println!("cargo:rustc-check-cfg=cfg(mw2_owns_{})", stem(relative));
+        }
+    }
+    println!("cargo:rustc-check-cfg=cfg(mw2_gpu_rig)");
+    let mut cfgs = vec![format!("renderer {}", if rust_renderer { "rust" } else { "cpp" })];
+    if rust_renderer {
+        files.retain(|file| !RUST_OWNS.contains(&file.strip_prefix(&root).unwrap().to_str().unwrap()));
+        for owned in RUST_OWNS {
+            println!("cargo:rustc-cfg=mw2_owns_{}", stem(owned));
+            cfgs.push(format!("mw2_owns_{}", stem(owned)));
+        }
+        for only in RUST_ONLY {
+            let only = root.join(only);
+            if !files.contains(&only) {
+                files.push(only);
+            }
+        }
+    } else {
+        files.retain(|file| !RUST_ONLY.contains(&file.strip_prefix(&root).unwrap().to_str().unwrap()));
     }
     // The kernel imports the runtime does not have (cargo xtask writes them).
     files.push(ppc.join("stubs_generated.cpp"));
@@ -611,6 +662,10 @@ fn main() {
     // rustc links with clang (.cargo/config.toml), which takes the link-time
     // optimisation's level from the link line, and rustc asks for -nodefaultlibs, so
     // the C++ library is named.
+    // ash links vulkan-1 by name: the import library made above is in OUT_DIR.
+    if windows && rust_renderer {
+        println!("cargo:rustc-link-search=native={}", out.display());
+    }
     if windows {
         // One executable with nothing beside it: the C++ runtime and the threads linked
         // in. The recompiled code nests deep on the host stack, and a thread Windows
@@ -651,14 +706,8 @@ fn main() {
     let response = out.join("link.rsp");
     fs::write(&response, link.join("\n") + "\n").unwrap();
     println!("cargo:rustc-link-arg-bins=@{}", response.display());
-    // The xtask's build folder gets a copy, for its hook check.
-    if let Some(build) = rerun_if("MW2_BUILD_DIR") {
-        fs::create_dir_all(&build).unwrap();
-        fs::copy(&response, Path::new(&build).join("link.rsp")).unwrap();
-        fs::write(
-            Path::new(&build).join("build.txt"),
-            format!("{title} {version} diagnostics={}\n", u8::from(diagnostics)),
-        )
-        .unwrap();
-    }
+    // Beside link.rsp, for cargo xtask to copy into its build folder: what its hook
+    // check reads, and the cfgs the rigs build the Rust with (tools/gpu_diff.py).
+    fs::write(out.join("build.txt"), format!("{title} {version} diagnostics={}\n", u8::from(diagnostics))).unwrap();
+    fs::write(out.join("renderer_cfgs.txt"), cfgs.join("\n") + "\n").unwrap();
 }
