@@ -100,7 +100,7 @@ GUEST_HOOK(T_Job_WaitPredicate)
     }
 }
 
-void engine::ReportPredicateWaits()
+extern "C" void mw2_engine_report_predicate_waits()
 {
     std::lock_guard g(g_predicateLock);
     struct Line { const char* thread; uint32_t predicate, caller; uint64_t nanoseconds, calls; };

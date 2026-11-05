@@ -10,12 +10,21 @@
 
 #include <cstdint>
 
+extern "C"
+{
+    bool mw2_guide_input(uint32_t user, uint16_t buttons);
+    bool mw2_guide_picture(uint32_t windowHeight, mw2_image* image);
+}
+
 namespace guide
 {
     // What a controller holds, at every read of it, as signin::Input takes
     // it. True when the title is not to see it.
-    bool Input(uint32_t user, uint16_t buttons);
+    inline bool Input(uint32_t user, uint16_t buttons) { return mw2_guide_input(user, buttons); }
 
     // The screen, for a window of this height. False while it is shut.
-    bool Picture(uint32_t windowHeight, screen::Image& image);
+    inline bool Picture(uint32_t windowHeight, screen::Image& image)
+    {
+        return screen::Picture(mw2_guide_picture, windowHeight, image);
+    }
 }

@@ -1,4 +1,4 @@
-#include "objects.h"
+#include "dispatcher.h"
 #include "kernel.h"
 #include "../guest.h"
 #include "../log.h"
@@ -280,7 +280,7 @@ uint32_t kernel::Wait(Dispatcher* const* objects, uint32_t count, bool all,
     return result;
 }
 
-uint32_t kernel::InsertHandle(std::shared_ptr<Object> object)
+uint32_t kernel::InsertObject(std::shared_ptr<Object> object)
 {
     std::lock_guard held(g_handleLock);
     const uint32_t handle = g_nextHandle;
@@ -290,17 +290,25 @@ uint32_t kernel::InsertHandle(std::shared_ptr<Object> object)
     return handle;
 }
 
-std::shared_ptr<Object> kernel::LookupHandle(uint32_t handle)
+std::shared_ptr<Object> kernel::LookupObject(uint32_t handle)
 {
     std::lock_guard held(g_handleLock);
     auto it = g_handles.find(handle);
     return it == g_handles.end() ? nullptr : it->second;
 }
 
-bool kernel::CloseHandle(uint32_t handle)
+bool kernel::CloseObject(uint32_t handle)
 {
-    std::lock_guard held(g_handleLock);
-    return g_handles.erase(handle) != 0;
+    // Freed with the lock let go: a C++ object's destructor may ask the table again.
+    std::shared_ptr<Object> closed;
+    {
+        std::lock_guard held(g_handleLock);
+        auto it = g_handles.find(handle);
+        if (it == g_handles.end()) return false;
+        closed = std::move(it->second);
+        g_handles.erase(it);
+    }
+    return true;
 }
 
 std::shared_ptr<Dispatcher> kernel::ObjectAt(uint32_t guestAddress)
@@ -366,4 +374,29 @@ bool kernel::CancelTimer(const std::shared_ptr<Timer>& timer)
     timer->running = false;
     timer->generation++;
     return was;
+}
+
+// What the rest of the C++ asks of the table (objects.h).
+extern "C" uint32_t mw2_kernel_insert_object(void* object, void (*release)(void* object))
+{
+    const uint32_t handle = InsertObject(*static_cast<std::shared_ptr<Object>*>(object));
+    release(object);
+    return handle;
+}
+
+extern "C" bool mw2_kernel_lookup_object(uint32_t handle, void (*copy)(void* to, void* object), void* to)
+{
+    // Only the objects the rest of the C++ made, as the Rust table gives.
+    auto object = LookupObject(handle);
+    if (!object || std::dynamic_pointer_cast<Dispatcher>(object)) return false;
+    copy(to, &object);
+    return true;
+}
+
+extern "C" bool mw2_kernel_set_event(uint32_t handle)
+{
+    auto event = LookupObjectAs<Event>(handle);
+    if (!event) return false;
+    event->Set();
+    return true;
 }

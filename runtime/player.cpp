@@ -534,13 +534,13 @@ namespace
     }
 }
 
-bool player::Walking() { return Goal().set || !Routes().empty(); }
-bool player::Wanted()  { return Walking() || TracingViewpos(); }
-bool player::Arrived() { return g.arrived; }
+extern "C" bool mw2_player_walking() { return Goal().set || !Routes().empty(); }
+extern "C" bool mw2_player_wanted()  { return mw2_player_walking() || TracingViewpos(); }
+extern "C" bool mw2_player_arrived() { return g.arrived; }
 
 // How long the walk has been getting no nearer. Zero until the player has
 // spawned and started walking.
-double player::SecondsSinceProgress()
+extern "C" double mw2_player_seconds_since_progress()
 {
     if (!g.spawned || !Goal().set || g.bestAt.time_since_epoch().count() == 0) return 0.0;
     return std::chrono::duration<double>(Clock::now() - g.bestAt).count();
@@ -559,8 +559,9 @@ namespace
     std::FILE* g_record = nullptr;
 }
 
-void player::SawPad(uint16_t buttons, uint8_t rightTrigger)
+extern "C" void mw2_player_saw_pad(uint16_t buttons, uint8_t rightTrigger)
 {
+    using namespace player;
     static uint16_t was = 0;
     static bool pulled = false;
     constexpr uint16_t kLeft = 0x0004;
@@ -668,8 +669,9 @@ namespace
     }
 }
 
-void player::Record()
+extern "C" void mw2_player_record()
 {
+    using namespace player;
     if (const char* flight = env::Text("MW2_RECORD_FLIGHT")) RecordFlight(flight);
     if (const char* flight = env::Text("MW2_FLY_PATH")) Fly(flight);
     const char* path = env::Text("MW2_RECORD_PATH");
@@ -714,8 +716,9 @@ void player::Record()
     }).detach();
 }
 
-bool player::Locate(Where& out)
+extern "C" bool mw2_player_locate(player::Where* where)
 {
+    player::Where& out = *where;
     if (!T_DATA_ClientStates) return false;          // not derived for this title
 
     // The title's own viewpos walks a local-client index into a table of slots
@@ -743,9 +746,11 @@ bool player::Locate(Where& out)
     return std::fabs(out.x) < 1e6f && std::fabs(out.y) < 1e6f;
 }
 
-bool player::Steer(short axes[4], Press& press)
+extern "C" bool mw2_player_steer(short* axes, int* pressed)
 {
-    press = Press::None;
+    using namespace player;
+    Press press = Press::None;
+    struct Give { Press& press; int* to; ~Give() { *to = int(press); } } give{ press, pressed };
     if (!Wanted()) return false;
     Where here;
     if (!Locate(here)) return false;
@@ -843,7 +848,7 @@ bool player::Steer(short axes[4], Press& press)
     return true;
 }
 
-void player::Report()
+extern "C" void mw2_player_report()
 {
     if (!Goal().set && !TracingViewpos()) return;
     if (!g.everLocated)

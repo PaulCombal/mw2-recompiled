@@ -1,9 +1,14 @@
 // EDRAM surfaces as Vulkan images: making them, reading them back, the
 // rendering instances they are drawn in, and clearing them.
 #include "renderer_state.h"
+#include "pipeline.h"
+#include "spirv.h"
 #include "../../log.h"
 
 #include <algorithm>
+#include <bit>
+#include <map>
+#include <vector>
 
 #ifdef MW2_HAVE_VULKAN
 
@@ -76,6 +81,40 @@ namespace vk::renderer::detail
     TargetKey DepthKey(uint32_t baseTile, uint32_t format, uint32_t samples, uint32_t scale)
     {
         return { baseTile, 0, format, g.msaa ? samples : 0, true, scale };
+    }
+
+    // The format is in the key, and a D24S8 and a D24FS8 surface at one tile are
+    // two images wherever the two have different host formats. MW2 draws all
+    // its depth in D24FS8, reversed (cleared to zero, tested GEQUAL): an
+    // integer format there spends its steps near the camera and leaves the
+    // distance a few, so it is float on every device, as on AMD all along.
+    // D24S8 is a pass with no depth surface (RB_DEPTH_INFO 0, tile 0): a few
+    // hundred draws in the training level, none in a multiplayer match, none
+    // with depth or stencil on. Where its image is another one, on a device
+    // with D24S8, nothing it holds is ever read.
+    VkFormat DepthFormatFor(uint32_t guestFormat)
+    {
+        return guestFormat ? g.floatDepthFormat : g.depthFormat;
+    }
+
+    // As Xenia's UNorm24To32 and Float20e4To32: the unorm divided by 2^24 with
+    // its top bit added back, which is exact, and the float24 with 4 exponent
+    // bits biased by 15 and 20 of mantissa, denormals normalised. A float24
+    // reaches 2, past what a clear may write; the host's depth is 0 to 1.
+    float DepthClearValue(uint32_t guestFormat, uint32_t packed)
+    {
+        const uint32_t value = packed >> 8;
+        if (!guestFormat) return float(value + (value >> 23)) * (1.0f / float(1u << 24));
+        if (!value) return 0.0f;
+        uint32_t mantissa = value & 0xFFFFF;
+        uint32_t exponent = value >> 20;
+        if (!exponent)
+        {
+            const uint32_t shift = uint32_t(std::countl_zero(mantissa)) - (32 - 21);
+            exponent = uint32_t(1 - int32_t(shift));
+            mantissa = (mantissa << shift) & 0xFFFFF;
+        }
+        return std::min(std::bit_cast<float>(((exponent + 112) << 23) | (mantissa << 3)), 1.0f);
     }
 
     // The console's 1x, 2x and 4x, as the device can draw them. A count the
@@ -174,6 +213,7 @@ namespace vk::renderer::detail
 
     void DestroyTarget(Target& target)
     {
+        ForgetSampledDepth(target);
         if (target.view) vkDestroyImageView(g.device, target.view, nullptr);
         if (target.image) vkDestroyImage(g.device, target.image, nullptr);
         if (target.memory) vkFreeMemory(g.device, target.memory, nullptr);
@@ -275,8 +315,366 @@ namespace vk::renderer::detail
                       VK_PIPELINE_STAGE_TRANSFER_BIT, kColourStages);
     }
 
-    // The same for a depth target, whose resolve is a render pass over the
-    // rectangle with nothing drawn in it.
+    // ---- the depth resolve as a draw ----
+    //
+    // The first sample of a multisampled depth surface copied by a draw rather
+    // than by the rendering instance's resolve: a triangle over the rectangle
+    // whose fragment shader fetches sample 0 at its own pixel and writes it as
+    // its depth, the test ALWAYS. Xenia reads multisampled surfaces the same
+    // way, with a shader. It is the resolve wherever the device can sample the
+    // surface (State::drawnDepthResolve): it costs what a rendering instance
+    // resolving the depth alone costs, and leaves the stencil out without
+    // asking a driver to (ResolveDepthInto). Float depth comes through exact;
+    // a unorm one may round to the neighbouring step, on D24S8 surfaces, which
+    // MW2 never draws depth into (DepthFormatFor).
+    namespace
+    {
+        constexpr uint32_t kModelVertex = 0, kModelFragment = 4;
+        constexpr uint32_t kModeOriginUpperLeft = 7, kModeDepthReplacing = 12;
+        constexpr uint32_t kOpImageFetch = 95, kImageOperandsSample = 0x40;
+
+        struct DrawnResolve
+        {
+            VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+            VkPipelineLayout layout = VK_NULL_HANDLE;
+            VkDescriptorPool pool = VK_NULL_HANDLE;
+            std::map<VkFormat, VkPipeline> pipelines;
+            bool failed = false;
+        };
+        DrawnResolve drawn;
+
+        spirv::Id Op_(spirv::Module& m, spirv::Op op, spirv::Id type, std::vector<uint32_t> operands)
+        {
+            const spirv::Id result = m.Allocate();
+            operands.insert(operands.begin(), { type, result });
+            m.Code().push_back(spirv::Head(op, uint32_t(operands.size() + 1)));
+            m.Code().insert(m.Code().end(), operands.begin(), operands.end());
+            return result;
+        }
+        spirv::Id Variable(spirv::Module& m, spirv::StorageClass storage, spirv::Id type)
+        {
+            const spirv::Id variable = m.Allocate();
+            spirv::Module::Emit(m.Declarations(), spirv::Op::Variable,
+                                { m.Pointer(storage, type), variable, uint32_t(storage) });
+            return variable;
+        }
+        spirv::Id Main(spirv::Module& m, uint32_t model, const std::vector<spirv::Id>& interface)
+        {
+            const spirv::Id function = m.Allocate();
+            spirv::Module::Emit(m.Declarations(), spirv::Op::TypeFunction, { function, m.Void() });
+            const spirv::Id main = m.Allocate();
+            m.EntryPoint(model, main, "main", interface);
+            spirv::Module::Emit(m.Code(), spirv::Op::Function, { m.Void(), main, 0, function });
+            spirv::Module::Emit(m.Code(), spirv::Op::Label, { m.Allocate() });
+            return main;
+        }
+        std::vector<uint32_t> End(spirv::Module& m)
+        {
+            spirv::Module::Emit(m.Code(), spirv::Op::Return, {});
+            spirv::Module::Emit(m.Code(), spirv::Op::FunctionEnd, {});
+            return m.Finish();
+        }
+
+        // A triangle over the viewport: (-1,-1), (3,-1), (-1,3).
+        std::vector<uint32_t> CoverVertexShader()
+        {
+            using namespace spirv;
+            Module m;
+            const Id i32 = m.Int(), f32 = m.Float(), f4 = m.Float4();
+            const Id index = Variable(m, StorageClass::Input, i32);
+            Module::Emit(m.Decorations(), Op::Decorate,
+                         { index, uint32_t(Decoration::BuiltIn), uint32_t(BuiltIn::VertexIndex) });
+            const Id position = Variable(m, StorageClass::Output, f4);
+            Module::Emit(m.Decorations(), Op::Decorate,
+                         { position, uint32_t(Decoration::BuiltIn), uint32_t(BuiltIn::Position) });
+            Main(m, kModelVertex, { index, position });
+            const Id i = Op_(m, Op::Load, i32, { index });
+            const Id doubled = Op_(m, Op::ShiftLeftLogical, i32, { i, m.ConstantS(1) });
+            const Id x = Op_(m, Op::ConvertSToF, f32, { Op_(m, Op::BitwiseAnd, i32, { doubled, m.ConstantS(2) }) });
+            const Id y = Op_(m, Op::ConvertSToF, f32, { Op_(m, Op::BitwiseAnd, i32, { i, m.ConstantS(2) }) });
+            auto clip = [&](Id v) {
+                return Op_(m, Op::FSub, f32, { Op_(m, Op::FMul, f32, { v, m.ConstantF(2) }), m.ConstantF(1) });
+            };
+            const Id at = Op_(m, Op::CompositeConstruct, f4, { clip(x), clip(y), m.ConstantF(0), m.ConstantF(1) });
+            Module::Emit(m.Code(), Op::Store, { position, at });
+            return End(m);
+        }
+
+        // depth = texelFetch(surface, ivec2(gl_FragCoord.xy), 0).r
+        std::vector<uint32_t> FetchDepthShader()
+        {
+            using namespace spirv;
+            Module m;
+            const Id f32 = m.Float(), f2 = m.Float2(), f4 = m.Float4(), i2 = m.IntVector(2);
+            // Sampled type, 2D, not depth, not arrayed, multisampled, sampled, no format.
+            const Id image = m.Allocate();
+            Module::Emit(m.Declarations(), Op::TypeImage, { image, f32, 1, 0, 0, 1, 1, 0 });
+            const Id surface = Variable(m, StorageClass::UniformConstant, image);
+            Module::Emit(m.Decorations(), Op::Decorate, { surface, uint32_t(Decoration::DescriptorSet), 0 });
+            Module::Emit(m.Decorations(), Op::Decorate, { surface, uint32_t(Decoration::Binding), 0 });
+            const Id fragCoord = Variable(m, StorageClass::Input, f4);
+            Module::Emit(m.Decorations(), Op::Decorate,
+                         { fragCoord, uint32_t(Decoration::BuiltIn), uint32_t(BuiltIn::FragCoord) });
+            const Id fragDepth = Variable(m, StorageClass::Output, f32);
+            Module::Emit(m.Decorations(), Op::Decorate,
+                         { fragDepth, uint32_t(Decoration::BuiltIn), uint32_t(BuiltIn::FragDepth) });
+            const Id main = Main(m, kModelFragment, { fragCoord, fragDepth });
+            Module::Emit(m.ExecutionModes(), Op::ExecutionMode, { main, kModeOriginUpperLeft });
+            Module::Emit(m.ExecutionModes(), Op::ExecutionMode, { main, kModeDepthReplacing });
+            const Id coord = Op_(m, Op::Load, f4, { fragCoord });
+            const Id xy = Op_(m, Op::VectorShuffle, f2, { coord, coord, 0, 1 });
+            const Id texel = Op_(m, Op::ConvertFToS, i2, { xy });
+            const Id loaded = Op_(m, Op::Load, image, { surface });
+            const Id fetched = Op_(m, Op(kOpImageFetch), f4, { loaded, texel, kImageOperandsSample, m.ConstantS(0) });
+            Module::Emit(m.Code(), Op::Store, { fragDepth, Op_(m, Op::CompositeExtract, f32, { fetched, 0 }) });
+            return End(m);
+        }
+
+        bool MakeDrawnLayout()
+        {
+            if (drawn.layout) return true;
+            if (drawn.failed) return false;
+            drawn.failed = true;
+            VkDescriptorSetLayoutBinding binding{};
+            binding.binding = 0;
+            binding.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            binding.descriptorCount = 1;
+            binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            VkDescriptorSetLayoutCreateInfo setInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+            setInfo.bindingCount = 1;
+            setInfo.pBindings = &binding;
+            if (vkCreateDescriptorSetLayout(g.device, &setInfo, nullptr, &drawn.setLayout) != VK_SUCCESS)
+                return false;
+            VkPipelineLayoutCreateInfo layoutInfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+            layoutInfo.setLayoutCount = 1;
+            layoutInfo.pSetLayouts = &drawn.setLayout;
+            if (vkCreatePipelineLayout(g.device, &layoutInfo, nullptr, &drawn.layout) != VK_SUCCESS) return false;
+            // A set per multisampled depth target: a handful.
+            constexpr uint32_t kSets = 64;
+            VkDescriptorPoolSize size{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kSets };
+            VkDescriptorPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+            poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+            poolInfo.maxSets = kSets;
+            poolInfo.poolSizeCount = 1;
+            poolInfo.pPoolSizes = &size;
+            if (vkCreateDescriptorPool(g.device, &poolInfo, nullptr, &drawn.pool) != VK_SUCCESS) return false;
+            drawn.failed = false;
+            return true;
+        }
+
+        VkShaderModule ShaderModule(const std::vector<uint32_t>& words)
+        {
+            VkShaderModuleCreateInfo info{ VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
+            info.codeSize = words.size() * sizeof(uint32_t);
+            info.pCode = words.data();
+            VkShaderModule module = VK_NULL_HANDLE;
+            vkCreateShaderModule(g.device, &info, nullptr, &module);
+            return module;
+        }
+
+        VkPipeline DrawnPipeline(VkFormat format)
+        {
+            if (auto found = drawn.pipelines.find(format); found != drawn.pipelines.end()) return found->second;
+            VkPipeline& pipeline = drawn.pipelines[format];
+            const VkShaderModule vertex = ShaderModule(CoverVertexShader());
+            const VkShaderModule fragment = ShaderModule(FetchDepthShader());
+            VkPipelineShaderStageCreateInfo stages[2]{};
+            for (uint32_t i = 0; i < 2; i++)
+            {
+                stages[i] = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+                stages[i].stage = i ? VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_VERTEX_BIT;
+                stages[i].module = i ? fragment : vertex;
+                stages[i].pName = "main";
+            }
+            VkPipelineVertexInputStateCreateInfo input{ VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+            VkPipelineInputAssemblyStateCreateInfo assembly{ VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+            assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            VkPipelineViewportStateCreateInfo viewport{ VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+            viewport.viewportCount = 1;
+            viewport.scissorCount = 1;
+            VkPipelineRasterizationStateCreateInfo raster{ VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+            raster.polygonMode = VK_POLYGON_MODE_FILL;
+            raster.cullMode = VK_CULL_MODE_NONE;
+            raster.lineWidth = 1.0f;
+            VkPipelineMultisampleStateCreateInfo multisample{ VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+            multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            VkPipelineDepthStencilStateCreateInfo depth{ VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+            depth.depthTestEnable = VK_TRUE;
+            depth.depthWriteEnable = VK_TRUE;
+            depth.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+            VkPipelineColorBlendStateCreateInfo blend{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+            const VkDynamicState dynamics[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+            VkPipelineDynamicStateCreateInfo dynamic{ VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+            dynamic.dynamicStateCount = 2;
+            dynamic.pDynamicStates = dynamics;
+            VkPipelineRenderingCreateInfoKHR rendering{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR };
+            rendering.depthAttachmentFormat = format;
+            rendering.stencilAttachmentFormat = format;
+            VkGraphicsPipelineCreateInfo info{ VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+            info.pNext = &rendering;
+            info.stageCount = 2;
+            info.pStages = stages;
+            info.pVertexInputState = &input;
+            info.pInputAssemblyState = &assembly;
+            info.pViewportState = &viewport;
+            info.pRasterizationState = &raster;
+            info.pMultisampleState = &multisample;
+            info.pDepthStencilState = &depth;
+            info.pColorBlendState = &blend;
+            info.pDynamicState = &dynamic;
+            info.layout = drawn.layout;
+            if (!vertex || !fragment ||
+                vkCreateGraphicsPipelines(g.device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline) != VK_SUCCESS)
+            {
+                pipeline = VK_NULL_HANDLE;
+                LOGW("renderer: the depth resolve's draw pipeline could not be made; resolving as before");
+            }
+            if (vertex) vkDestroyShaderModule(g.device, vertex, nullptr);
+            if (fragment) vkDestroyShaderModule(g.device, fragment, nullptr);
+            return pipeline;
+        }
+    }
+
+    void MakeSampledDepth(Target& target)
+    {
+        // The pipeline too, while the level loads rather than at its first frame.
+        if (!MakeDrawnLayout() || !DrawnPipeline(target.format)) return;
+        VkImageViewCreateInfo view{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+        view.image = target.image;
+        view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view.format = target.format;
+        view.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+        if (vkCreateImageView(g.device, &view, nullptr, &target.sampledView) != VK_SUCCESS)
+        {
+            target.sampledView = VK_NULL_HANDLE;
+            return;
+        }
+        VkDescriptorSetAllocateInfo allocate{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+        allocate.descriptorPool = drawn.pool;
+        allocate.descriptorSetCount = 1;
+        allocate.pSetLayouts = &drawn.setLayout;
+        if (vkAllocateDescriptorSets(g.device, &allocate, &target.sampledSet) != VK_SUCCESS)
+        {
+            LOGW("renderer: no descriptor set for a multisampled depth target; it is resolved by a rendering"
+                 " instance");
+            target.sampledSet = VK_NULL_HANDLE;
+            return;
+        }
+        VkDescriptorImageInfo image{ VK_NULL_HANDLE, target.sampledView,
+                                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
+        VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = target.sampledSet;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        write.pImageInfo = &image;
+        vkUpdateDescriptorSets(g.device, 1, &write, 0, nullptr);
+    }
+
+    void ForgetSampledDepth(Target& target)
+    {
+        if (target.sampledSet) vkFreeDescriptorSets(g.device, drawn.pool, 1, &target.sampledSet);
+        if (target.sampledView) vkDestroyImageView(g.device, target.sampledView, nullptr);
+        target.sampledSet = VK_NULL_HANDLE;
+        target.sampledView = VK_NULL_HANDLE;
+    }
+
+    // After every target's ForgetSampledDepth.
+    void DestroyDrawnResolve()
+    {
+        for (auto& [format, pipeline] : drawn.pipelines)
+            if (pipeline) vkDestroyPipeline(g.device, pipeline, nullptr);
+        if (drawn.pool) vkDestroyDescriptorPool(g.device, drawn.pool, nullptr);
+        if (drawn.layout) vkDestroyPipelineLayout(g.device, drawn.layout, nullptr);
+        if (drawn.setLayout) vkDestroyDescriptorSetLayout(g.device, drawn.setLayout, nullptr);
+        drawn = DrawnResolve{};
+    }
+
+    // ResolveDepthInto's work done by a draw; false where the pipeline is
+    // missing, and nothing recorded.
+    bool DrawDepthResolve(Target& target, VkOffset2D at, uint32_t width, uint32_t height,
+                          VkImage into, VkImageView intoView, VkImageLayout before, VkPipelineStageFlags usedBy,
+                          VkImageLayout after, VkAccessFlags readAs, VkPipelineStageFlags readBy)
+    {
+        const VkPipeline pipeline = DrawnPipeline(target.format);
+        if (!pipeline) return false;
+        const VkRect2D area{ Scaled(at, target.scale), Scaled(VkExtent2D{ width, height }, target.scale) };
+        const VkImage surface = target.image;
+        const VkDescriptorSet set = target.sampledSet;
+        const VkPipelineLayout layout = drawn.layout;
+        const VkPipelineLayout mainLayout = static_cast<VkPipelineLayout>(vk::pipeline::Layout());
+        const VkDescriptorSet mainSets[2] = { static_cast<VkDescriptorSet>(vk::textures::Set()), g.memorySet };
+        Record([=](VkCommandBuffer command) {
+            // The surface, written by the draws before, read by this one's
+            // fragment shader; `into`, last read by `usedBy`, written as depth.
+            VkImageMemoryBarrier barriers[2]{};
+            for (VkImageMemoryBarrier& b : barriers)
+            {
+                b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.subresourceRange = { kDepthAspects, 0, 1, 0, 1 };
+            }
+            barriers[0].image = surface;
+            barriers[0].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            barriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            barriers[0].oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            barriers[0].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            barriers[1].image = into;
+            barriers[1].srcAccessMask = 0;
+            barriers[1].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            barriers[1].oldLayout = before;
+            barriers[1].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            vkCmdPipelineBarrier(command, kDepthStages | usedBy,
+                                 kDepthStages | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 2, barriers);
+
+            VkRenderingAttachmentInfoKHR depth{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR };
+            depth.imageView = intoView;
+            depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            depth.loadOp = before == VK_IMAGE_LAYOUT_UNDEFINED ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
+                                                                : VK_ATTACHMENT_LOAD_OP_LOAD;
+            depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            // Nothing reads a resolved stencil.
+            VkRenderingAttachmentInfoKHR stencil = depth;
+            stencil.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            stencil.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            VkRenderingInfoKHR info{ VK_STRUCTURE_TYPE_RENDERING_INFO_KHR };
+            info.renderArea = area;
+            info.layerCount = 1;
+            info.pDepthAttachment = &depth;
+            info.pStencilAttachment = &stencil;
+            dispatch.beginRendering(command, &info);
+            vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, nullptr);
+            const VkViewport viewport{ float(area.offset.x), float(area.offset.y),
+                                       float(area.extent.width), float(area.extent.height), 0.0f, 1.0f };
+            vkCmdSetViewport(command, 0, 1, &viewport);
+            vkCmdSetScissor(command, 0, 1, &area);
+            vkCmdDraw(command, 3, 1, 0, 0);
+            dispatch.endRendering(command);
+
+            barriers[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            barriers[0].dstAccessMask = kDepthAccess | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+            barriers[0].oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            barriers[0].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            barriers[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            barriers[1].dstAccessMask = readAs;
+            barriers[1].oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            barriers[1].newLayout = after;
+            vkCmdPipelineBarrier(command, kDepthStages | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 readBy | kDepthStages | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 2, barriers);
+            // The draws' own sets, which binding another layout's set 0 disturbed.
+            vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, mainLayout,
+                                    bindings::kTextureSet, 2, mainSets, 0, nullptr);
+        });
+        // The pipeline, viewport and scissor are this draw's now.
+        g.bound = State::Bound{};
+        return true;
+    }
+
+    // The same for a depth target, whose rectangle is resolved into the twin
+    // by ResolveDepthInto.
     VkImage BeginReadingDepth(Target& target, VkOffset2D at, uint32_t width, uint32_t height)
     {
         if (target.samples == VK_SAMPLE_COUNT_1_BIT)
@@ -305,23 +703,33 @@ namespace vk::renderer::detail
     // a surface nothing was drawn at. The stencil is attached too, loaded and
     // stored, so the target's stays what it was: a view of both aspects
     // attached as depth alone would leave it to how a driver keeps the two
-    // together. Nothing reads a resolved stencil, so it is not resolved where
-    // the device allows (State::stencilUnresolved), and resolved alike where
-    // not. The target stays an attachment throughout; `into` goes from
-    // `before` (last used by `usedBy`) to `after`, for `readAs` at `readBy`.
+    // together. Nothing reads a resolved stencil, but it is resolved with the
+    // depth, the same way: Intel's Windows driver, asked for the depth alone
+    // (the stencil's mode NONE, which independentResolveNone allows), resolved
+    // no depth either (issue #37). Both at the first sample is what every 1.2
+    // device must offer. Where the device can sample the surface, a draw does
+    // the work instead (DrawDepthResolve), and the stencil costs nothing. The
+    // target stays an attachment throughout; `into` goes from `before` (last
+    // used by `usedBy`) to `after`, for `readAs` at `readBy`.
     void ResolveDepthInto(Target& target, VkOffset2D at, uint32_t width, uint32_t height,
                           VkImage into, VkImageView intoView, VkImageLayout before, VkPipelineStageFlags usedBy,
                           VkImageLayout after, VkAccessFlags readAs, VkPipelineStageFlags readBy)
     {
+        if (target.sampledSet && DrawDepthResolve(target, at, width, height, into, intoView, before, usedBy,
+                                                   after, readAs, readBy))
+            return;
         const VkImageView view = target.view;
         const VkRect2D area{ Scaled(at, target.scale), Scaled(VkExtent2D{ width, height }, target.scale) };
-        const bool stencilUnresolved = g.stencilUnresolved;
         Record([=](VkCommandBuffer command) {
-            // The draws before it wrote the depth.
+            // The draws before it wrote the depth. The resolve reads it at the
+            // colour output stage as a colour attachment read, depth or not
+            // (the render pass chapter's resolve rules), and the load as a
+            // depth one.
             VkMemoryBarrier written{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
             written.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
             written.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                    VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
             VkImageMemoryBarrier entering{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
             entering.srcAccessMask = 0;
             entering.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
@@ -346,14 +754,8 @@ namespace vk::renderer::detail
             VkRenderingInfoKHR info{ VK_STRUCTURE_TYPE_RENDERING_INFO_KHR };
             info.renderArea = area;
             info.layerCount = 1;
-            VkRenderingAttachmentInfoKHR stencil = depth;
-            if (stencilUnresolved)
-            {
-                stencil.resolveMode = VK_RESOLVE_MODE_NONE;
-                stencil.resolveImageView = VK_NULL_HANDLE;
-            }
             info.pDepthAttachment = &depth;
-            info.pStencilAttachment = &stencil;
+            info.pStencilAttachment = &depth;
             dispatch.beginRendering(command, &info);
             dispatch.endRendering(command);
 
@@ -364,8 +766,16 @@ namespace vk::renderer::detail
             leaving.dstAccessMask = readAs;
             leaving.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             leaving.newLayout = after;
+            // And the target, which stays an attachment, is next written by a
+            // draw, a clear or a transition (ClearAfterResolve), none of which
+            // waits for the colour output stage: each must come after the
+            // resolve's read of it and the store that ends the instance.
+            VkMemoryBarrier read{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+            read.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            read.dstAccessMask = kDepthAccess | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
             vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | kDepthStages,
-                                 readBy, 0, 0, nullptr, 0, nullptr, 1, &leaving);
+                                 readBy | kDepthStages | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &read, 0, nullptr,
+                                 1, &leaving);
         });
     }
 
@@ -426,7 +836,13 @@ namespace vk::renderer::detail
         const VkImageAspectFlags aspect = key.depth
             ? (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)
             : VK_IMAGE_ASPECT_COLOR_BIT;
-        if (!MakeImage(target, usage, aspect)) { Skip("render target allocation"); return nullptr; }
+        const bool sampled = key.depth && g.drawnDepthResolve && target.samples != VK_SAMPLE_COUNT_1_BIT;
+        if (!MakeImage(target, usage | (sampled ? VK_IMAGE_USAGE_SAMPLED_BIT : 0), aspect))
+        {
+            Skip("render target allocation");
+            return nullptr;
+        }
+        if (sampled) MakeSampledDepth(target);
 
         LOGI("renderer: %s target %ux%u at EDRAM tile %u (%s), %ux for the title's %ux",
              key.depth ? "depth" : "colour", target.width * target.scale, target.height * target.scale,
@@ -536,13 +952,13 @@ namespace vk::renderer::detail
         {
             const gpu::SurfaceInfo surface{ r[gpu::RB_SURFACE_INFO] };
             const gpu::DepthInfo depthInfo{ r[gpu::RB_DEPTH_INFO] };
-            if (Target* target = FindTarget(DepthKey(depthInfo.BaseTile(), uint32_t(g.depthFormat),
+            if (Target* target = FindTarget(DepthKey(depthInfo.BaseTile(), uint32_t(DepthFormatFor(depthInfo.Format())),
                                                      surface.MsaaSamples(),
                                                      PassScale(r[gpu::RB_DEPTH_INFO], surface.MsaaSamples()))))
             {
                 // The stored value is 24-bit depth with stencil in the low byte.
                 const uint32_t packed = r[gpu::RB_DEPTH_CLEAR];
-                VkClearDepthStencilValue value{ float(packed >> 8) / float(0xFFFFFF),
+                VkClearDepthStencilValue value{ DepthClearValue(depthInfo.Format(), packed),
                                                 uint32_t(packed & 0xFF) };
                 constexpr VkImageAspectFlags kBoth =
                     VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;

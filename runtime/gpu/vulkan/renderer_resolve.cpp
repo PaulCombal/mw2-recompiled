@@ -172,7 +172,7 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
     if (control.FromDepth())
     {
         const gpu::DepthInfo depthInfo{ r[gpu::RB_DEPTH_INFO] };
-        Target* from = FindTarget(DepthKey(depthInfo.BaseTile(), uint32_t(g.depthFormat),
+        Target* from = FindTarget(DepthKey(depthInfo.BaseTile(), uint32_t(DepthFormatFor(depthInfo.Format())),
                                            surface.MsaaSamples(),
                                            PassScale(r[gpu::RB_DEPTH_INFO], surface.MsaaSamples())));
         if (!from) { Skip("resolve of a depth surface never drawn into"); SubmitIfFilling(); return; }

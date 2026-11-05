@@ -4,9 +4,9 @@
 #define MW2_RELEASE_TAG ""
 #endif
 
-const char* version::Release() { return MW2_RELEASE_TAG; }
+extern "C" const char* mw2_version_release() { return MW2_RELEASE_TAG; }
 
-uint16_t version::Network()
+extern "C" uint16_t mw2_version_network()
 {
     // FNV-1a of the tag, folded to 15 bits: the title prints its protocol,
     // which carries this, as a signed number.

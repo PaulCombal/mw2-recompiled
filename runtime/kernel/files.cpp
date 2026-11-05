@@ -320,6 +320,9 @@ namespace
             const char* mode = truncate ? "w+b" : (f->writable ? "r+b" : "rb");
             f->handle = Open(resolved, mode);
             if (!f->handle) { NoteMissing(guestPath); return X_STATUS_OBJECT_NAME_NOT_FOUND; }
+            // Unbuffered: what stdio read ahead would outlive a seek into it, and a read
+            // would not see what another handle wrote since, as NT's does.
+            std::setvbuf(f->handle, nullptr, _IONBF, 0);
             f->size = truncate ? 0 : fs::file_size(resolved, ec);
             information = !existed ? FILE_CREATED
                         : truncate ? (disposition == FILE_SUPERSEDE ? FILE_SUPERSEDED : FILE_OVERWRITTEN)
@@ -345,7 +348,7 @@ void kernel::UnmountDevice(const std::string& name)
     g_mounts.erase(Lower(name));
 }
 
-void kernel::ReportMissingFiles()
+extern "C" void mw2_kernel_report_missing_files()
 {
     if constexpr (!diag::kOn) return;
     std::lock_guard g(g_missingLock);
@@ -412,9 +415,11 @@ PPC_FUNC(__imp__NtReadFile)
     {
         std::lock_guard g(file->lock);
         // C requires a positioning call between a write and a read on the same
-        // update stream; seeking to where it already is counts as one.
+        // update stream; seeking to where it already is counts as one. It also
+        // drops what stdio read ahead and its end of file, so that a read sees
+        // what another handle wrote since, as NT's does.
         if (offset >= 0) Seek(file->handle, offset);
-        else if (file->writable) std::fseek(file->handle, 0, SEEK_CUR);
+        else std::fseek(file->handle, 0, SEEK_CUR);
         // Into a buffer of our own and copied across, not read straight into
         // guest memory: a page the GPU's shadow watches is read-only, and the
         // kernel fails a read into it where a copy faults and carries on.

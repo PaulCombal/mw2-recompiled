@@ -16,10 +16,18 @@
 //
 // MW2_LOG_TIME=1 starts every line with the seconds since the first one, so a
 // line can be matched with something somebody saw on screen at that moment.
+#ifdef MW2_RUST
+// src/log.rs's, so that the Rust's lines and these count from the same moment.
+extern "C" const char* mw2_log_stamp();
+#endif
+
 namespace mw2log
 {
     inline const char* Stamp()
     {
+#ifdef MW2_RUST
+        return mw2_log_stamp();
+#else
         static const bool on = diag::Flag("MW2_LOG_TIME");
         if (!on) return "";
         static const auto start = std::chrono::steady_clock::now();
@@ -28,6 +36,7 @@ namespace mw2log
                                    std::chrono::steady_clock::now() - start).count();
         std::snprintf(text, sizeof text, "%9.3f ", seconds);
         return text;
+#endif
     }
 }
 

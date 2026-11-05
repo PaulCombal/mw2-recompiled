@@ -459,7 +459,7 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
                                           uint32_t(ColourFormatFor(colour.Format())),
                                           useSamples, false, passScale },
                                         width, height, colour.Format());
-    Target* depthTarget = EnsureTarget(DepthKey(depthInfo.BaseTile(), uint32_t(g.depthFormat),
+    Target* depthTarget = EnsureTarget(DepthKey(depthInfo.BaseTile(), uint32_t(DepthFormatFor(depthInfo.Format())),
                                                 useSamples, passScale),
                                        width, height, depthInfo.Format());
     if (!colourTarget || !depthTarget) return;

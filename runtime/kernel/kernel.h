@@ -7,42 +7,82 @@
 #include <filesystem>
 #include <functional>
 
+// The kernel is src/runtime/kernel/ in the Rust build, all but audio, and these are what it
+// gives the rest of the C++ (kernel.cpp, threads.cpp, sync_objects.cpp, files.cpp and
+// misc.cpp in the C++ build). What follows the C declarations and is not inline is the C++
+// build's alone: in the Rust build only kernel/audio.cpp is the C++'s.
+extern "C"
+{
+    void mw2_kernel_report_waits();
+    void mw2_kernel_initialise(const char* gameRoot);
+    uint32_t mw2_kernel_allocate_guest(uint32_t size, uint32_t alignment);
+    uint32_t mw2_kernel_allocate_physical(uint32_t size, uint32_t alignment);
+    bool mw2_kernel_free_guest(uint32_t address);
+    bool mw2_kernel_free_physical(uint32_t address);
+    void mw2_kernel_report_memory();
+    uint32_t mw2_kernel_create_thread_block(uint32_t threadId);
+    uint32_t mw2_kernel_new_thread_id();
+    void mw2_kernel_update_time_stamp_bundle();
+    PPCFunc* mw2_kernel_guest_function(uint32_t address);
+    void mw2_kernel_queue_user_apc(uint32_t routine, uint32_t context, uint32_t ioStatusBlock,
+                                   void (*run)(void* work), void (*discard)(void* work), void* work);
+    bool mw2_kernel_deliver_user_apcs(const PPCContext* caller);
+    void mw2_kernel_unimplemented(const char* name);
+    void mw2_kernel_report_unimplemented();
+    void mw2_kernel_report_missing_files();
+}
+
 namespace kernel
 {
     // The threads blocked in a kernel wait, and on what: for the watchdog.
-    void ReportWaits();
+    inline void ReportWaits() { mw2_kernel_report_waits(); }
 
-    void Initialise(const std::filesystem::path& gameRoot);
-    const std::filesystem::path& GameRoot();
+    // The game root is kept here as well, as files.cpp reads it as a path.
+    inline std::filesystem::path& GameRootKept()
+    {
+        static std::filesystem::path root;
+        return root;
+    }
+    inline void Initialise(const std::filesystem::path& gameRoot)
+    {
+        GameRootKept() = gameRoot;
+        mw2_kernel_initialise(reinterpret_cast<const char*>(gameRoot.u8string().c_str()));
+    }
+    inline const std::filesystem::path& GameRoot() { return GameRootKept(); }
 
-    uint32_t AllocateGuest(uint32_t size, uint32_t alignment = 16);
-    uint32_t AllocatePhysical(uint32_t size, uint32_t alignment = 4096);
+    inline uint32_t AllocateGuest(uint32_t size, uint32_t alignment = 16)
+    {
+        return mw2_kernel_allocate_guest(size, alignment);
+    }
+    inline uint32_t AllocatePhysical(uint32_t size, uint32_t alignment = 4096)
+    {
+        return mw2_kernel_allocate_physical(size, alignment);
+    }
     // False when `address` is not the start of a live allocation.
-    bool     FreeGuest(uint32_t address);
-    bool     FreePhysical(uint32_t address);
-    void     ReportMemory();
+    inline bool FreeGuest(uint32_t address) { return mw2_kernel_free_guest(address); }
+    inline bool FreePhysical(uint32_t address) { return mw2_kernel_free_physical(address); }
+    inline void ReportMemory() { mw2_kernel_report_memory(); }
 
     // Returns the value r13 must hold. The recompiled code reads the thread id
     // straight out of these structures (KPCR.CurrentThread -> KTHREAD.ThreadId),
     // so they have to be populated or every thread reports id 0.
-    uint32_t CreateThreadBlock(uint32_t threadId);
+    inline uint32_t CreateThreadBlock(uint32_t threadId) { return mw2_kernel_create_thread_block(threadId); }
     // A fresh id from the same sequence guest threads draw on, for a host
     // thread that runs guest code (the audio worker).
-    uint32_t NewThreadId();
+    inline uint32_t NewThreadId() { return mw2_kernel_new_thread_id(); }
+
+    // 100ns ticks since 1601-01-01, the epoch the console reports: misc.cpp, the C++
+    // build's alone.
+    uint64_t SystemTime100ns();
 
     // The kernel publishes a small block of clock values the title reads directly
     // rather than through a call. It arrives as a data import, which nothing
-    // resolves, so it has to be created and kept ticking here. 100ns ticks since
-    // 1601-01-01, the epoch the console reports.
-    uint64_t SystemTime100ns();
-
-    void InstallTimeStampBundle();
-    void InstallDebugMonitorData();
-    void UpdateTimeStampBundle();
+    // resolves, so it is created at Initialise and kept ticking by this.
+    inline void UpdateTimeStampBundle() { mw2_kernel_update_time_stamp_bundle(); }
 
     // The recompiled function at a guest address, or null when the address is
     // outside the image's code or has no function starting there.
-    PPCFunc* GuestFunction(uint32_t address);
+    inline PPCFunc* GuestFunction(uint32_t address) { return mw2_kernel_guest_function(address); }
 
     // The nth argument (from 0) of a guest call, for the ones past the eight that
     // arrive in r3-r10: the caller's parameter save area starts at r1+0x14 with
@@ -52,10 +92,6 @@ namespace kernel
         return *reinterpret_cast<const be32*>(guest::Base() + ctx.r1.u32 + 0x14 + n * 8);
     }
 
-    // Borrows the caller's stack below its frame.
-    void CallGuest(const PPCContext& caller, uint32_t address,
-                   uint32_t a0 = 0, uint32_t a1 = 0, uint32_t a2 = 0);
-
     // User APCs. The title issues asynchronous reads and does its accounting in a
     // completion routine, which NT delivers only when the issuing thread enters an
     // alertable wait -- never inside the call that queued it.
@@ -64,9 +100,17 @@ namespace kernel
     // put the transfer itself there: the title double-buffers on the assumption
     // that a read it has issued is still in flight while it decompresses the other
     // buffer, so filling the buffer at issue time corrupts what it is reading.
-    void QueueUserApc(uint32_t routine, uint32_t context, uint32_t ioStatusBlock,
-                      std::function<void()> work = {});
-    bool DeliverUserApcs(const PPCContext& caller);
+    inline void QueueUserApc(uint32_t routine, uint32_t context, uint32_t ioStatusBlock,
+                             std::function<void()> work = {})
+    {
+        using Work = std::function<void()>;
+        auto* kept = work ? new Work(std::move(work)) : nullptr;
+        mw2_kernel_queue_user_apc(
+            routine, context, ioStatusBlock,
+            [](void* w) { auto* one = static_cast<Work*>(w); (*one)(); delete one; },
+            [](void* w) { delete static_cast<Work*>(w); }, kept);
+    }
+    inline bool DeliverUserApcs(const PPCContext& caller) { return mw2_kernel_deliver_user_apcs(&caller); }
 
     // XOVERLAPPED. Asynchronous XAM calls take one and the caller polls it, so a
     // call that completes inline still has to mark it finished and signal the
@@ -90,7 +134,9 @@ namespace kernel
     // STFS container format.
     void MountDevice(const std::string& name, const std::filesystem::path& root);
     void UnmountDevice(const std::string& name);
-    const std::filesystem::path& SaveRoot();
+    // Beside the runtime, not inside the game root: the game root is the disc. The same
+    // as src/runtime/kernel/content.rs's.
+    inline std::filesystem::path SaveRoot() { return "saves"; }
     // What is kept under a player's number -- his rank, offline and Live, and
     // the settings of a profile at the second to fourth controllers -- renamed
     // to another number, where that one has none yet (kernel/xam.cpp).
@@ -117,14 +163,17 @@ namespace kernel
     void NoteSessionLag(const void* id8, uint32_t milliseconds);
     // Puts a service's id for a peer into a 36-byte XNADDR.
     void SetXnAddrPeer(void* addr36, uint64_t peer);
+    // Bytes from a random source, for XNetRandom and the sessions this machine
+    // makes (kernel/kernel.cpp).
+    void RandomBytes(void* out, size_t size);
 
     // Once a frame: hands the title the searches that finished.
     void FinishSearches();
 
     // Called by generated stubs; logs the first hit and counts the rest.
-    void Unimplemented(const char* name);
+    inline void Unimplemented(const char* name) { mw2_kernel_unimplemented(name); }
 
     // End-of-run reports.
-    void ReportUnimplemented();
-    void ReportMissingFiles();
+    inline void ReportUnimplemented() { mw2_kernel_report_unimplemented(); }
+    inline void ReportMissingFiles() { mw2_kernel_report_missing_files(); }
 }

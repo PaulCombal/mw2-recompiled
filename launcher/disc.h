@@ -1,6 +1,6 @@
 #pragma once
 // Where the installer reads the game from: an Xbox 360 disc image (XDVDFS, as
-// tools/xdvdfs.py reads it) or a folder a disc was already extracted to.
+// xtask/src/xdvdfs.rs reads it) or a folder a disc was already extracted to.
 #include <cstdint>
 #include <filesystem>
 #include <memory>

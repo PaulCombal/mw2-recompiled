@@ -539,4 +539,4 @@ namespace
 }
 
 std::unique_ptr<online::Transport> online::MakeServerTransport() { return std::make_unique<Server>(); }
-std::unique_ptr<online::Service> online::MakeServer() { return MakePlayers(MakeServerTransport()); }
+std::unique_ptr<online::Backend> online::MakeServer() { return MakePlayers(MakeServerTransport()); }

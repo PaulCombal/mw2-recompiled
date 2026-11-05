@@ -29,9 +29,14 @@ namespace vk::shaders
 
 namespace vk::shaders
 {
-    // The depth and stencil format the renderer draws with on this device:
-    // D24S8 where there is one (AMD has none), else D32S8. Undefined if neither.
+    // The depth and stencil format of the title's D24S8 surfaces on this
+    // device: D24S8 where it can be drawn into and sampled (AMD has none),
+    // else D32S8. Undefined if neither. The shader libraries are built with it.
     VkFormat DepthFormat(VkPhysicalDevice physical);
+    // The format of its D24FS8 surfaces, the shadow maps: D32S8, as Xenia has
+    // it, since a float depth keeps its precision and its depth bias only in
+    // a float format. DepthFormat's if the device cannot draw into D32S8.
+    VkFormat FloatDepthFormat(VkPhysicalDevice physical);
     // MW2_SCALE as the device can draw it: a surface is at most 4096 of the
     // title's pixels either way, and must fit one of the device's images.
     uint32_t Scale(VkPhysicalDevice physical, uint32_t asked);

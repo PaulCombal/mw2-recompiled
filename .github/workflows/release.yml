@@ -36,6 +36,8 @@ jobs:
       CCACHE_COMPILERCHECK: content
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Check out the game's executables
         uses: actions/checkout@v6
@@ -74,6 +76,10 @@ jobs:
           sudo cmake --install Vulkan-Headers/build
           rm -rf Vulkan-Headers llvm.sh
 
+      - name: Install the Rust toolchain
+        # The one rust-toolchain.toml pins, which runs the xtask.
+        run: rustup toolchain install
+
       - name: Restore the compiler cache
         uses: actions/cache@v5
         with:
@@ -86,12 +92,14 @@ jobs:
 
       - name: Build
         run: |
-          export CMAKE_EXTRA="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DFETCHCONTENT_BASE_DIR=$PWD/out/_deps -DMW2_LTO_CACHE=$PWD/.lto-cache"
+          extra=(--cmake-extra=-DCMAKE_C_COMPILER_LAUNCHER=ccache --cmake-extra=-DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+                 --cmake-extra=-DFETCHCONTENT_BASE_DIR=$PWD/out/_deps --cmake-extra=-DMW2_LTO_CACHE=$PWD/.lto-cache)
           # The launcher is the same for both titles, and the tools are not shipped:
           # the campaign's build makes the game and the launcher, the multiplayer's the game.
           for title in sp mp; do
             targets="mw2"; [ $title = sp ] && targets="mw2 launcher"
-            TITLE=$title RELEASE=1 RELEASE_TAG=${{ inputs.version }} BUILD_DIR=out/$title TARGETS="$targets" ./build.sh
+            cargo xtask build --cpp --title $title --release --release-tag ${{ inputs.version }} --build-dir out/$title \
+              --targets "$targets" "${extra[@]}"
           done
           ccache --show-stats
 
@@ -131,6 +139,8 @@ jobs:
       LLVM_MINGW_RELEASE: "20260922"
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Check out the game's executables
         uses: actions/checkout@v6
@@ -149,12 +159,16 @@ jobs:
       - name: Install the toolchains
         run: |
           sudo apt-get update
-          # clang-18 builds XenonRecomp, which runs here; llvm-mingw builds the game.
+          # clang-18 builds XenonRecomp, which runs here, and the xtask's link; llvm-mingw builds the game.
           sudo apt-get install -y clang-18 lld-18 ninja-build ccache zip
           name=llvm-mingw-$LLVM_MINGW_RELEASE-ucrt-ubuntu-22.04-x86_64
           wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_RELEASE/$name.tar.xz
           tar xf $name.tar.xz -C $HOME && rm $name.tar.xz
           echo "LLVM_MINGW=$HOME/$name" >> "$GITHUB_ENV"
+
+      - name: Install the Rust toolchain
+        # The one rust-toolchain.toml pins, which runs the xtask.
+        run: rustup toolchain install
 
       - name: Restore the compiler cache
         uses: actions/cache@v5
@@ -168,12 +182,14 @@ jobs:
 
       - name: Build
         run: |
-          export CMAKE_EXTRA="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DFETCHCONTENT_BASE_DIR=$PWD/out/_deps -DMW2_LTO_CACHE=$PWD/.lto-cache"
+          extra=(--cmake-extra=-DCMAKE_C_COMPILER_LAUNCHER=ccache --cmake-extra=-DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+                 --cmake-extra=-DFETCHCONTENT_BASE_DIR=$PWD/out/_deps --cmake-extra=-DMW2_LTO_CACHE=$PWD/.lto-cache)
           # The launcher is the same for both titles, and the tools are not shipped:
           # the campaign's build makes the game and the launcher, the multiplayer's the game.
           for title in sp mp; do
             targets="mw2"; [ $title = sp ] && targets="mw2 launcher"
-            WINDOWS=1 TITLE=$title RELEASE=1 RELEASE_TAG=${{ inputs.version }} BUILD_DIR=out/$title TARGETS="$targets" ./build.sh
+            cargo xtask build --cpp --windows --title $title --release --release-tag ${{ inputs.version }} --build-dir out/$title \
+              --targets "$targets" "${extra[@]}"
           done
           ccache --show-stats
 

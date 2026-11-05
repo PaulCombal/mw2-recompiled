@@ -1,3 +1,4 @@
+// The C++ build's online service (src/runtime/online/mod.rs is the Rust build's).
 #include "service.h"
 #include "../console.h"
 #include "../env.h"
@@ -9,18 +10,18 @@
 namespace
 {
     // A backend and those tried after it when it does not start.
-    struct Backend
+    struct Choice
     {
         const char* name;
-        std::unique_ptr<online::Service> (*make)();
+        std::unique_ptr<online::Backend> (*make)();
     };
-    constexpr Backend kLan[] = { { "lan", online::MakeLan }, { nullptr, nullptr } };
-    constexpr Backend kServer[] = { { "server", online::MakeServer }, { nullptr, nullptr } };
-    constexpr Backend kSteam[] = { { "steam", online::MakeSteam }, { "lan", online::MakeLan }, { nullptr, nullptr } };
-    constexpr Backend kNone[] = { { nullptr, nullptr } };
+    constexpr Choice kLan[] = { { "lan", online::MakeLan }, { nullptr, nullptr } };
+    constexpr Choice kServer[] = { { "server", online::MakeServer }, { nullptr, nullptr } };
+    constexpr Choice kSteam[] = { { "steam", online::MakeSteam }, { "lan", online::MakeLan }, { nullptr, nullptr } };
+    constexpr Choice kNone[] = { { nullptr, nullptr } };
 
     // MW2_NETWORK: what the player chose; none when unset or unknown.
-    const Backend* Chosen()
+    const Choice* Chosen()
     {
         const char* network = env::Text("MW2_NETWORK");
         if (!network || !*network || std::strcmp(network, "none") == 0) return kNone;
@@ -32,10 +33,10 @@ namespace
     }
 }
 
-bool online::EnterServiceNamespace(int& exitCode)
+extern "C" bool mw2_online_enter_namespace(int* exitCode)
 {
     if (Chosen() != kSteam) return true;
-    return EnterSteamNamespace(exitCode);
+    return online::EnterSteamNamespace(*exitCode);
 }
 
 namespace
@@ -43,12 +44,12 @@ namespace
     const char* g_name = nullptr;   // the backend that started
 }
 
-online::Service* online::Get()
+online::Backend* online::GetBackend()
 {
-    static Service* const service = [] {
-        static std::unique_ptr<Service> made;
-        const Backend* const chosen = Chosen();
-        for (const Backend* backend = chosen; backend->make; backend++)
+    static Backend* const service = [] {
+        static std::unique_ptr<Backend> made;
+        const Choice* const chosen = Chosen();
+        for (const Choice* backend = chosen; backend->make; backend++)
         {
             made = backend->make();
             if (made->Start())
@@ -62,21 +63,23 @@ online::Service* online::Get()
         }
         if (chosen->make) LOGW("online: no service started; the title stays offline");
         else LOGI("online: no network chosen; system link stays on this machine");
-        return static_cast<Service*>(nullptr);
+        return static_cast<Backend*>(nullptr);
     }();
     return service;
 }
 
+extern "C" bool mw2_online_started() { return online::GetBackend() != nullptr; }
+
 const char* online::Name()
 {
-    Get();
+    online::GetBackend();
     return g_name;
 }
 
 bool online::Live()
 {
     static const bool live = [] {
-        auto* service = Get();
+        auto* service = online::GetBackend();
         return service && service->Lobbies();
     }();
     return live;
@@ -129,10 +132,10 @@ namespace
 
 void online::Frame()
 {
-    auto* service = Get();
+    auto* service = online::GetBackend();
     if (!service) return;
     kernel::FinishSearches();
-    Invite invite;
+    online::Invite invite;
     if (service->NextInvite(invite))
     {
         LOGI("online: joining a friend's Xbox LIVE %s", invite.fromInvite ? "invitation" : "session");

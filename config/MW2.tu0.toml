@@ -1,7 +1,10 @@
-# The disc's default.xex (VERSION=tu0 ./build.sh); MW2.toml is title update 6's.
+# The disc's default.xex (cargo xtask build --tu0); MW2.toml is title update 6's.
 [main]
 file_path = "../mw2/tu0/default.xex"
 out_directory_path = "../ppc_tu0"
+# The Rust backend's chunk crates: as many in each title and version (the
+# multiplayer's 113), so that the Cargo.lock kept in the repository fits them all.
+rust_chunk_count = 113
 switch_table_file_path = "mw2_switch_tables.tu0.toml"
 
 skip_lr = false
@@ -9,7 +12,7 @@ skip_msr = false
 # Registers are host locals, which the compiler keeps in host registers,
 # rather than fields of the context in memory. The few functions a value
 # reaches or leaves in a register the calling convention does not carry keep
-# them in the context (register_flow.cpp, patches/xenonrecomp-mw2.patch).
+# them in the context (register_flow.cpp in XenonRecomp-rs).
 ctr_as_local = true
 xer_as_local = true
 reserved_as_local = true

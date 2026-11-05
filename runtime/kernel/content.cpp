@@ -83,13 +83,6 @@ namespace
     }
 }
 
-const fs::path& kernel::SaveRoot()
-{
-    // Beside the runtime, not inside the game root: the game root is the disc.
-    static const fs::path root = fs::path("saves");
-    return root;
-}
-
 // Memcard_InitializeSystem. The table is clear when it returns, so this is the
 // moment to answer the question the prompt would ask.
 GUEST_HOOK(T_Memcard_InitializeSystem)

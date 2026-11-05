@@ -10,11 +10,14 @@
 #include <atomic>
 #include <algorithm>
 #include <cstring>
+#include <random>
+#include <utility>
+
+// The physical heap's top, which physical.h reads inline.
+extern "C" uint32_t mw2_kernel_physical_top = guest::kPhysicalBase;
 
 namespace
 {
-    std::filesystem::path g_gameRoot;
-
     // A range of guest address space. Freed blocks are kept, merged with
     // their neighbours and handed out again first-fit, and zeroed when they
     // are, as the console's pages come; the rest is carved off the top, which
@@ -23,13 +26,13 @@ namespace
     {
         const char* name;
         const uint32_t end;
-        std::atomic<uint32_t> top;
+        std::atomic_ref<uint32_t> top;
         std::mutex lock;
         std::map<uint32_t, uint32_t> live, free;   // address -> size
         uint64_t allocations = 0, reused = 0, liveBytes = 0;
 
-        Heap(const char* heapName, uint32_t base, uint32_t limit)
-            : name(heapName), end(limit), top(base) {}
+        Heap(const char* heapName, uint32_t& topWord, uint32_t limit)
+            : name(heapName), end(limit), top(topWord) {}
 
         uint32_t Alloc(uint32_t size, uint32_t align)
         {
@@ -101,8 +104,9 @@ namespace
         }
     };
 
-    Heap g_heap{ "virtual", guest::kHeapBase, guest::kHeapEnd };
-    Heap g_phys{ "physical", guest::kPhysicalBase, guest::kPhysicalEnd };
+    uint32_t g_heapTop = guest::kHeapBase;
+    Heap g_heap{ "virtual", g_heapTop, guest::kHeapEnd };
+    Heap g_phys{ "physical", mw2_kernel_physical_top, guest::kPhysicalEnd };
 
     struct TlsTemplate { uint32_t address = 0, size = 0; };
     TlsTemplate g_tlsTemplate;
@@ -142,24 +146,27 @@ namespace
 
 const TlsTemplate& ImageTlsTemplate() { return g_tlsTemplate; }
 
-void kernel::Initialise(const std::filesystem::path& gameRoot)
+namespace
+{
+    void InstallTimeStampBundle();
+    void InstallDebugMonitorData();
+}
+
+extern "C" void mw2_kernel_initialise(const char* gameRoot)
 {
     ReadTlsDirectory();
     InstallTimeStampBundle();
     InstallDebugMonitorData();
-    g_gameRoot = gameRoot;
-    LOGI("game root: %s%s", gameRoot.string().c_str(),
-         std::filesystem::exists(gameRoot) ? "" : "  (does not exist)");
+    const std::filesystem::path root(std::u8string(reinterpret_cast<const char8_t*>(gameRoot)));
+    LOGI("game root: %s%s", gameRoot, std::filesystem::exists(root) ? "" : "  (does not exist)");
 }
 
-const std::filesystem::path& kernel::GameRoot() { return g_gameRoot; }
+extern "C" uint32_t mw2_kernel_allocate_guest(uint32_t size, uint32_t alignment) { return g_heap.Alloc(size, alignment); }
+extern "C" uint32_t mw2_kernel_allocate_physical(uint32_t size, uint32_t alignment) { return g_phys.Alloc(size, alignment); }
+extern "C" bool     mw2_kernel_free_guest(uint32_t address) { return g_heap.Free(address); }
+extern "C" bool     mw2_kernel_free_physical(uint32_t address) { return g_phys.Free(address); }
 
-uint32_t kernel::AllocateGuest(uint32_t size, uint32_t alignment) { return g_heap.Alloc(size, alignment); }
-uint32_t kernel::AllocatePhysical(uint32_t size, uint32_t alignment) { return g_phys.Alloc(size, alignment); }
-bool     kernel::FreeGuest(uint32_t address) { return g_heap.Free(address); }
-bool     kernel::FreePhysical(uint32_t address) { return g_phys.Free(address); }
-
-void kernel::ReportMemory()
+extern "C" void mw2_kernel_report_memory()
 {
     if constexpr (!diag::kOn) return;
     g_heap.Report();
@@ -192,49 +199,49 @@ namespace
     {
         return (value >> 24) == 0 && (value & 0xFFFF) != 0 && value < 0x01000000;
     }
-}
 
-void kernel::InstallTimeStampBundle()
-{
-    uint32_t existing = *GuestPtr<be32>(kTimeStampBundlePointer);
-    if (!LooksLikeUnresolvedImport(existing))
+    void InstallTimeStampBundle()
     {
-        LOGW("time stamp bundle: %08X already holds %08X, not an unresolved import -- leaving it alone",
-             kTimeStampBundlePointer, existing);
-        return;
+        uint32_t existing = *GuestPtr<be32>(kTimeStampBundlePointer);
+        if (!LooksLikeUnresolvedImport(existing))
+        {
+            LOGW("time stamp bundle: %08X already holds %08X, not an unresolved import -- leaving it alone",
+                 kTimeStampBundlePointer, existing);
+            return;
+        }
+
+        g_timeStampBundle = kernel::AllocateGuest(sizeof(TimeStampBundle), 16);
+        if (!g_timeStampBundle) { LOGE("could not allocate the time stamp bundle"); return; }
+        std::memset(guest::Base() + g_timeStampBundle, 0, sizeof(TimeStampBundle));
+        *GuestPtr<be32>(kTimeStampBundlePointer) = g_timeStampBundle;
+        g_bootTime = std::chrono::steady_clock::now();
+        kernel::UpdateTimeStampBundle();
     }
 
-    g_timeStampBundle = AllocateGuest(sizeof(TimeStampBundle), 16);
-    if (!g_timeStampBundle) { LOGE("could not allocate the time stamp bundle"); return; }
-    std::memset(guest::Base() + g_timeStampBundle, 0, sizeof(TimeStampBundle));
-    *GuestPtr<be32>(kTimeStampBundlePointer) = g_timeStampBundle;
-    g_bootTime = std::chrono::steady_clock::now();
-    UpdateTimeStampBundle();
-}
-
-// KeDebugMonitorData: a pointer to the debug monitor's dispatch table, null on
-// a retail console. XAudio2's mixer reads it on every pass and, when the word
-// it points at is not zero, calls a method through it -- so left as an import
-// record it points into the low guest space, and whatever the title happens
-// to have written there (handles handed back as object pointers live there)
-// becomes a call target.
-void kernel::InstallDebugMonitorData()
-{
-    constexpr uint32_t kPointer = T_DATA_DebugMonitorPtr;
-    constexpr uint32_t kOrdinal = 0x59;
-    uint32_t existing = *GuestPtr<be32>(kPointer);
-    if (!LooksLikeUnresolvedImport(existing) || (existing & 0xFFFF) != kOrdinal)
+    // KeDebugMonitorData: a pointer to the debug monitor's dispatch table, null on
+    // a retail console. XAudio2's mixer reads it on every pass and, when the word
+    // it points at is not zero, calls a method through it -- so left as an import
+    // record it points into the low guest space, and whatever the title happens
+    // to have written there (handles handed back as object pointers live there)
+    // becomes a call target.
+    void InstallDebugMonitorData()
     {
-        LOGW("debug monitor data: %08X holds %08X, not the import record -- leaving it alone", kPointer, existing);
-        return;
+        constexpr uint32_t kPointer = T_DATA_DebugMonitorPtr;
+        constexpr uint32_t kOrdinal = 0x59;
+        uint32_t existing = *GuestPtr<be32>(kPointer);
+        if (!LooksLikeUnresolvedImport(existing) || (existing & 0xFFFF) != kOrdinal)
+        {
+            LOGW("debug monitor data: %08X holds %08X, not the import record -- leaving it alone", kPointer, existing);
+            return;
+        }
+        uint32_t word = kernel::AllocateGuest(16, 16);
+        if (!word) { LOGE("could not allocate the debug monitor word"); return; }
+        *GuestPtr<be32>(word) = 0;
+        *GuestPtr<be32>(kPointer) = word;
     }
-    uint32_t word = AllocateGuest(16, 16);
-    if (!word) { LOGE("could not allocate the debug monitor word"); return; }
-    *GuestPtr<be32>(word) = 0;
-    *GuestPtr<be32>(kPointer) = word;
 }
 
-void kernel::UpdateTimeStampBundle()
+extern "C" void mw2_kernel_update_time_stamp_bundle()
 {
     if (!g_timeStampBundle) return;
     auto* bundle = GuestPtr<TimeStampBundle>(g_timeStampBundle);
@@ -242,33 +249,12 @@ void kernel::UpdateTimeStampBundle()
     const uint64_t hundredNanoseconds =
         uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count() / 100);
     bundle->interruptTime = hundredNanoseconds;
-    bundle->systemTime = SystemTime100ns();
+    bundle->systemTime = kernel::SystemTime100ns();
     bundle->tickCount = uint32_t(
         std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
 }
 
-uint32_t kernel::PhysicalHighWater() { return g_phys.HighWater(); }
-
-uint32_t kernel::ToPhysical(uint32_t va)
-{
-    // Exactly the sequence the title inlines around its Vd* calls:
-    //   phys = (va & 0x1FFFFFFF) + (((va >> 20) + 0x200) & 0x1000)
-    return (va & 0x1FFFFFFFu) + ((((va >> 20) + 0x200u) & 0x1000u));
-}
-
-uint32_t kernel::FromPhysical(uint32_t phys)
-{
-    // Ambiguous in principle -- on hardware 0x8xxxxxxx and 0xAxxxxxxx are two
-    // views of the same RAM, while here they are separate arenas. Everything the
-    // GPU is handed comes from the physical arena, so try that first.
-    uint32_t arena = guest::kPhysicalBase + phys;
-    if (phys < (g_phys.HighWater() - guest::kPhysicalBase)) return arena;
-    uint32_t cached = 0x80000000u + phys;
-    if (cached >= 0x82000000u && cached < guest::kHeapEnd) return cached;
-    return 0;
-}
-
-uint32_t kernel::CreateThreadBlock(uint32_t threadId)
+extern "C" uint32_t mw2_kernel_create_thread_block(uint32_t threadId)
 {
     // [block .. block+0x8000) is the KPCR, with r13 pointing 0x4000 in so the
     // negative r13-relative offsets the game uses stay inside it. The KTHREAD
@@ -282,7 +268,7 @@ uint32_t kernel::CreateThreadBlock(uint32_t threadId)
     constexpr uint32_t kThreadIdOffset      = 332;   // KTHREAD.ThreadId
 
     const uint32_t total = kPcrSize + kThreadSize + kTlsSize;
-    uint32_t block = AllocateGuest(total, 0x1000);
+    uint32_t block = kernel::AllocateGuest(total, 0x1000);
     if (!block) return 0;
     std::memset(guest::Base() + block, 0, total);
 
@@ -303,7 +289,7 @@ uint32_t kernel::CreateThreadBlock(uint32_t threadId)
     return pcr;
 }
 
-void kernel::Unimplemented(const char* name)
+extern "C" void mw2_kernel_unimplemented(const char* name)
 {
     std::lock_guard g(g_unimplLock);
     auto [it, inserted] = g_unimpl.try_emplace(name, 0);
@@ -311,78 +297,101 @@ void kernel::Unimplemented(const char* name)
     if (inserted) LOGW("unimplemented: %s", name);
 }
 
-void kernel::ReportUnimplemented()
+extern "C" void mw2_kernel_report_unimplemented()
 {
     if constexpr (!diag::kOn) return;
     std::lock_guard g(g_unimplLock);
     if (g_unimpl.empty()) { LOGI("no unimplemented imports were reached"); return; }
     std::vector<std::pair<std::string, uint64_t>> v(g_unimpl.begin(), g_unimpl.end());
-    std::sort(v.begin(), v.end(), [](auto& a, auto& b){ return a.second > b.second; });
+    std::stable_sort(v.begin(), v.end(), [](auto& a, auto& b){ return a.second > b.second; });
     LOGI("unimplemented imports actually reached (%zu distinct):", v.size());
     for (auto& [name, count] : v) LOGI("  %8llu  %s", (unsigned long long)count, name.c_str());
 }
 
-PPCFunc* kernel::GuestFunction(uint32_t address)
+extern "C" PPCFunc* mw2_kernel_guest_function(uint32_t address)
 {
     if (address < PPC_CODE_BASE || address >= PPC_CODE_BASE + PPC_CODE_SIZE) return nullptr;
     return PPC_LOOKUP_FUNC(guest::Base(), address);
 }
 
-void kernel::CallGuest(const PPCContext& caller, uint32_t address,
-                       uint32_t a0, uint32_t a1, uint32_t a2)
-{
-    PPCFunc* fn = GuestFunction(address);
-    if (!fn) { LOGW("CallGuest: no recompiled function at %08X", address); return; }
-
-    PPCContext ctx{};
-    std::memset(&ctx, 0, sizeof(ctx));
-    // Leave the caller's frame and its 64-byte red zone untouched.
-    ctx.r1.u32  = (caller.r1.u32 - 0x400) & ~0xFu;
-    ctx.r13.u32 = caller.r13.u32;
-    ctx.r3.u32  = a0;
-    ctx.r4.u32  = a1;
-    ctx.r5.u32  = a2;
-    // The caller's code keeps its own idea of the float mode (whether
-    // denormals flush: on for vector code, off for scalar) and only switches
-    // when it thinks the mode differs. The console keeps the two in separate
-    // registers, FPSCR and VSCR; x86 has one, MXCSR, and the recompiled code
-    // tracks which it last set. A routine run here in a context of its own can
-    // leave MXCSR switched -- vector code turns flushing on -- and the caller,
-    // believing it off, would flush every tiny value its scalar code makes from
-    // then on. So the caller gets the register back as it left it.
-    const uint32_t before = ctx.fpscr.getcsr();
-    ctx.fpscr.loadFromHost();
-    fn(ctx, guest::Base());
-    if (ctx.fpscr.getcsr() != before) ctx.fpscr.setcsr(before);
-}
-
 namespace
 {
+    // Borrows the caller's stack below its frame.
+    void CallGuest(const PPCContext& caller, uint32_t address,
+                   uint32_t a0 = 0, uint32_t a1 = 0, uint32_t a2 = 0)
+    {
+        PPCFunc* fn = kernel::GuestFunction(address);
+        if (!fn) { LOGW("CallGuest: no recompiled function at %08X", address); return; }
+
+        PPCContext ctx{};
+        std::memset(&ctx, 0, sizeof(ctx));
+        // Leave the caller's frame and its 64-byte red zone untouched.
+        ctx.r1.u32  = (caller.r1.u32 - 0x400) & ~0xFu;
+        ctx.r13.u32 = caller.r13.u32;
+        ctx.r3.u32  = a0;
+        ctx.r4.u32  = a1;
+        ctx.r5.u32  = a2;
+        // The caller's code keeps its own idea of the float mode (whether
+        // denormals flush: on for vector code, off for scalar) and only switches
+        // when it thinks the mode differs. The console keeps the two in separate
+        // registers, FPSCR and VSCR; x86 has one, MXCSR, and the recompiled code
+        // tracks which it last set. A routine run here in a context of its own can
+        // leave MXCSR switched -- vector code turns flushing on -- and the caller,
+        // believing it off, would flush every tiny value its scalar code makes from
+        // then on. So the caller gets the register back as it left it.
+        const uint32_t before = ctx.fpscr.getcsr();
+        ctx.fpscr.loadFromHost();
+        fn(ctx, guest::Base());
+        if (ctx.fpscr.getcsr() != before) ctx.fpscr.setcsr(before);
+    }
+
+    // The C++'s work for an APC (kernel.h): run once, or else discarded with
+    // the thread's queue.
+    struct Work
+    {
+        void (*run)(void*) = nullptr;
+        void (*discard)(void*) = nullptr;
+        void* work = nullptr;
+        Work() = default;
+        Work(void (*r)(void*), void (*d)(void*), void* w) : run(r), discard(d), work(w) {}
+        Work(Work&& other) noexcept : run(other.run), discard(other.discard), work(other.work) { other.work = nullptr; }
+        Work& operator=(Work&& other) noexcept { std::swap(run, other.run); std::swap(discard, other.discard); std::swap(work, other.work); return *this; }
+        ~Work() { if (work) discard(work); }
+        void Run() { if (void* w = std::exchange(work, nullptr)) run(w); }
+    };
+
     struct PendingApc
     {
         uint32_t routine, context, ioStatusBlock;
-        std::function<void()> work;
+        Work work;
     };
     thread_local std::vector<PendingApc> t_apcs;
 }
 
-void kernel::QueueUserApc(uint32_t routine, uint32_t context, uint32_t ioStatusBlock,
-                          std::function<void()> work)
+extern "C" void mw2_kernel_queue_user_apc(uint32_t routine, uint32_t context, uint32_t ioStatusBlock,
+                                          void (*run)(void*), void (*discard)(void*), void* work)
 {
-    if (!routine) { if (work) work(); return; }
-    t_apcs.push_back({ routine, context, ioStatusBlock, std::move(work) });
+    Work kept(run, discard, work);
+    if (!routine) { kept.Run(); return; }
+    t_apcs.push_back({ routine, context, ioStatusBlock, std::move(kept) });
 }
 
-bool kernel::DeliverUserApcs(const PPCContext& caller)
+extern "C" bool mw2_kernel_deliver_user_apcs(const PPCContext* caller)
 {
     if (t_apcs.empty()) return false;
     // An APC may queue more work, so drain rather than iterate.
     std::vector<PendingApc> batch;
     batch.swap(t_apcs);
-    for (const auto& a : batch)
+    for (auto& a : batch)
     {
-        if (a.work) a.work();
-        CallGuest(caller, a.routine, a.context, a.ioStatusBlock, 0);
+        a.work.Run();
+        CallGuest(*caller, a.routine, a.context, a.ioStatusBlock, 0);
     }
     return true;
+}
+
+void kernel::RandomBytes(void* out, size_t size)
+{
+    thread_local std::mt19937 rng{ std::random_device{}() };
+    for (size_t i = 0; i < size; i++) static_cast<uint8_t*>(out)[i] = uint8_t(rng());
 }

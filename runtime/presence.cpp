@@ -169,7 +169,7 @@ namespace
 
 // The XLAST is read at the title's first context, on its thread, rather than
 // when the guide first draws.
-void presence::SetContext(uint32_t user, uint32_t id, uint32_t value)
+extern "C" void mw2_presence_set_context(uint32_t user, uint32_t id, uint32_t value)
 {
     if (user >= kUsers) return;
     std::lock_guard lock(g_lock);
@@ -177,8 +177,10 @@ void presence::SetContext(uint32_t user, uint32_t id, uint32_t value)
     g_contexts[user][id] = value;
 }
 
-std::string presence::Text(uint32_t user)
+namespace
 {
+    std::string TextFor(uint32_t user)
+    {
     if (user >= kUsers) return {};
     std::lock_guard lock(g_lock);
     const auto& set = g_contexts[user];
@@ -209,4 +211,11 @@ std::string presence::Text(uint32_t user)
         at += value.size();
     }
     return line;
+}
+}
+
+extern "C" void mw2_presence_text(uint32_t user, void* line, mw2_text_sink sink)
+{
+    const std::string text = TextFor(user);
+    sink(line, text.data(), text.size());
 }

@@ -10,12 +10,24 @@
 // says.
 #include <cstdint>
 #include <string>
+#include "text_sink.h"
+
+extern "C"
+{
+    void mw2_presence_set_context(uint32_t user, uint32_t id, uint32_t value);
+    void mw2_presence_text(uint32_t user, void* line, mw2_text_sink sink);
+}
 
 namespace presence
 {
-    void SetContext(uint32_t user, uint32_t id, uint32_t value);
+    inline void SetContext(uint32_t user, uint32_t id, uint32_t value) { mw2_presence_set_context(user, id, value); }
 
     // The line for the player at this controller; empty before the title set
     // a mode, or where the image has no XLAST.
-    std::string Text(uint32_t user);
+    inline std::string Text(uint32_t user)
+    {
+        std::string line;
+        mw2_presence_text(user, &line, mw2_assign_text);
+        return line;
+    }
 }

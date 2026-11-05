@@ -40,7 +40,7 @@ namespace
     }
 }
 
-bool shadows::IsShadowMapDepth(uint32_t depthInfo, uint32_t samples)
+extern "C" bool mw2_shadows_is_map_depth(uint32_t depthInfo, uint32_t samples)
 {
 #ifdef T_DATA_RenderTargets
     const uint32_t asked = Identity(depthInfo, samples);
@@ -59,7 +59,7 @@ bool shadows::IsShadowMapDepth(uint32_t depthInfo, uint32_t samples)
     return false;
 }
 
-uint32_t shadows::SurfaceHeight()
+extern "C" uint32_t mw2_shadows_surface_height()
 {
     uint32_t tallest = 0;
 #ifdef T_DATA_RenderTargets
@@ -69,7 +69,7 @@ uint32_t shadows::SurfaceHeight()
     return tallest ? tallest : 4096;
 }
 
-bool shadows::SurfacesKnown()
+extern "C" bool mw2_shadows_surfaces_known()
 {
 #ifdef T_DATA_RenderTargets
     for (uint32_t target : kShadowMaps)

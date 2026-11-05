@@ -59,7 +59,7 @@ both `0xA0000000` and `0xC0000000`.
 
 ### Heaps
 
-`kernel.cpp` keeps two heaps, virtual and physical. Freed blocks are merged
+`kernel/memory.rs` keeps two heaps, virtual and physical. Freed blocks are merged
 with their neighbours and reused first-fit, and are zeroed when handed out
 again, as the console's pages come. Everything above a heap's high-water mark
 has never been used and is already zero.
@@ -79,7 +79,7 @@ physical heap, since everything the GPU is handed comes from there.
 
 ## Loading the image
 
-`main.cpp` gets the image one of two ways (`runtime/install/`):
+The run (`src/runtime/run.rs`, `main.cpp` in the C++ build) gets the image one of two ways (`runtime/install/`):
 
 - **A player's start** (no arguments): the executable works from its own
   folder. It reads `game/default.xex` or `game/default_mp.xex` and takes it
@@ -91,7 +91,7 @@ physical heap, since everything the GPU is handed comes from there.
   ends; installing is the launcher's ([building.md](building.md#the-launcher)).
 - **A development run** names the image and the game folder:
   `./build/mw2 mw2/default.pe mw2/game`. The image is the flat PE that
-  `tools/xexdump.py` writes; the disc version also takes the disc's XEX
+  `cargo xtask` writes; the disc version also takes the disc's XEX
   itself, decrypted on the way in.
 
 The campaign and the multiplayer are two executables, and the title's menus
@@ -100,7 +100,7 @@ other should know with `XamLoaderSetLaunchData` (1000 bytes it reads back at
 its own start). Here they are two programs: the call ends the run, and once
 the window and the sound are let go it starts `mw2-sp` or `mw2-mp` beside the
 running one, with the launch data in the `MW2_LAUNCH_DATA` environment
-variable (`kernel/misc.cpp`, `install/install.cpp`). A development run only
+variable (`src/runtime/kernel/misc.rs`, `src/runtime/install/`). A development run only
 logs the request, since nothing tells it where the other build and its image
 are.
 
@@ -152,27 +152,27 @@ Rules the block has to satisfy:
 
 ## Kernel and XAM imports
 
-Every import is a function `__imp__<Name>` the recompiled code calls. The
-runtime implements them with `PPC_FUNC(__imp__<Name>)` in `runtime/kernel/`:
+Every import is a function `__imp__<Name>` the recompiled code calls. The kernel
+defines them in Rust with `kernel_import!(<Name>, ...)` in `src/runtime/kernel/`,
+and audio with `PPC_FUNC(__imp__<Name>)` in `runtime/kernel/`:
 
 | file | what |
 |---|---|
-| `memory.cpp`, `kernel.cpp` | virtual and physical memory, the heaps, thread blocks, APCs, the time stamp bundle |
-| `objects.*`, `sync_objects.cpp` | the object table; events, semaphores, mutants, timers and the waits on them |
-| `sync.cpp` | critical sections, spinlocks, TLS slots |
-| `threads.cpp` | thread creation, resume, affinity |
-| `misc.cpp` | clocks, delays, module queries |
-| `files.cpp` | file I/O |
-| `content.cpp`, `profile.cpp` | content packages and the profile ([saves.md](saves.md)) |
-| `xam.cpp` | users, XOVERLAPPED, notifications, UI calls, sessions and Live stand-ins |
-| `input.cpp` | gamepad |
-| `net.cpp` | XNet and Winsock |
-| `video.cpp` | `Vd*`, the GPU's kernel surface ([d3d9-seam.md](d3d9-seam.md)) |
-| `audio.cpp` | `XAudio*`, `XMA*` ([audio.md](audio.md)) |
+| `memory.rs`, `mod.rs` (Rust) | virtual and physical memory, the heaps, thread blocks, APCs, the time stamp bundle |
+| `objects.rs`, `sync_objects.rs` (Rust) | the object table; events, semaphores, mutants, timers and the waits on them |
+| `sync.rs` (Rust) | critical sections, spinlocks, TLS slots |
+| `threads.rs` (Rust) | thread creation, resume, affinity |
+| `misc.rs` (Rust) | clocks, the timebase, delays, module queries, launch data |
+| `files.rs` (Rust) | file I/O |
+| `content.rs`, `profile.rs` (Rust) | content packages and the profile ([saves.md](saves.md)) |
+| `input.rs` (Rust) | gamepad |
+| `video.rs` (Rust) | `Vd*`, the GPU's kernel surface ([d3d9-seam.md](d3d9-seam.md)) |
+| `xam.rs` (Rust) | users, notifications, UI calls, sessions, enumerators and Live stand-ins |
+| `net.rs` (Rust) | XNet and Winsock |
+| `audio.rs`, `xma.rs` (Rust) | `XAudio*`, `XMA*`, the render driver and the XMA decoder's contexts ([audio.md](audio.md)) |
 
-`build.sh` runs `tools/genshared.py`, which writes `ppc_recomp_shared.h` and the
-list of imports the title uses, then `tools/gen_kernel_stubs.py`, which writes
-`stubs_generated.cpp` beside the recompiled tree: every import no
+`cargo xtask` writes `ppc_recomp_shared.h` and the list of imports the title uses,
+then `stubs_generated.cpp`, beside the recompiled tree (`xtask/src/generate.rs`): every import no
 `runtime/kernel/*.cpp` defines becomes a stub that logs its name once, counts
 its calls and returns 0. The end-of-run report lists the stubs a run reached.
 
@@ -222,8 +222,12 @@ call.
 
 ## Threads
 
-Each guest thread is a detached host thread with its own guest stack (at least
-512 KB), thread block and `PPCContext` (`threads.cpp`).
+Each guest thread is a detached host thread with its own guest stack (what it
+asked for, and at least 512 KB), thread block and `PPCContext` (`kernel/threads.rs`). Its host stack is
+the size a C++ `std::thread` gets, as the recompiled code nests deep on it:
+glibc's default on Linux, which `RLIMIT_STACK` sets (8 MB), and on Windows what
+the executable asks for (16 MB, `CMakeLists.txt`). Rust's own default, 2 MB, is
+not enough.
 
 - `ExCreateThread` enters XAPI's thread-startup shim (its fourth argument) with
   the routine and context as arguments, not the routine itself: the shim
@@ -235,8 +239,8 @@ Each guest thread is a detached host thread with its own guest stack (at least
 
 ## Objects and waits
 
-`objects.*` is one object table for handles and guest objects, as the console
-keeps it. `Nt*` calls name an object by handle and `Ke*` calls by the address
+`kernel/objects.rs` is one object table for handles and guest objects, as the
+console keeps it. `Nt*` calls name an object by handle and `Ke*` calls by the address
 of its dispatcher header in guest memory; a header names its object by holding
 the handle and a signature in its wait list. A header the title initialises
 inline, with no kernel call, is taken up as a new object with the type and
@@ -249,6 +253,15 @@ thread sleeps until something it waits on is signalled. Timeouts follow NT's
 convention: null waits forever, negative is relative, positive is an absolute
 system time. Waiting on something that is not a dispatcher object (a file) is
 always satisfied.
+
+The one lock also holds the handle table and the headers, so a call takes it
+once. A waiting thread has a condition variable of its own, registered with
+every object it waits on, and is woken once a sleep however many of them are
+signalled: a wake is a system call, and one for a thread that is awake already
+costs most where the lock is wanted most. The C++ that keeps objects of its own
+in the table (a file, a session, an enumerator) hands it a shared pointer it
+boxed, with the function that frees the box (`runtime/kernel/objects.h`), so
+neither language frees what the other made.
 
 Critical sections are the console's `RTL_CRITICAL_SECTION` in guest memory,
 taken with an atomic on the lock count; only a thread that finds one held
@@ -274,24 +287,26 @@ completes inline still looks finished to a caller that polls or waits.
 ## Files
 
 Guest paths look like `game:\zone\common.ff` or `\Device\Cdrom0\...`
-(`files.cpp`). The device prefix is split off and looked up in a mount table:
+(`src/runtime/kernel/files.rs`). The device prefix is split off and looked up in a mount table:
 
 - A path under a mounted content package (`save0:` and the like, mounted by
-  `content.cpp`) resolves under that package's directory and may be created,
+  `content.rs`) resolves under that package's directory and may be created,
   written, truncated and deleted.
 - Everything else resolves under the game root, which is the disc and
   read-only. Truncation depends on the path being writable, not on the
   disposition, so a disc file opened with `FILE_OVERWRITE_IF` is not emptied.
 
 Resolution is case-insensitive, one component at a time. Deletion follows NT:
-a file marked for deletion goes when its last handle closes. Reads go through a
+a file marked for deletion goes when its last handle closes. A read sees what
+any handle wrote before it, as NT's does: nothing is read ahead or kept between
+calls (the C++ build's files are unbuffered stdio for that). Reads go through a
 host buffer and are copied into guest memory, because a system call writing
 into a page the GPU watch has made read-only fails instead of faulting (see
 [the write watch](#the-fault-handler-and-the-write-watch)).
 
 ## Input
 
-`input.cpp` answers `XamInputGetState` from SDL3 gamepads, one per user index.
+`src/runtime/kernel/input.rs` answers `XamInputGetState` from SDL3 gamepads, one per user index.
 With the window open, the keyboard also drives the pad: Return is Start, Escape
 Back, arrows the d-pad, Z/X/C/V are A/B/X/Y, Q/E the bumpers. The packet number
 changes only when the state does, since the title reads a new packet as
@@ -300,16 +315,19 @@ walker ([switches.md](switches.md)).
 
 ## Networking
 
-`net.cpp` implements XNet and Winsock. Every call answers definitively, since
-the title spins on "pending" answers (single player polls
+`src/runtime/kernel/net.rs` implements XNet and Winsock. Every call answers
+definitively, since the title spins on "pending" answers (single player polls
 `XNetGetTitleXnAddr`). The Ethernet link is reported down in the campaign and
 up in the multiplayer, which refuses to start a match without one
-(`MW2_NET_LINK` overrides). With an online service built in, the title's
-sockets and addresses go through it; see [multiplayer.md](multiplayer.md).
+(`MW2_NET_LINK` overrides). With an online service chosen, the title's sockets
+and addresses go through it; see [multiplayer.md](multiplayer.md). Without one,
+a title socket is a host UDP socket of the standard library's, made when it is
+first bound or used, as a host binds a socket that sends before it is bound.
+Ports below 1024 are shifted up by 30000, since binding them needs privileges.
 
 ## The fault handler and the write watch
 
-`crash.cpp` installs signal handlers on Linux and a vectored exception handler
+`crash.rs` installs signal handlers on Linux and a vectored exception handler
 on Windows. A fault is offered in turn to:
 
 1. the `MW2_WATCH` write watchpoint (diagnostic builds, Linux only);
@@ -363,4 +381,4 @@ short sleeps), attaching a release build to the terminal it was started from,
 thread ids, names and priorities, backtraces, and loading shared libraries. It
 also supplies `roundevenf`, which the UCRT lacks. The other platform
 differences are in the places that cannot go through it: guest memory, the
-fault handler, sockets (`net.cpp`, `online/`) and the Steam client's ABI.
+fault handler, sockets (`kernel/net.rs`, `online/`) and the Steam client's ABI.

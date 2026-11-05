@@ -3,7 +3,7 @@
 #include "log.h"
 #include "kernel/kernel.h"
 #include "env.h"
-#include "screen.h"
+#include "screen_sheet.h"
 
 #include <algorithm>
 #include <atomic>
@@ -266,32 +266,41 @@ namespace
     }
 }
 
-signin::Player signin::At(uint32_t user)
+// The C++ build's sign-in (src/runtime/signin.rs is the Rust build's).
+extern "C" void mw2_signin_at(uint32_t user, bool* signedIn, uint64_t* id, void* name, mw2_text_sink sink)
 {
-    if (user == 0 || user >= kUsers) return {};
-    std::lock_guard lock(g_lock);
-    return g_players[user];
+    Player player;
+    if (user != 0 && user < kUsers)
+    {
+        std::lock_guard lock(g_lock);
+        player = g_players[user];
+    }
+    *signedIn = player.signedIn;
+    *id = player.id;
+    sink(name, player.name.data(), player.name.size());
 }
 
-signin::Player signin::First()
+extern "C" void mw2_signin_first(uint64_t* id, void* name, mw2_text_sink sink)
 {
     std::lock_guard lock(g_lock);
-    return FirstLocked();
+    const Player& first = FirstLocked();
+    *id = first.id;
+    sink(name, first.name.data(), first.name.size());
 }
 
-uint32_t signin::Mask()
+extern "C" uint32_t mw2_signin_mask()
 {
     std::lock_guard lock(g_lock);
     return MaskLocked();
 }
 
-void signin::Ask()
+extern "C" void mw2_signin_ask()
 {
     std::lock_guard lock(g_lock);
     OpenLocked(g_pressedLast);
 }
 
-bool signin::Input(uint32_t user, uint16_t buttons)
+extern "C" bool mw2_signin_input(uint32_t user, uint16_t buttons)
 {
     if (user >= kUsers) return false;
     std::lock_guard lock(g_lock);
@@ -322,7 +331,9 @@ bool signin::Input(uint32_t user, uint16_t buttons)
     return true;
 }
 
-bool signin::Picture(uint32_t windowHeight, Image& image)
+namespace
+{
+bool Draw(uint32_t windowHeight, screen::Image& image)
 {
     if (!screen::Drawn() || !g_open.load(std::memory_order_relaxed)) return false;
     std::lock_guard lock(g_lock);
@@ -360,4 +371,15 @@ bool signin::Picture(uint32_t windowHeight, Image& image)
     sheet.Buttons(326, { { "A", "Select" }, { "B", "Back" } });
     screen::Dump("signin", image);
     return true;
+}
+}
+
+extern "C" bool mw2_signin_picture(uint32_t windowHeight, mw2_image* c)
+{
+    screen::Image image;
+    image.version = c->version;
+    image.width = c->width;
+    image.height = c->height;
+    image.outline = c->outline;
+    return screen::Answer(c, Draw(windowHeight, image), image);
 }

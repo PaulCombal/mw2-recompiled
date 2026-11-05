@@ -99,7 +99,7 @@ PPC_FUNC(__imp__KeDelayExecutionThread)
 // (buffer, size)
 PPC_FUNC(__imp__XamLoaderGetLaunchData)
 {
-    const auto& data = install::LaunchData();
+    const auto data = install::LaunchData();
     if (data.empty()) { ctx.r3.u64 = X_ERROR_NOT_FOUND; return; }
     std::memcpy(GuestPtr<uint8_t>(ctx.r3.u32), data.data(), std::min<size_t>(data.size(), ctx.r4.u32));
     ctx.r3.u64 = X_ERROR_SUCCESS;
@@ -108,7 +108,7 @@ PPC_FUNC(__imp__XamLoaderGetLaunchData)
 PPC_FUNC(__imp__XamLoaderSetLaunchData)
 {
     const auto* data = GuestPtr<const uint8_t>(ctx.r3.u32);
-    install::LaunchData().assign(data, data + ctx.r4.u32);
+    install::SetLaunchData(data, ctx.r4.u32);
     ctx.r3.u64 = X_ERROR_SUCCESS;
 }
 

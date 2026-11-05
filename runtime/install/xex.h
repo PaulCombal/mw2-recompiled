@@ -2,7 +2,7 @@
 // An XEX2 as the disc carries it, or as a title update leaves it, turned into
 // the memory image the recompiled code was made from: decrypted with the
 // retail key and its basic compression undone, where it has either -- what
-// tools/xexdump.py writes as default.pe, made at every launch instead of kept
+// cargo xtask writes as default.pe, made at every launch instead of kept
 // on disk.
 #include <cstdint>
 #include <string>

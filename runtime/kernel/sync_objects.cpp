@@ -3,7 +3,7 @@
 #include <ppc_recomp_shared.h>
 #include "../pacing_trace.h"
 #include "kernel.h"
-#include "objects.h"
+#include "dispatcher.h"
 #include "../guest.h"
 #include "../log.h"
 #include "../crash.h"
@@ -100,14 +100,14 @@ PPC_FUNC(__imp__NtCreateEvent)
     auto event = std::make_shared<Event>();
     event->manualReset = ctx.r5.u32 == 0;
     event->signalled = ctx.r6.u32 != 0;
-    const uint32_t handle = InsertHandle(event);
+    const uint32_t handle = InsertObject(event);
     if (auto* out = GuestPtr<be32>(ctx.r3.u32)) *out = handle;
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }
 
 PPC_FUNC(__imp__NtSetEvent)
 {
-    auto event = LookupHandleAs<Event>(ctx.r3.u32);
+    auto event = LookupObjectAs<Event>(ctx.r3.u32);
     if (!event) { ctx.r3.u64 = X_STATUS_INVALID_HANDLE; return; }
     const bool was = event->Set();
     if (auto* previous = GuestPtr<be32>(ctx.r4.u32)) *previous = was ? 1u : 0u;
@@ -116,7 +116,7 @@ PPC_FUNC(__imp__NtSetEvent)
 
 PPC_FUNC(__imp__NtClearEvent)
 {
-    auto event = LookupHandleAs<Event>(ctx.r3.u32);
+    auto event = LookupObjectAs<Event>(ctx.r3.u32);
     if (!event) { ctx.r3.u64 = X_STATUS_INVALID_HANDLE; return; }
     event->Reset();
     ctx.r3.u64 = X_STATUS_SUCCESS;
@@ -127,7 +127,7 @@ PPC_FUNC(__imp__NtCreateMutant)
     // (Handle*, ObjectAttributes, InitialOwner)
     auto mutant = std::make_shared<Mutant>();
     if (ctx.r5.u32) { mutant->owner = CurrentThread(); mutant->depth = 1; }
-    const uint32_t handle = InsertHandle(mutant);
+    const uint32_t handle = InsertObject(mutant);
     if (auto* out = GuestPtr<be32>(ctx.r3.u32)) *out = handle;
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }
@@ -136,7 +136,7 @@ PPC_FUNC(__imp__NtReleaseMutant)
 {
     // (Handle, PreviousCount*): the count is NT's signal state, one when free
     // and one less for every acquisition outstanding.
-    auto mutant = LookupHandleAs<Mutant>(ctx.r3.u32);
+    auto mutant = LookupObjectAs<Mutant>(ctx.r3.u32);
     if (!mutant) { ctx.r3.u64 = X_STATUS_INVALID_HANDLE; return; }
     const int32_t depth = mutant->Release();
     if (auto* previous = GuestPtr<be32>(ctx.r4.u32)) *previous = uint32_t(1 - depth);
@@ -148,7 +148,7 @@ PPC_FUNC(__imp__NtCreateTimer)
     // (Handle*, ObjectAttributes, TimerType): 0 notification, 1 synchronization.
     auto timer = std::make_shared<Timer>();
     timer->manualReset = ctx.r5.u32 == 0;
-    const uint32_t handle = InsertHandle(timer);
+    const uint32_t handle = InsertObject(timer);
     if (auto* out = GuestPtr<be32>(ctx.r3.u32)) *out = handle;
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }
@@ -158,7 +158,7 @@ namespace { std::atomic<uint32_t> g_timerRoutinesDropped{ 0 }; }
 PPC_FUNC(__imp__NtSetTimerEx)
 {
     // (Handle, DueTime*, ApcRoutine, ApcMode, ApcContext, Resume, PeriodMs, 0)
-    auto timer = LookupHandleAs<Timer>(ctx.r3.u32);
+    auto timer = LookupObjectAs<Timer>(ctx.r3.u32);
     if (!timer) { ctx.r3.u64 = X_STATUS_INVALID_HANDLE; return; }
     if (!ctx.r4.u32) { ctx.r3.u64 = X_STATUS_INVALID_PARAMETER; return; }
     // A completion routine would be queued to the thread that set the timer.
@@ -173,7 +173,7 @@ PPC_FUNC(__imp__NtSetTimerEx)
 PPC_FUNC(__imp__NtCancelTimer)
 {
     // (Handle, CurrentState*)
-    auto timer = LookupHandleAs<Timer>(ctx.r3.u32);
+    auto timer = LookupObjectAs<Timer>(ctx.r3.u32);
     if (!timer) { ctx.r3.u64 = X_STATUS_INVALID_HANDLE; return; }
     const bool was = CancelTimer(timer);
     if (auto* state = GuestPtr<be32>(ctx.r4.u32)) *state = was ? 1u : 0u;
@@ -189,7 +189,7 @@ PPC_FUNC(__imp__NtWaitForSingleObjectEx)
     // arrive once it is asleep.
     if (ctx.r5.u32 && kernel::DeliverUserApcs(ctx)) { ctx.r3.u64 = X_STATUS_USER_APC; return; }
     WaitList list;
-    if (!list.Add(LookupHandle(ctx.r3.u32))) { ctx.r3.u64 = X_STATUS_INVALID_HANDLE; return; }
+    if (!list.Add(LookupObject(ctx.r3.u32))) { ctx.r3.u64 = X_STATUS_INVALID_HANDLE; return; }
     int64_t storage;
     const int64_t* timeout = ReadTimeout(ctx.r6.u32, storage);
     Blocked blocked(ctx.r3.u32, uint32_t(ctx.lr), timeout != nullptr);
@@ -200,7 +200,7 @@ PPC_FUNC(__imp__NtWaitForSingleObjectEx)
 
 // Only useful once something has stopped, so the watchdog and the fault
 // handler are the callers.
-void kernel::ReportWaits()
+extern "C" void mw2_kernel_report_waits()
 {
 #if MW2_DIAGNOSTICS
     std::lock_guard g(g_waitLock);
@@ -232,7 +232,7 @@ PPC_FUNC(__imp__NtWaitForMultipleObjectsEx)
     { ctx.r3.u64 = X_STATUS_INVALID_PARAMETER; return; }
     WaitList list;
     for (uint32_t i = 0; i < count; i++)
-        if (!list.Add(LookupHandle(handles[i]))) { ctx.r3.u64 = X_STATUS_INVALID_HANDLE; return; }
+        if (!list.Add(LookupObject(handles[i]))) { ctx.r3.u64 = X_STATUS_INVALID_HANDLE; return; }
     int64_t storage;
     const int64_t* timeout = ReadTimeout(ctx.r8.u32, storage);
     Blocked blocked(handles[0], uint32_t(ctx.lr), timeout != nullptr);
@@ -312,15 +312,15 @@ PPC_FUNC(__imp__KeReleaseSemaphore)
 
 PPC_FUNC(__imp__NtClose)
 {
-    ctx.r3.u64 = CloseHandle(ctx.r3.u32) ? X_STATUS_SUCCESS : X_STATUS_INVALID_HANDLE;
+    ctx.r3.u64 = CloseObject(ctx.r3.u32) ? X_STATUS_SUCCESS : X_STATUS_INVALID_HANDLE;
 }
 
 PPC_FUNC(__imp__NtDuplicateObject)
 {
-    auto object = LookupHandle(ctx.r3.u32);
+    auto object = LookupObject(ctx.r3.u32);
     auto* out = GuestPtr<be32>(ctx.r4.u32);
     if (!object) { ctx.r3.u64 = X_STATUS_INVALID_HANDLE; return; }
-    if (out) *out = InsertHandle(object);
+    if (out) *out = InsertObject(object);
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }
 
@@ -334,7 +334,7 @@ PPC_FUNC(__imp__ObReferenceObjectByHandle)
     if (ctx.r3.u32 == kCurrentThreadHandle)
         header = *GuestPtr<be32>(ctx.r13.u32 + 256);   // KPCR.CurrentThread
     else
-        header = HeaderOf(LookupHandle(ctx.r3.u32));
+        header = HeaderOf(LookupObject(ctx.r3.u32));
     if (out) *out = header;
     ctx.r3.u64 = header ? X_STATUS_SUCCESS : X_STATUS_INVALID_HANDLE;
 }

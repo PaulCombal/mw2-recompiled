@@ -17,7 +17,12 @@ namespace render
         uint32_t width = 0, height = 0;
         bool operator==(const Size&) const = default;
     };
+}
 
+extern "C" void mw2_render_frame(render::Size* frame);
+
+namespace render
+{
     constexpr Size kConsoleFrame{ 1280, 720 };
     constexpr Size kConsoleScene{ 1024, 600 };
 
@@ -77,5 +82,10 @@ namespace render
     // The runtime's: the frame MW2_RENDER asks for, or the console's when it
     // asks for none, for one FrameValid refuses, or when this build of the
     // title cannot be given one (render_size.cpp).
-    Size Frame();
+    inline Size Frame()
+    {
+        Size frame;
+        mw2_render_frame(&frame);
+        return frame;
+    }
 }

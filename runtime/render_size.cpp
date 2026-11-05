@@ -188,8 +188,9 @@ namespace
 #endif
 }
 
-render::Size render::Frame()
+extern "C" void mw2_render_frame(render::Size* out)
 {
+    using namespace render;
     static const Size frame = [] {
         const char* asked = env::Text("MW2_RENDER");
         if (!asked) return kConsoleFrame;
@@ -214,7 +215,7 @@ render::Size render::Frame()
         return *size;
 #endif
     }();
-    return frame;
+    *out = frame;
 }
 
 #ifdef T_R_VideoSizes

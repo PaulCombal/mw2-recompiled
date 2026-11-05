@@ -6,7 +6,7 @@ own fastfiles, menus and maps. The runtime is the same for both; what differs is
 the recompiled tree it is linked against and the table of guest addresses it
 hooks.
 
-    TITLE=mp ./build.sh
+    cargo xtask build --title mp
     MW2_CONSOLE="8:map mp_afghan" ./build-mp/mw2 mw2/default_mp.pe mw2/game
 
 ## One runtime, two titles
@@ -24,7 +24,7 @@ Both are the executables title update 6 makes of the disc's; the disc's own
 are a build option with names of their own
 ([building.md](building.md#the-disc-version)).
 
-`build.sh` takes `TITLE=sp` (the default) or `TITLE=mp`. CMake takes
+`cargo xtask` takes `--title sp` (the default) or `--title mp`. CMake takes
 `-DMW2_TITLE=sp|mp`, which selects the recompiled tree and, for `mp`, defines
 `MW2_TITLE_MP`. The Python tools make the same choice through the `MW2_TITLE`
 environment variable (`tools/title.py`), which reads the PE section table from
@@ -74,13 +74,13 @@ A unique match of a different size needs reading before it is trusted.
 
 **Every fastfile.** The campaign loads the level it is told to; the multiplayer
 chooses its own map and zones. A zone whose file is missing makes the title
-report a dirty disc and fail, so `build.sh` and the launcher extract every
+report a dirty disc and fail, so `cargo xtask` and the launcher extract every
 `.ff` and `.pak` on the disc (about 5.9 GB), and the campaign's Bink movies
 beside them ([gameplay.md](gameplay.md#movies)); the multiplayer plays none.
 
 **A network link.** The multiplayer refuses to start any match without one, and
 a system-link match is how it reaches a map. `XNetGetEthernetLinkStatus`
-(`runtime/kernel/net.cpp`) reports an active 100 Mb/s full-duplex link in the
+(`src/runtime/kernel/net.rs`) reports an active 100 Mb/s full-duplex link in the
 multiplayer build and no link in the campaign build; `MW2_NET_LINK=0|1`
 overrides either.
 
@@ -88,7 +88,7 @@ overrides either.
 reach the kernel as XAM messages through `XMsgStartIORequest`, not as imports of
 their own. `XSessionCreate` is app `0xFB`, message `0x000B0010`, with a 28-byte
 buffer `{ session, flags, public slots, private slots, xuid, session info out,
-nonce out }`. `runtime/kernel/xam.cpp` fills the 60-byte `XSESSION_INFO`: an
+nonce out }`. `src/runtime/kernel/xam.rs` fills the 60-byte `XSESSION_INFO`: an
 8-byte session id, the 36-byte `XNADDR` from `XNetGetTitleXnAddr`, and a 16-byte
 key. It must be filled: the title reads the session back, and an all-zero id is
 treated as a Live error (`Com_Error(XBOXLIVE_LIVEERROR)`). A session id's top
@@ -107,8 +107,8 @@ there (`MW2_WALK_TO`, `MW2_WALK_PATH`; [switches.md](switches.md)).
 ## The online service
 
 What the title's network calls reach is a backend the player chooses as the
-game starts, declared in `runtime/online/service.h`. The kernel side (`kernel/net.cpp`,
-`kernel/xam.cpp`) keeps everything Xbox-shaped -- `XNADDR`s, session keys,
+game starts, `src/runtime/online/`. The kernel side (`src/runtime/kernel/net.rs`
+and `xam.rs`) keeps everything Xbox-shaped -- `XNADDR`s, session keys,
 sockets, ports -- and asks the service only for what a service does:
 
 | call | purpose |
@@ -168,20 +168,20 @@ service (diagnostic builds).
 
 ### LAN and server
 
-The two are one service, `runtime/online/players.cpp`, over two transports
-(`transport.h`): a transport opens, says where this copy is reached and which
+The two are one service, `src/runtime/online/players.rs`, over two transports
+(its `Transport`): a transport opens, says where this copy is reached and which
 copy on the machine it is (its slot), sends to one peer or to all, and hands
 over what arrived. The service frames the title's datagrams, keeps who is
 there, and carries the Xbox LIVE lobbies, so both have the same System Link
 list and private matches.
 
-`runtime/online/lan.cpp`: plain UDP on the local network. Each copy sends from a
+`src/runtime/online/lan.rs`: plain UDP on the local network. Each copy sends from a
 port of its own, the first free one above the shared port; broadcasts go to the
 shared port, `MW2_LAN_PORT` (3074). A peer id is the IPv4 address in the top
 bits and the port in the low 16. The log names the network connections found
 and the one announced.
 
-`runtime/online/server.cpp`: a relay server (`relay/`, [relay.md](relay.md)) at
+`src/runtime/online/server.rs`: a relay server (`relay/`, [relay.md](relay.md)) at
 `MW2_SERVER`, with `MW2_SERVER_PASSWORD`. The copy says Hello, answers the
 relay's challenge with the token it was given, which every later packet
 carries, and gets its id, 48 bits; one that has none within five seconds does not start,
@@ -205,7 +205,7 @@ lobby's "Invite friends" invites every player seen; a copy started with
 
 ### Steam
 
-`runtime/online/steam.cpp` talks to the Steam client the player already runs.
+`src/runtime/online/steam/` talks to the Steam client the player already runs.
 It loads the client library from the install -- on Linux the one the running
 `steam` process has its `steamclient.so` mapped from, else the first of the usual
 location, the snap and the Flatpak; `steamclient64.dll` from the registry's
@@ -275,7 +275,7 @@ controller from a game Steam did not start.
   sessions are not closed: a host's map change ends its game and starts the
   next at once. Xbox LIVE parties and private matches stay among friends.
 - The advertised game is the newest hosted system-link session that is on;
-  `kernel/xam.cpp` (`PublishHosted`) chooses it and tells the service under one
+  `kernel/xam.rs` (`publish_hosted`) chooses it and tells the service under one
   lock, so threads ending one session and creating another cannot reorder it.
 - F6, or the Xbox LIVE lobby's "Invite friends", opens the friends screen
   (`friends.h`), drawn over the frame as the sign-in screen is, over a blurred
@@ -372,7 +372,7 @@ LSP stays unused. It goes:
 1. `xstartlobby` takes the chosen playlist and creates a lobby's session with no
    public slots.
 2. `XSessionSearchEx` (`000B001C`) asks for 50 sessions. The search's meaning
-   was on Live's servers, so `kernel/xam.cpp` takes what the title passes: its
+   was on Live's servers, so `kernel/xam.rs` takes what the title passes: its
    contexts and integer properties must all match, and the room for the party
    (`0x1000001A`) is a lower bound. They are the game mode, ranked or not, the
    playlist, the protocol (so a search finds only its own release), the map packs
@@ -427,7 +427,7 @@ What a stranger reaches is in [Steam](#steam) and [security.md](security.md).
 ## Host migration
 
 The title moves a Live party, a lobby or a running match to another player by
-itself. Nothing in the runtime decides who hosts; `kernel/xam.cpp` answers
+itself. Nothing in the runtime decides who hosts; `kernel/xam.rs` answers
 `XSessionMigrateHost` (`000B001E`) and the title does the rest over its own
 packets, which reach every player the way its game traffic does. The system
 version says `0x200ED800`, the lowest with both this call (`0x200CE900`) and
@@ -463,7 +463,7 @@ keeps nothing, as nothing here keeps a skill.
 
 A service whose `Lobbies()` is true (lan and steam) has the player signed in to
 Xbox LIVE, which opens PLAY ONLINE: the party, PRIVATE MATCH, the lobby, START
-GAME. No Live service is involved; `runtime/kernel/xam.cpp` answers what the
+GAME. No Live service is involved; `src/runtime/kernel/xam.rs` answers what the
 title asks:
 
 | | signed in to Live | offline (`none`) |
@@ -508,7 +508,6 @@ refuses as signed out.
 
 | switch | effect |
 |---|---|
-| `TITLE=sp\|mp` | `build.sh`: which executable to build |
 | `MW2_NETWORK=none\|lan\|server\|steam` | which online service; the launcher's NETWORK |
 | `MW2_SERVER=<host>[:<port>]` | server: the relay's address |
 | `MW2_SERVER_PASSWORD` | server: the relay's password |

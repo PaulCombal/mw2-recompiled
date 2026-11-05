@@ -2,7 +2,7 @@
 // block for r13, and its own PPCContext.
 #include <ppc_recomp_shared.h>
 #include "kernel.h"
-#include "objects.h"
+#include "dispatcher.h"
 #include "../guest.h"
 #include "../log.h"
 #include "../crash.h"
@@ -33,6 +33,7 @@ namespace
         uint32_t startAddress = 0;
         uint32_t startContext = 0;
         uint32_t stackBase = 0;
+        uint32_t stackSize = 0;   // all of it the thread's: a larger one is not cut short
         uint32_t pcr = 0;
         uint8_t processor = 0;
         bool exited = false;      // under the dispatcher lock
@@ -77,7 +78,7 @@ namespace
 
             PPCContext ctx{};
             std::memset(&ctx, 0, sizeof(ctx));
-            ctx.r1.u32 = (stackBase + kDefaultStackSize - 0x100) & ~0xFu;
+            ctx.r1.u32 = (stackBase + stackSize - 0x100) & ~0xFu;
             ctx.r13.u32 = pcr;
             if (viaShim) { ctx.r3.u32 = startAddress; ctx.r4.u32 = startContext; }
             else         { ctx.r3.u32 = startContext; }
@@ -95,7 +96,7 @@ namespace
     };
 }
 
-uint32_t kernel::NewThreadId() { return g_nextThreadId++; }
+extern "C" uint32_t mw2_kernel_new_thread_id() { return g_nextThreadId++; }
 
 PPC_FUNC(__imp__ExCreateThread)
 {
@@ -119,7 +120,8 @@ PPC_FUNC(__imp__ExCreateThread)
     t->xapiStartup = xapiStartup;
     t->startAddress = startAddress;
     t->startContext = startContext;
-    t->stackBase = kernel::AllocateGuest(std::max(stackSize, kDefaultStackSize), 0x1000);
+    t->stackSize = std::max(stackSize, kDefaultStackSize);
+    t->stackBase = kernel::AllocateGuest(t->stackSize, 0x1000);
 
     t->pcr = kernel::CreateThreadBlock(t->threadId);
     if (!t->stackBase || !t->pcr) { ctx.r3.u64 = X_STATUS_NO_MEMORY; return; }
@@ -135,7 +137,7 @@ PPC_FUNC(__imp__ExCreateThread)
         *GuestPtr<uint8_t>(t->pcr + 268) = t->processor;   // KPCR.CurrentProcessorNumber
     }
 
-    uint32_t handle = InsertHandle(t);
+    uint32_t handle = InsertObject(t);
     if (handleOut) *handleOut = handle;
     if (threadIdOut) *threadIdOut = t->threadId;
     // The KTHREAD is the thread's dispatcher header: ObReferenceObjectByHandle
@@ -158,7 +160,7 @@ PPC_FUNC(__imp__ExCreateThread)
 
 PPC_FUNC(__imp__NtResumeThread)
 {
-    auto t = LookupHandleAs<GuestThread>(ctx.r3.u32);
+    auto t = LookupObjectAs<GuestThread>(ctx.r3.u32);
     if (auto* previous = GuestPtr<be32>(ctx.r4.u32)) *previous = 1;
     if (t) t->resumeGate.Set();
     ctx.r3.u64 = X_STATUS_SUCCESS;
@@ -208,5 +210,7 @@ PPC_FUNC(__imp__KeSetAffinityThread)
         LOGW("KeSetAffinityThread: %08X is not a guest thread", ctx.r3.u32);
     ctx.r3.u64 = affinity;
 }
+// MW2 asks for 15 and 16 and drops the result; Xenia maps 10 to 16 to the host's
+// normal priority, which the host thread already has.
 PPC_FUNC(__imp__KeSetBasePriorityThread)  { ctx.r3.u64 = 0; }
 PPC_FUNC(__imp__ExRegisterTitleTerminateNotification) { ctx.r3.u64 = 0; }

@@ -11,15 +11,25 @@
 
 #include <cstdint>
 
+extern "C"
+{
+    void mw2_friends_ask();
+    bool mw2_friends_input(uint32_t user, uint16_t buttons);
+    bool mw2_friends_picture(uint32_t windowHeight, mw2_image* image);
+}
+
 namespace friends
 {
     // Opens the screen, from the title's lobby or from F6.
-    void Ask();
+    inline void Ask() { mw2_friends_ask(); }
 
     // What a controller holds, at every read of it, as signin::Input takes
     // it. True when the title is not to see it.
-    bool Input(uint32_t user, uint16_t buttons);
+    inline bool Input(uint32_t user, uint16_t buttons) { return mw2_friends_input(user, buttons); }
 
     // The screen, for a window of this height. False while it is shut.
-    bool Picture(uint32_t windowHeight, screen::Image& image);
+    inline bool Picture(uint32_t windowHeight, screen::Image& image)
+    {
+        return screen::Picture(mw2_friends_picture, windowHeight, image);
+    }
 }

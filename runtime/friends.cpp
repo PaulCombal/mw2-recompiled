@@ -2,6 +2,7 @@
 #include "friends.h"
 #include "log.h"
 #include "online/service.h"
+#include "screen_sheet.h"
 
 #include <algorithm>
 #include <atomic>
@@ -17,7 +18,7 @@ namespace
 
     std::mutex g_lock;
     std::atomic<bool> g_open{ false };
-    online::Service* g_service = nullptr;   // with friends to pick from; else the message
+    online::Backend* g_service = nullptr;   // with friends to pick from; else the message
     std::vector<std::string> g_message;
     online::FriendList g_list;
     std::set<uint64_t> g_invited;           // since the screen opened
@@ -61,9 +62,10 @@ namespace
     }
 }
 
-void friends::Ask()
+// The C++ build's friends screen (src/runtime/friends.rs is the Rust build's).
+extern "C" void mw2_friends_ask()
 {
-    online::Service* service = online::Get();
+    online::Backend* service = online::GetBackend();
     std::lock_guard lock(g_lock);
     if (g_open || !screen::Claim(screen::Which::Friends)) return;
     g_list = {};
@@ -87,7 +89,7 @@ void friends::Ask()
     LOGI("friends: the screen opens%s", g_service ? "" : ", with a message: this service has no friends to pick");
 }
 
-bool friends::Input(uint32_t user, uint16_t buttons)
+extern "C" bool mw2_friends_input(uint32_t user, uint16_t buttons)
 {
     if (user >= kUsers) return false;
     std::lock_guard lock(g_lock);
@@ -113,7 +115,9 @@ bool friends::Input(uint32_t user, uint16_t buttons)
     return true;
 }
 
-bool friends::Picture(uint32_t windowHeight, screen::Image& image)
+namespace
+{
+bool Draw(uint32_t windowHeight, screen::Image& image)
 {
     if (!screen::Drawn() || !g_open.load(std::memory_order_relaxed)) return false;
     std::lock_guard lock(g_lock);
@@ -184,4 +188,15 @@ bool friends::Picture(uint32_t windowHeight, screen::Image& image)
     sheet.Buttons(374, { { "A", "Invite" }, { "B", "Back" } });
     screen::Dump("friends", image);
     return true;
+}
+}
+
+extern "C" bool mw2_friends_picture(uint32_t windowHeight, mw2_image* c)
+{
+    screen::Image image;
+    image.version = c->version;
+    image.width = c->width;
+    image.height = c->height;
+    image.outline = c->outline;
+    return screen::Answer(c, Draw(windowHeight, image), image);
 }

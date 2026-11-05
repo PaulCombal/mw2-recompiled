@@ -1,0 +1,38 @@
+[alias]
+# The build, from the disc to the executables (xtask/src/main.rs), run from here.
+xtask = "run --quiet --manifest-path xtask/Cargo.toml --"
+
+[build]
+# Without SSSE3 and SSE4.1 every vector instruction of the guest code would be a
+# function call, and ppc_rt stops the build.
+rustflags = ["-Ctarget-cpu=x86-64-v2"]
+
+# Named so that rustc adds no linker of its own: clang's lld then does the C++
+# runtime's ThinLTO, on the LLVM that compiled it. rustc's is newer.
+#
+# With full RELRO, rustc calls every function of another crate through the GOT, in
+# relocations lld cannot turn back into direct calls: each guest call from one chunk to
+# another would load its target first. Partial RELRO makes them PLT calls, which lld
+# binds directly to the functions the executable defines; build.rs asks the link for
+# -z now, so the executable's RELRO is full all the same. A target's flags replace
+# [build]'s, so the CPU is named again.
+[target.x86_64-unknown-linux-gnu]
+linker = "clang-18"
+rustflags = ["-Ctarget-cpu=x86-64-v2", "-Crelro-level=partial"]
+
+# One executable with nothing beside it: Rust's unwinder linked in too. A target's
+# flags replace [build]'s, so the CPU is named again.
+[target.x86_64-pc-windows-gnullvm]
+rustflags = ["-Ctarget-cpu=x86-64-v2", "-Ctarget-feature=+crt-static"]
+
+[env]
+# build.rs compiles ppc_fallback.cpp, with the runtime's flags and headers.
+PPC_SKIP_CPP_FALLBACK = "1"
+# SDL's build (sdl3-sys, cmake/sdl.cmake): named per target, as only the cmake crate
+# reads these, where CMake itself would take a plain CMAKE_TOOLCHAIN_FILE in any of
+# its runs under cargo. Any other crate built with the cmake crate would get them too:
+# sdl3-sys is the only one.
+CMAKE_TOOLCHAIN_FILE_x86_64_unknown_linux_gnu = { value = "cmake/sdl.cmake", relative = true }
+CMAKE_TOOLCHAIN_FILE_x86_64_pc_windows_gnullvm = { value = "cmake/sdl-mingw-w64.cmake", relative = true }
+CMAKE_GENERATOR_x86_64_unknown_linux_gnu = "Ninja"
+CMAKE_GENERATOR_x86_64_pc_windows_gnullvm = "Ninja"

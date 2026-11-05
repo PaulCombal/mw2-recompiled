@@ -7,7 +7,7 @@
 // sleeps, on the header as a synchronization event.
 #include <ppc_recomp_shared.h>
 #include "kernel.h"
-#include "objects.h"
+#include "dispatcher.h"
 #include "../guest.h"
 #include "../log.h"
 

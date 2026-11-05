@@ -19,15 +19,35 @@ namespace
     VkDevice Device() { return static_cast<VkDevice>(vk::pipeline::Device()); }
 }
 
-VkFormat vk::shaders::DepthFormat(VkPhysicalDevice physical)
+namespace
 {
-    for (VkFormat candidate : { VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT })
+    bool Has(VkPhysicalDevice physical, VkFormat candidate, VkFormatFeatureFlags wanted)
     {
         VkFormatProperties format{};
         vkGetPhysicalDeviceFormatProperties(physical, candidate, &format);
-        if (format.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) return candidate;
+        return (format.optimalTilingFeatures & wanted) == wanted;
     }
+}
+
+// As Xenia's render target cache: D24S8 where it can be drawn into and sampled
+// (a depth resolve is sampled), else D32S8.
+VkFormat vk::shaders::DepthFormat(VkPhysicalDevice physical)
+{
+    if (Has(physical, VK_FORMAT_D24_UNORM_S8_UINT,
+            VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))
+        return VK_FORMAT_D24_UNORM_S8_UINT;
+    if (Has(physical, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT))
+        return VK_FORMAT_D32_SFLOAT_S8_UINT;
+    if (Has(physical, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT))
+        return VK_FORMAT_D24_UNORM_S8_UINT;
     return VK_FORMAT_UNDEFINED;
+}
+
+VkFormat vk::shaders::FloatDepthFormat(VkPhysicalDevice physical)
+{
+    if (Has(physical, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT))
+        return VK_FORMAT_D32_SFLOAT_S8_UINT;
+    return DepthFormat(physical);
 }
 
 uint32_t vk::shaders::Scale(VkPhysicalDevice physical, uint32_t asked)
@@ -93,8 +113,9 @@ namespace
     VkPipeline StageLibrary(shader::Type type, VkShaderModule module, VkFormat depthFormat, int& fromCache)
     {
         // Without a render pass, the shader stages learn from their own
-        // rendering info whether there is a depth and stencil attachment:
-        // one format for every target here, so the libraries still fit all.
+        // rendering info whether there is a depth and stencil attachment, and
+        // ignore which format it is: built with DepthFormat's, the libraries
+        // also fit a D24FS8 target's.
         // A fragment library must carry it: without it, the library legally
         // ignores depth and stencil state, and every draw comes out empty.
         VkPipelineRenderingCreateInfoKHR rendering{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR };

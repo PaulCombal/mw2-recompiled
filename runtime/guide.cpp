@@ -6,6 +6,7 @@
 #include "presence.h"
 #include "signin.h"
 #include "online/service.h"
+#include "screen_sheet.h"
 
 #include <algorithm>
 #include <atomic>
@@ -92,7 +93,7 @@ namespace
     std::string Plural(int count, const char* one) { return std::to_string(count) + " " + one + (count == 1 ? "" : "s"); }
 
     // "Steam: 2 friends playing, 5 online", or the network alone.
-    std::string Network(online::Service* service)
+    std::string Network(online::Backend* service)
     {
         const char* name = online::Name();
         if (!name) return "No network: system link on this PC";
@@ -112,7 +113,8 @@ namespace
     }
 }
 
-bool guide::Input(uint32_t user, uint16_t buttons)
+// The C++ build's guide (src/runtime/guide.rs is the Rust build's).
+extern "C" bool mw2_guide_input(uint32_t user, uint16_t buttons)
 {
     if (user >= kUsers) return false;
     std::lock_guard lock(g_lock);
@@ -148,14 +150,16 @@ bool guide::Input(uint32_t user, uint16_t buttons)
     return true;
 }
 
-bool guide::Picture(uint32_t windowHeight, screen::Image& image)
+namespace
+{
+bool Draw(uint32_t windowHeight, screen::Image& image)
 {
     if (!screen::Drawn() || !g_open.load(std::memory_order_relaxed)) return false;
     std::lock_guard lock(g_lock);
     if (!g_open) return false;
     Refresh(g_clock, Clock());
     Refresh(g_presence, presence::Text(0));
-    Refresh(g_network, Network(online::Get()));
+    Refresh(g_network, Network(online::GetBackend()));
 
     // A 450 by 300 sheet, under half the window's height.
     const uint32_t height = std::max<uint32_t>(200, windowHeight * 46 / 100) & ~1u;
@@ -163,7 +167,7 @@ bool guide::Picture(uint32_t windowHeight, screen::Image& image)
     if (image.version == version && image.height == height) return true;
     using screen::Font;
     screen::Sheet sheet(image, height, 450, 300, version);
-    online::Service* service = online::Get();
+    online::Backend* service = online::GetBackend();
     const std::string name = service && !service->LocalName().empty() ? service->LocalName() : signin::First().name;
     sheet.Frame(name);
     sheet.Text(Font::Entry, 422 - sheet.Width(Font::Entry, g_clock), 24, screen::kDim, g_clock);
@@ -191,4 +195,15 @@ bool guide::Picture(uint32_t windowHeight, screen::Image& image)
     sheet.Buttons(272, { { "A", "Select" }, { "B", "Back" } });
     screen::Dump("guide", image);
     return true;
+}
+}
+
+extern "C" bool mw2_guide_picture(uint32_t windowHeight, mw2_image* c)
+{
+    screen::Image image;
+    image.version = c->version;
+    image.width = c->width;
+    image.height = c->height;
+    image.outline = c->outline;
+    return screen::Answer(c, Draw(windowHeight, image), image);
 }

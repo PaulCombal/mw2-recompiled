@@ -68,7 +68,7 @@ namespace
     constexpr size_t kLargest = 64 * 1024;
     constexpr size_t kQueued = 512;
 
-    class Players final : public online::Service
+    class Players final : public online::Backend
     {
     public:
         explicit Players(std::unique_ptr<online::Transport> transport) : transport_(std::move(transport)) {}
@@ -299,7 +299,7 @@ namespace
     };
 }
 
-std::unique_ptr<online::Service> online::MakePlayers(std::unique_ptr<Transport> transport)
+std::unique_ptr<online::Backend> online::MakePlayers(std::unique_ptr<Transport> transport)
 {
     return std::make_unique<Players>(std::move(transport));
 }

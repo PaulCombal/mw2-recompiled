@@ -256,7 +256,7 @@
 #define T_DB_AuthLoadInit      821AFA10
 // UI_LoadArenas reads mp/basemaps.arena into a LargeLocal buffer and parses it
 // with UI_ParseInfos(text, room, infos) into T_DATA_UI_ArenaInfos, which
-// UI_UpdateArenas (822D8C00) makes the menus' map list of (custom_map_list.cpp)
+// UI_UpdateArenas (822D8C00) makes the menus' map list of (src/hooks/custom_map_list.rs)
 #define T_UI_LoadArenas        822D89F8
 #define T_UI_ParseInfos        822D8798
 #define T_LargeLocal_Begin     822FE458   // (handle, size)
@@ -266,7 +266,7 @@
 #define T_DB_FindXAssetHeader  821E25B0   // (type, name) -> the asset; a menu is type 24
 #define T_SEH_StringEd_GetString 822CBF88 // (key) -> its translation, the localize asset's (type 25); 0 when none
 // Com_LoadUiFastFile loads the menus' zones (dlc2_ui_mp, dlc1_ui_mp, ui_mp, and common_mp when asked) in one call of
-// DB_LoadXAssets(zones, count, sync), XZoneInfo { name, allocFlags, freeFlags } (custom_map_list.cpp)
+// DB_LoadXAssets(zones, count, sync), XZoneInfo { name, allocFlags, freeFlags } (src/hooks/custom_map_list.rs)
 #define T_Com_LoadUiFastFile   82280C78
 #define T_DB_LoadXAssets       821E1C60
 #define T_DATA_DB_ZoneCount    0x82710574u   // the zones loaded; the loader stops the game at 32

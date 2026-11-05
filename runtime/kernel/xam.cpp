@@ -24,7 +24,6 @@
 #include <fstream>
 #include <map>
 #include <mutex>
-#include <random>
 #include <set>
 #include <string>
 #include <vector>
@@ -60,7 +59,7 @@ namespace
     // on this machine. An offline XUID (top byte 0xE0) over its 48 bits.
     uint64_t LocalAccount()
     {
-        auto* service = online::Get();
+        auto* service = online::GetBackend();
         return (service ? service->Account() : signin::First().id) & 0xFFFFFFFFFFFFull;
     }
     uint64_t LocalXuid() { return 0xE000000000000000ull | LocalAccount(); }
@@ -80,7 +79,7 @@ namespace
     // The name the service has for the player -- Steam's -- or the profile's.
     std::string LocalName()
     {
-        auto* service = online::Get();
+        auto* service = online::GetBackend();
         std::string name = service ? service->LocalName() : std::string();
         if (name.empty()) name = signin::First().name;
         if (name.size() > 15) name.resize(15);   // a gamertag's longest
@@ -133,8 +132,7 @@ void kernel::CompleteOverlappedEx(uint32_t address, uint32_t result, uint32_t ex
     overlapped->result = result;
     overlapped->length = length;
     overlapped->extendedError = extendedError;
-    if (uint32_t event = overlapped->event)
-        if (auto signal = LookupHandleAs<Event>(event)) signal->Set();
+    if (uint32_t event = overlapped->event) kernel::SetEvent(event);
 }
 
 // XNotify. A listener asks for areas of notification -- system, Live, friends
@@ -390,11 +388,7 @@ namespace
         return text;
     }
 
-    void RandomBytes(uint8_t* p, size_t n)
-    {
-        thread_local std::mt19937 rng{ std::random_device{}() };
-        for (size_t i = 0; i < n; i++) p[i] = uint8_t(rng());
-    }
+    void RandomBytes(uint8_t* p, size_t n) { kernel::RandomBytes(p, n); }
 
     // XSESSION_CREATE_* flags.
     constexpr uint32_t kHost = 0x01, kPresence = 0x02, kStats = 0x04, kMatchmaking = 0x08;
@@ -472,7 +466,7 @@ namespace
     // telling, so that two threads cannot tell it in the other order.
     void PublishHosted()
     {
-        auto* service = online::Get();
+        auto* service = online::GetBackend();
         if (!service) return;
         std::lock_guard a(g_advertLock);
         std::string line;
@@ -499,7 +493,7 @@ namespace
     // until the title's searches have failed and it opens them.
     void PublishListing()
     {
-        auto* service = online::Get();
+        auto* service = online::GetBackend();
         if (!service || !service->Matchmaking()) return;
         std::lock_guard a(g_listingLock);
         online::SessionListing listing;
@@ -560,7 +554,7 @@ namespace
         }
         else
             LOGI("online: nothing to join");
-        online::Get()->SetJoinable(best ? &joinable : nullptr);
+        online::GetBackend()->SetJoinable(best ? &joinable : nullptr);
     }
 
     // (session, flags, publicSlots, privateSlots, xuid, sessionInfoOut, nonceOut)
@@ -642,7 +636,7 @@ namespace
         PublishJoinable();
         PublishListing();
         if (uint64_t peer; !host && kernel::XnAddrPeer(info->hostAddress, peer))
-            if (auto* service = online::Get()) service->HostMoved(peer);
+            if (auto* service = online::GetBackend()) service->HostMoved(peer);
         return {};
     }
 
@@ -764,7 +758,7 @@ namespace
     {
         const auto* words = GuestPtr<be32>(buffer);
         if (!words || length < 36) return Result(X_ERROR_INVALID_PARAMETER);
-        auto* service = online::Get();
+        auto* service = online::GetBackend();
         // The title's wrapper has cleared the header: nothing found.
         if (!service || !service->Matchmaking() || !overlapped) return {};
 
@@ -1000,7 +994,7 @@ namespace
         std::vector<char> bytes;
         std::error_code ec;
         std::vector<uint8_t> shared;
-        auto* service = online::Get();
+        auto* service = online::GetBackend();
         if (file.title && service && service->TitleFile(file.path.filename().string(), shared))
             bytes.assign(shared.begin(), shared.end());
         else if (fs::exists(file.path, ec))
@@ -1259,7 +1253,7 @@ PPC_FUNC(__imp__XMsgStartIORequest)
 
 void kernel::FinishSearches()
 {
-    auto* service = online::Get();
+    auto* service = online::GetBackend();
     if (!service) return;
     std::lock_guard g(g_searchLock);
     for (auto it = g_searches.begin(); it != g_searches.end();)

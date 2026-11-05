@@ -7,9 +7,9 @@
 // (d3d_hooks.cpp), with that number as com_maxfps; 0 is no limit. The title's
 // limiter counts whole milliseconds a frame, so the rate it keeps is 1000
 // over a whole number: 120 gives 125, 144 gives 166.
-#include <algorithm>
 #include <cstdint>
-#include "env.h"
+
+extern "C" uint32_t mw2_frame_rate_limit();
 
 namespace frame_rate
 {
@@ -18,7 +18,7 @@ namespace frame_rate
     // com_maxfps: 0 is no limit, and 1000 is the most the title takes.
     inline uint32_t Limit()
     {
-        static const uint32_t limit = uint32_t(std::min<uint64_t>(env::Number("MW2_FPS_LIMIT", kConsole), 1000));
+        static const uint32_t limit = mw2_frame_rate_limit();
         return limit;
     }
 

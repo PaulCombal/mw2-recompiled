@@ -2,9 +2,20 @@
 // MW2_TRACE_PACING=<file>: a timeline of what paces a frame -- the ring
 // consumer's batches and swaps, the title's threads waiting and presenting --
 // written to <file> at exit, one "microseconds event value thread" a line.
-// Off, a Note is a call and a load of a flag; without diagnostics, nothing.
+// Off, a Note is a load of a flag; without diagnostics, nothing.
 #include <cstdint>
 #include "diagnostics.h"
+
+extern "C"
+{
+    int64_t mw2_pacing_microseconds();
+#if MW2_DIAGNOSTICS
+    bool mw2_pacing_wanted();
+    void mw2_pacing_note(char event, uint32_t value);
+    void mw2_pacing_note_callers(uint32_t r1);
+    void mw2_pacing_write();
+#endif
+}
 
 namespace pacing
 {
@@ -25,14 +36,24 @@ namespace pacing
         kPresentEnd = 'p',
     };
     // Microseconds since the start, on the clock the trace is written in.
-    int64_t Microseconds();
+    inline int64_t Microseconds() { return mw2_pacing_microseconds(); }
 #if MW2_DIAGNOSTICS
-    bool On();
-    void Note(Event event, uint32_t value = 0);
+    inline bool On()
+    {
+        static const bool on = mw2_pacing_wanted();
+        return on;
+    }
+    inline void Note(Event event, uint32_t value = 0)
+    {
+        if (On()) mw2_pacing_note(char(event), value);
+    }
     // kCaller notes for the guest frames above the one with stack pointer
     // `r1`: whoever called the wrapper that waited.
-    void NoteCallers(uint32_t r1);
-    void Write();
+    inline void NoteCallers(uint32_t r1)
+    {
+        if (On()) mw2_pacing_note_callers(r1);
+    }
+    inline void Write() { mw2_pacing_write(); }
 #else
     inline bool On() { return false; }
     inline void Note(Event, uint32_t = 0) {}

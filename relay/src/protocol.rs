@@ -1,4 +1,4 @@
-//! What the game (runtime/online/server.cpp) and the relay say to each other
+//! What the game (src/runtime/online/server.rs) and the relay say to each other
 //! over UDP. Every packet is a Header, then what its kind carries; every number
 //! is big-endian.
 //!
@@ -29,7 +29,8 @@
 //! and Pong measure the way to the relay, and FileAsk and FileChunk fetch the
 //! playlists every copy on a relay must share.
 //!
-//! The game reads this file as protocol.h. Its structs have no holes, and a
+//! The game reads it at the places its relay_wire.rs names, which tests/game_wire.rs
+//! holds to this file; the C++ build reads it as protocol.h. Its structs have no holes, and a
 //! number in them is a Be16, Be32 or Be64, which cannot be read without
 //! saying which order it is in.
 

@@ -52,7 +52,7 @@ namespace
     }
 }
 
-void watchpoint::Install()
+extern "C" void mw2_watchpoint_install()
 {
     g_budget = int(diag::Number("MW2_WATCH_REPORTS", uint64_t(g_budget)));
     const char* e = diag::Text("MW2_WATCH");
@@ -64,14 +64,14 @@ void watchpoint::Install()
     Arm(lo, bytes ? bytes : 4);
 }
 
-void watchpoint::Suspend()
+extern "C" void mw2_watchpoint_suspend()
 {
     if (!g_armed.load(std::memory_order_acquire)) return;
     g_lock.lock();
     Protect(PROT_READ | PROT_WRITE);
 }
 
-void watchpoint::Resume()
+extern "C" void mw2_watchpoint_resume()
 {
     if (!g_armed.load(std::memory_order_acquire)) return;
     Protect(PROT_READ);

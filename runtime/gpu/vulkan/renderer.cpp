@@ -87,16 +87,20 @@ bool vk::renderer::Initialise()
         std::max(properties.limits.minUniformBufferOffsetAlignment,
                  properties.limits.minStorageBufferOffsetAlignment), 256));
 
-    // AMD has no D24_UNORM_S8_UINT, so the depth format is whichever 24-bit-ish
-    // combined format the device actually has.
+    // AMD has no D24_UNORM_S8_UINT, so the D24S8 surfaces' format is whichever
+    // combined format the device actually has; the D24FS8 ones are float.
     g.depthFormat = vk::shaders::DepthFormat(g.physical);
+    g.floatDepthFormat = vk::shaders::FloatDepthFormat(g.physical);
     if (g.depthFormat == VK_FORMAT_UNDEFINED) { LOGW("renderer: no depth format"); return false; }
 
     // The console's 2x and 4x surfaces are drawn with that many samples unless
     // MW2_NO_MSAA=1. A count is usable when colour, depth and stencil can all
-    // be drawn at it; and a multisampled depth target can only be read back
-    // through a render pass resolve, which is Vulkan 1.2 and has to take the
-    // first sample -- the only mode every 1.2 device is required to offer.
+    // be drawn at it. A multisampled depth target is read back by a draw that
+    // samples it where the device can, and otherwise through a render pass
+    // resolve, which is Vulkan 1.2 and has to take the first sample -- the
+    // only mode every 1.2 device is required to offer, for the depth and for
+    // the stencil resolved with it (ResolveDepthInto). Both are required, so
+    // that every device has the second.
     {
         const bool off = env::Flag("MW2_NO_MSAA");
         g.sampleCounts = properties.limits.framebufferColorSampleCounts &
@@ -109,18 +113,30 @@ bool vk::renderer::Initialise()
         const bool modern = properties.apiVersion >= VK_API_VERSION_1_2;
         if (modern) vkGetPhysicalDeviceProperties2(g.physical, &properties2);
         const bool depthResolve = modern &&
-            (resolve.supportedDepthResolveModes & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT);
+            (resolve.supportedDepthResolveModes & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT) &&
+            (resolve.supportedStencilResolveModes & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT);
         g.msaa = !off && depthResolve && (g.sampleCounts & ~VkSampleCountFlags(VK_SAMPLE_COUNT_1_BIT));
-        g.stencilUnresolved = depthResolve && (resolve.independentResolveNone || resolve.independentResolve);
+        // The depth resolve is a draw that samples the surface where the
+        // device can sample a multisampled depth image of both formats at the
+        // counts the title's 2x and 4x are drawn at (ResolveDepthInto).
+        const VkSampleCountFlags used = g.msaa ? VkSampleCountFlags(HostSamples(1) | HostSamples(2)) : 0;
+        VkFormatProperties depth{}, floatDepth{};
+        vkGetPhysicalDeviceFormatProperties(g.physical, g.depthFormat, &depth);
+        vkGetPhysicalDeviceFormatProperties(g.physical, g.floatDepthFormat, &floatDepth);
+        g.drawnDepthResolve = g.msaa &&
+            (properties.limits.sampledImageDepthSampleCounts & used) == used &&
+            (depth.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) &&
+            (floatDepth.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
         if (g.msaa)
             LOGI("renderer: multisampling on: the device draws at%s%s%s%s, the title's 2x and 4x"
-                 " surfaces are drawn at %ux and %ux%s",
+                 " surfaces are drawn at %ux and %ux%s, depth resolved by %s",
                  (g.sampleCounts & VK_SAMPLE_COUNT_2_BIT) ? " 2x" : "",
                  (g.sampleCounts & VK_SAMPLE_COUNT_4_BIT) ? " 4x" : "",
                  (g.sampleCounts & VK_SAMPLE_COUNT_8_BIT) ? " 8x" : "",
                  (g.sampleCounts & VK_SAMPLE_COUNT_16_BIT) ? " 16x" : "",
                  unsigned(HostSamples(1)), unsigned(HostSamples(2)),
-                 env::Text("MW2_MSAA") ? " (MW2_MSAA)" : "");
+                 env::Text("MW2_MSAA") ? " (MW2_MSAA)" : "",
+                 g.drawnDepthResolve ? "a draw" : "the rendering instance");
         else
             LOGI("renderer: multisampling off (%s): the title's 2x and 4x surfaces are drawn at 1x",
                  off ? "MW2_NO_MSAA" : !modern ? "the device is older than Vulkan 1.2"
@@ -355,8 +371,9 @@ bool vk::renderer::Initialise()
         g.presentMemory[i] = image.memory;
     }
 
-    LOGI("renderer: ready on %s, depth %s, %u MB frame arena%s", vk::pipeline::DeviceName(),
-         g.depthFormat == VK_FORMAT_D24_UNORM_S8_UINT ? "D24S8" : "D32S8", g.arenaBytes >> 20,
+    auto depthName = [](VkFormat format) { return format == VK_FORMAT_D24_UNORM_S8_UINT ? "D24S8" : "D32S8"; };
+    LOGI("renderer: ready on %s, depth %s, float depth %s, %u MB frame arena%s", vk::pipeline::DeviceName(),
+         depthName(g.depthFormat), depthName(g.floatDepthFormat), g.arenaBytes >> 20,
          g.shadowBase ? " and a shadow of guest memory behind it" : ", no shadow of guest memory");
     StartPreparing();
     PrewarmFromCache();
@@ -395,6 +412,7 @@ void vk::renderer::Shutdown()
         if (shader.module) vkDestroyShaderModule(g.device, shader.module, nullptr);
     }
     for (auto& [key, target] : g.targets) DestroyTarget(target);
+    DestroyDrawnResolve();
     g.pipelines.clear();
     g.lastPipeline = VK_NULL_HANDLE;
     g.shaders.clear();

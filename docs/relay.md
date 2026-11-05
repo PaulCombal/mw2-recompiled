@@ -119,12 +119,15 @@ relay is for.
 ## How it works
 
 The relay is a Rust program of its own in `relay/`. It uses nothing of the
-game's: all they share is the protocol, `relay/src/protocol.rs`, from which
-`relay/protocol.h` is made for the game's side, `runtime/online/server.cpp`
-([multiplayer.md](multiplayer.md#lan-and-server)). `cargo test` fails when the
-two differ, and `BLESS=1 cargo test` writes the header again. A number in a packet
-has a big-endian type, so it cannot be read without saying so, and nothing in
-the program parses a packet by hand.
+game's: all they share is the protocol, `relay/src/protocol.rs`. The game's side,
+`src/runtime/online/server.rs` ([multiplayer.md](multiplayer.md#lan-and-server)),
+reads and writes it at the places `src/runtime/online/relay_wire.rs` names, and
+the relay's `cargo test` fails when a number, a kind, a size or a place there is
+not protocol.rs's. The C++ build's `runtime/online/server.cpp` reads
+`relay/protocol.h`, which is made from protocol.rs: `cargo test` fails when the
+two differ, and `BLESS=1 cargo test` writes the header again. In the relay, a
+number in a packet has a big-endian type, so it cannot be read without saying
+so, and nothing parses a packet by hand.
 
 `cargo test` also runs the real program on a real socket, as a copy speaks to
 it (`relay/tests/conformance.rs`), with packets of random bytes among them.

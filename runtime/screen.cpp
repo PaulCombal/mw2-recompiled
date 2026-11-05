@@ -1,5 +1,5 @@
 // What the system's screens are drawn with (screen.h).
-#include "screen.h"
+#include "screen_sheet.h"
 #include "diagnostics.h"
 #include "kernel/kernel.h"
 
@@ -19,10 +19,13 @@ extern const unsigned char kFontBody[];
 
 namespace
 {
-    constexpr int kAtlas = 512;
+    // The atlas starts at 512 texels a side and doubles until every glyph fits: a tall
+    // window's letters do not fit the smallest.
+    constexpr int kFirstAtlas = 512, kLargestAtlas = 8192;
     struct Baked
     {
         std::vector<uint8_t> atlas;
+        int side = kFirstAtlas;
         stbtt_packedchar glyphs[95]{};
         float size = 0, ascent = 0;
     };
@@ -38,11 +41,16 @@ namespace
         const float size = std::round(kSizes[int(which)] * unit);
         if (font.size == size) return font;
         font.size = size;
-        font.atlas.assign(size_t(kAtlas) * kAtlas, 0);
-        stbtt_pack_context pack;
-        stbtt_PackBegin(&pack, font.atlas.data(), kAtlas, kAtlas, 0, 1, nullptr);
-        stbtt_PackFontRange(&pack, data, 0, size, 32, 95, font.glyphs);
-        stbtt_PackEnd(&pack);
+        for (font.side = kFirstAtlas;; font.side *= 2)
+        {
+            font.atlas.assign(size_t(font.side) * font.side, 0);
+            std::memset(font.glyphs, 0, sizeof font.glyphs);
+            stbtt_pack_context pack;
+            stbtt_PackBegin(&pack, font.atlas.data(), font.side, font.side, 0, 1, nullptr);
+            const bool fitted = stbtt_PackFontRange(&pack, data, 0, size, 32, 95, font.glyphs) != 0;
+            stbtt_PackEnd(&pack);
+            if (fitted || font.side >= kLargestAtlas) break;
+        }
         stbtt_fontinfo info;
         stbtt_InitFont(&info, data, 0);
         int ascent = 0, descent = 0, gap = 0;
@@ -127,15 +135,15 @@ float screen::Sheet::Text(Font which, float ux, float uy, Colour colour, const s
     {
         if (c < 32 || c > 126) c = '?';
         stbtt_aligned_quad quad;
-        stbtt_GetPackedQuad(font.glyphs, kAtlas, kAtlas, c - 32, &x, &penY, &quad, 1);
-        const int sx = int(quad.s0 * kAtlas + 0.5f), sy = int(quad.t0 * kAtlas + 0.5f);
+        stbtt_GetPackedQuad(font.glyphs, font.side, font.side, c - 32, &x, &penY, &quad, 1);
+        const int sx = int(quad.s0 * font.side + 0.5f), sy = int(quad.t0 * font.side + 0.5f);
         const int w = int(quad.x1 - quad.x0), h = int(quad.y1 - quad.y0);
         for (int row = 0; row < h; row++)
             for (int column = 0; column < w; column++)
             {
                 const int px = int(quad.x0) + column, py = int(quad.y0) + row;
                 if (px < 0 || py < 0 || px >= int(image.width) || py >= int(image.height)) continue;
-                const uint32_t alpha = font.atlas[size_t(sy + row) * kAtlas + sx + column];
+                const uint32_t alpha = font.atlas[size_t(sy + row) * font.side + sx + column];
                 uint8_t* p = &image.pixels[(size_t(py) * image.width + px) * 4];
                 p[0] = uint8_t((colour.b * alpha + p[0] * (255 - alpha)) / 255);
                 p[1] = uint8_t((colour.g * alpha + p[1] * (255 - alpha)) / 255);
@@ -153,7 +161,7 @@ float screen::Sheet::Width(Font which, const std::string& text)
     {
         if (c < 32 || c > 126) c = '?';
         stbtt_aligned_quad quad;
-        stbtt_GetPackedQuad(font.glyphs, kAtlas, kAtlas, c - 32, &x, &y, &quad, 1);
+        stbtt_GetPackedQuad(font.glyphs, font.side, font.side, c - 32, &x, &y, &quad, 1);
     }
     return x / unit;
 }

@@ -5,14 +5,23 @@ mw2/
 *.pe
 *.iso
 
-# ---- upstream tool checkout (121 MB + 6 submodules) ----
-# Cloned and patched by build.sh; local changes live in patches/.
-XenonRecomp/
-
 # ---- generated C++ (~2.2M lines, 64 MB) ----
 ppc/
+ppc_rs/
+ppc_mp_rs/
+ppc_tu0_rs/
+ppc_mp_tu0_rs/
+# where cargo xtask recompiles before copying what changed (xtask/src/main.rs)
+ppc*.new/
 
-# ---- generated switch tables (XenonAnalyse output, rebuilt by build.sh) ----
+# ---- cargo: the link to the tree in use, and what cargo xtask or a plain build makes.
+# Cargo.lock is kept: every title has the same chunk crates (rust_chunk_count).
+/generated
+/generated.title
+/target/
+/xtask/target/
+
+# ---- generated switch tables (XenonAnalyse output, rebuilt by cargo xtask) ----
 config/mw2_switch_tables.toml
 
 # ---- build artifacts ----
@@ -40,13 +49,13 @@ captures/
 # ---- saved games the runtime writes beside the binary ----
 saves/
 
-# ---- the multiplayer executable's derived files (TITLE=mp ./build.sh) ----
+# ---- the multiplayer executable's derived files (cargo xtask build --title mp) ----
 ppc_mp/
 build-mp/
 build-mp-release/
 config/mw2mp_switch_tables.toml
 
-# ---- the disc version's derived files (VERSION=tu0 ./build.sh) ----
+# ---- the disc version's derived files (cargo xtask build --tu0) ----
 ppc_tu0/
 ppc_mp_tu0/
 build*-tu0/

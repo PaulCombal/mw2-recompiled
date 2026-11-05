@@ -10,17 +10,26 @@
 // writes inside the range are reported with the host call stack, the first
 // MW2_WATCH_REPORTS of them (20 by default), and the rest are stepped over.
 // Diagnostics only.
+#if MW2_DIAGNOSTICS && !defined(_WIN32)
+extern "C"
+{
+    void mw2_watchpoint_install();
+    void mw2_watchpoint_suspend();
+    void mw2_watchpoint_resume();
+}
+#endif
+
 namespace watchpoint
 {
 #if MW2_DIAGNOSTICS && !defined(_WIN32)
-    void Install();
+    inline void Install() { mw2_watchpoint_install(); }
 
     // Around a write this runtime makes itself. Without it the first memmove
     // over a watched block spends the whole report budget on our own copy, one
     // single-stepped byte at a time, and the question -- does the *game* ever
     // write this block? -- goes unanswered.
-    void Suspend();
-    void Resume();
+    inline void Suspend() { mw2_watchpoint_suspend(); }
+    inline void Resume() { mw2_watchpoint_resume(); }
 
     // Called from the fault handler before it decides the process is dying.
     // Return true when the fault was ours and has been dealt with.

@@ -59,15 +59,15 @@ namespace gpu::watch
 namespace vk::renderer { uint64_t CompletedSubmission() { return 0; } }
 // Nor a recorder thread with commands queued ahead of an upload.
 namespace vk::record { void Drain() {} }
-// Nor frames for the stutter detector to time.
-namespace stutters
+// Nor frames for the stutter detector to time, nor a bug report to time the uploads
+// for: what their headers' inline functions call.
+extern "C"
 {
-    bool On() { return false; }
-    void Add(Cost, uint64_t) {}
+    bool mw2_stutters_on() { return false; }
+    void mw2_stutters_add(int, uint64_t) {}
+    uint64_t mw2_report_timed_begin(int) { return 0; }
+    void mw2_report_timed_end(int, uint64_t) {}
 }
-// Nor a bug report to time the uploads for.
-report::Timed::Timed(Time what) : time(what) {}
-report::Timed::~Timed() {}
 
 int main(int argc, char** argv)
 {

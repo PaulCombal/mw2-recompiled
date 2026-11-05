@@ -1,6 +1,7 @@
-// The XMA decoder. A port of Xenia's current context decoder (xma_context_new)
-// onto this runtime: the same context layout, the same packet and frame walk,
-// the same FFmpeg "xmaframes" codec, which takes one XMA frame at a time.
+// The XMA decoder, the C++ build's (src/runtime/kernel/xma.rs in the Rust one).
+// A port of Xenia's current context decoder (xma_context_new) onto this runtime:
+// the same context layout, the same packet and frame walk, the same FFmpeg
+// "xmaframes" codec, which takes one XMA frame at a time.
 //
 // XMA2 is WMA Pro in 2 KB packets. A packet starts with a 32-bit header (frame
 // count, bit offset of the first frame that starts in it, a skip count to the
@@ -874,7 +875,7 @@ namespace
     }
 }
 
-void apu::xma::Initialise()
+extern "C" void mw2_xma_initialise()
 {
     av_log_set_callback(AvLog);
 
@@ -901,7 +902,7 @@ void apu::xma::Initialise()
     LOGI("xma: %u contexts at %08X (physical %08X)", kContextCount, g_contextBase, kernel::ToPhysical(g_contextBase));
 }
 
-uint32_t apu::xma::AllocateContext()
+extern "C" uint32_t mw2_xma_allocate_context()
 {
     if (!g_ready) return 0;
     std::lock_guard<std::mutex> guard(g_allocation);
@@ -922,7 +923,7 @@ uint32_t apu::xma::AllocateContext()
     return found;
 }
 
-void apu::xma::ReleaseContext(uint32_t guestAddress)
+extern "C" void mw2_xma_release_context(uint32_t guestAddress)
 {
     int id = ContextId(guestAddress);
     if (id < 0) { LOGW("xma: release of %08X, which is not a context", guestAddress); return; }
@@ -943,7 +944,9 @@ namespace
     }
 }
 
-void apu::xma::RegisterStore(uint32_t address, uint32_t value)
+// A store into the register window. `value` is the register's content as the
+// little-endian hardware holds it.
+static void RegisterStore(uint32_t address, uint32_t value)
 {
     if (!g_ready) return;
     const uint32_t r = (address & 0xFFFFu) / 4;
@@ -983,10 +986,10 @@ extern "C" void mw2_xma_register_store(uint32_t address, uint32_t value)
 {
     // The recompiled code hands over what stw would write; the hardware reads
     // its registers little-endian, so the title wrote them with stwbrx.
-    apu::xma::RegisterStore(address, __builtin_bswap32(value));
+    RegisterStore(address, __builtin_bswap32(value));
 }
 
-void apu::xma::Report()
+extern "C" void mw2_xma_report()
 {
     if constexpr (!diag::kOn) return;
     if (!g_ready) return;

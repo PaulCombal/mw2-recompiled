@@ -24,16 +24,15 @@
 
 namespace
 {
-    uint8_t* g_base = nullptr;
     constexpr uint64_t kSpace = 0x100000000ull;   // full 32-bit guest space
 }
 
-uint8_t* guest::Base() { return g_base; }
+uint8_t* mw2_guest_base = nullptr;
 
-bool guest::Commit(uint32_t address, uint32_t size)
+extern "C" bool mw2_guest_commit(uint32_t address, uint32_t size)
 {
 #ifdef _WIN32
-    return VirtualAlloc(g_base + address, size, MEM_COMMIT, PAGE_READWRITE) != nullptr;
+    return VirtualAlloc(mw2_guest_base + address, size, MEM_COMMIT, PAGE_READWRITE) != nullptr;
 #else
     // The reservation is already mapped read/write; pages are backed on touch.
     (void)address; (void)size;
@@ -51,11 +50,11 @@ bool guest::Commit(uint32_t address, uint32_t size)
 // null base needs no guard here: G_GetClientScore (sub_82231F10 in the
 // multiplayer) reads level.clients[index].score with level.clients null while
 // no game is loaded, which iw4x guards on the PC, and returns 0 on both systems.
-bool guest::CommitOnTouch(const void* address)
+extern "C" bool mw2_guest_commit_on_touch(const void* address)
 {
 #ifdef _WIN32
     const auto* at = static_cast<const uint8_t*>(address);
-    if (!g_base || at < g_base || at >= g_base + kSpace) return false;
+    if (!mw2_guest_base || at < mw2_guest_base || at >= mw2_guest_base + kSpace) return false;
     MEMORY_BASIC_INFORMATION info;
     if (!VirtualQuery(at, &info, sizeof(info))) return false;
     // Another thread touched the same chunk first, and has committed it.
@@ -107,9 +106,9 @@ namespace
             LOGE("this version of Windows cannot map memory twice (Windows 10 1803 or later is needed)");
             return false;
         }
-        g_base = static_cast<uint8_t*>(g_virtualAlloc2(nullptr, nullptr, kSpace, MEM_RESERVE | MEM_RESERVE_PLACEHOLDER,
+        mw2_guest_base = static_cast<uint8_t*>(g_virtualAlloc2(nullptr, nullptr, kSpace, MEM_RESERVE | MEM_RESERVE_PLACEHOLDER,
                                                        PAGE_NOACCESS, nullptr, 0));
-        return g_base != nullptr;
+        return mw2_guest_base != nullptr;
     }
 
     bool MapPhysicalAperture()
@@ -121,8 +120,8 @@ namespace
         bool ok = true;
         for (uint32_t window : { guest::kPhysicalBase, guest::kApertureBase })
         {
-            ok = ok && VirtualFree(g_base + window, size, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
-            ok = ok && g_mapViewOfFile3(bank, GetCurrentProcess(), g_base + window, 0, size,
+            ok = ok && VirtualFree(mw2_guest_base + window, size, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
+            ok = ok && g_mapViewOfFile3(bank, GetCurrentProcess(), mw2_guest_base + window, 0, size,
                                         MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, nullptr, 0);
         }
         // The views keep the memory alive; the handle is not needed.
@@ -131,19 +130,19 @@ namespace
         // What is left of the placeholder, below the bank and above the second
         // window, becomes an ordinary reservation to commit from.
         const uint32_t apertureEnd = guest::kApertureBase + uint32_t(size);
-        return g_virtualAlloc2(nullptr, g_base, guest::kPhysicalBase, MEM_RESERVE | MEM_REPLACE_PLACEHOLDER,
+        return g_virtualAlloc2(nullptr, mw2_guest_base, guest::kPhysicalBase, MEM_RESERVE | MEM_REPLACE_PLACEHOLDER,
                                PAGE_NOACCESS, nullptr, 0) &&
-               g_virtualAlloc2(nullptr, g_base + apertureEnd, size_t(kSpace - apertureEnd),
+               g_virtualAlloc2(nullptr, mw2_guest_base + apertureEnd, size_t(kSpace - apertureEnd),
                                MEM_RESERVE | MEM_REPLACE_PLACEHOLDER, PAGE_NOACCESS, nullptr, 0);
     }
 #else
     bool ReserveSpace()
     {
         // MAP_NORESERVE: address space only, pages allocated on touch.
-        g_base = (uint8_t*)mmap(nullptr, kSpace, PROT_READ | PROT_WRITE,
+        mw2_guest_base = (uint8_t*)mmap(nullptr, kSpace, PROT_READ | PROT_WRITE,
                                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-        if (g_base == MAP_FAILED) g_base = nullptr;
-        return g_base != nullptr;
+        if (mw2_guest_base == MAP_FAILED) mw2_guest_base = nullptr;
+        return mw2_guest_base != nullptr;
     }
 
     bool MapPhysicalAperture()
@@ -155,7 +154,7 @@ namespace
         for (uint32_t window : { guest::kPhysicalBase, guest::kApertureBase })
         {
             if (!ok) break;
-            ok = mmap(g_base + window, size, PROT_READ | PROT_WRITE,
+            ok = mmap(mw2_guest_base + window, size, PROT_READ | PROT_WRITE,
                       MAP_SHARED | MAP_FIXED | MAP_NORESERVE, fd, 0) != MAP_FAILED;
         }
         // The mappings keep the memory alive; the descriptor is not needed.
@@ -165,7 +164,7 @@ namespace
 #endif
 }
 
-uint8_t* guest::Initialise()
+extern "C" uint8_t* mw2_guest_initialise()
 {
     if (!ReserveSpace())
     {
@@ -176,7 +175,7 @@ uint8_t* guest::Initialise()
     // the views are in place.
     if (!MapPhysicalAperture())
     {
-        LOGE("could not alias the physical aperture at %08X", kApertureBase);
+        LOGE("could not alias the physical aperture at %08X", guest::kApertureBase);
         return nullptr;
     }
 
@@ -184,20 +183,20 @@ uint8_t* guest::Initialise()
     const uint32_t funcTableSize = uint32_t(PPC_CODE_SIZE * 2);
 
     // The physical bank is a mapping, committed whole already.
-    if (!Commit(uint32_t(PPC_IMAGE_BASE), uint32_t(PPC_IMAGE_SIZE)) ||
-        !Commit(funcTableBase, funcTableSize) ||
-        !Commit(kHeapBase, kHeapEnd - kHeapBase))
+    if (!guest::Commit(uint32_t(PPC_IMAGE_BASE), uint32_t(PPC_IMAGE_SIZE)) ||
+        !guest::Commit(funcTableBase, funcTableSize) ||
+        !guest::Commit(guest::kHeapBase, guest::kHeapEnd - guest::kHeapBase))
     {
         LOGE("failed to commit guest regions");
         return nullptr;
     }
 
-    LOGI("guest space at host %p", (void*)g_base);
+    LOGI("guest space at host %p", (void*)mw2_guest_base);
     LOGI("  image      %08X..%08X  (%.1f MB)", uint32_t(PPC_IMAGE_BASE), funcTableBase, PPC_IMAGE_SIZE / 1048576.0);
     LOGI("  func table %08X..%08X  (%.1f MB)", funcTableBase, funcTableBase + funcTableSize, funcTableSize / 1048576.0);
-    LOGI("  heap       %08X..%08X  (%.1f MB)", kHeapBase, kHeapEnd, (kHeapEnd - kHeapBase) / 1048576.0);
-    LOGI("  physical   %08X..%08X  (%.1f MB)", kPhysicalBase, kPhysicalEnd, (kPhysicalEnd - kPhysicalBase) / 1048576.0);
+    LOGI("  heap       %08X..%08X  (%.1f MB)", guest::kHeapBase, guest::kHeapEnd, (guest::kHeapEnd - guest::kHeapBase) / 1048576.0);
+    LOGI("  physical   %08X..%08X  (%.1f MB)", guest::kPhysicalBase, guest::kPhysicalEnd, (guest::kPhysicalEnd - guest::kPhysicalBase) / 1048576.0);
     LOGI("  aperture   %08X..%08X  (the same memory, second window)",
-         kApertureBase, uint32_t(kApertureBase + (kPhysicalEnd - kPhysicalBase)));
-    return g_base;
+         guest::kApertureBase, uint32_t(guest::kApertureBase + (guest::kPhysicalEnd - guest::kPhysicalBase)));
+    return mw2_guest_base;
 }

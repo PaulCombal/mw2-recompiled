@@ -1,14 +1,25 @@
 #pragma once
-// The screens the console's system draws over a title -- signing in, picking
-// friends, the guide -- drawn here into a picture the presenter lays over the
-// middle of the frame. They share the launcher's fonts and look.
-//
-// One is open at a time, as on the console: a screen asked for while another
-// is open stays shut. The title hears XN_SYS_UI when the first opens and when
-// the last shuts, not at each.
+// The pictures of the screens the console's system draws over a title --
+// signing in (signin.h), picking friends (friends.h), the guide (guide.h) --
+// which the presenter lays over the middle of the frame.
+#include "text_sink.h"
+
 #include <cstdint>
-#include <string>
 #include <vector>
+
+extern "C"
+{
+    // A picture as it crosses: the pixels go to `pixels` through `sink` only
+    // when they are drawn again.
+    struct mw2_image
+    {
+        uint64_t version;
+        uint32_t width, height;
+        float outline;
+        void* pixels;
+        mw2_text_sink sink;
+    };
+}
 
 namespace screen
 {
@@ -21,48 +32,29 @@ namespace screen
         float outline = 0;   // the frame's width in pixels, which the window rounds the corners of
     };
 
-    // Whether this build draws them (MW2_SCREENS): without, a screen still
-    // opens and takes the controllers, unseen.
-    bool Drawn();
-
-    enum class Which { None, Signin, Friends, Guide };
-    // Opens `which`: false while another is open. True, with nothing posted,
-    // when it is the one open.
-    bool Claim(Which which);
-    // Shuts it, if it is the one open.
-    void Release(Which which);
-    // The screen open becomes `to` with no notification in between: the guide
-    // giving way to the friends screen it opens.
-    void Pass(Which from, Which to);
-
-    struct Colour { uint8_t r, g, b; };
-    constexpr Colour kWhite{ 236, 236, 232 }, kDim{ 150, 151, 150 }, kAmber{ 232, 178, 52 },
-                     kBack{ 22, 24, 28 }, kBar{ 0, 0, 0 }, kEdge{ 70, 73, 78 };
-
-    enum class Font { Heading, Entry, Small };
-
-    // A sheet of `sheetWidth` by `sheetHeight` units, drawn `height` pixels
-    // tall; everything below is placed in units.
-    struct Sheet
+    // A screen's picture for a window of this height, through its C function.
+    inline bool Picture(bool (*picture)(uint32_t, mw2_image*), uint32_t windowHeight, Image& image)
     {
-        Image& image;
-        float unit;
+        mw2_image c{ image.version, image.width, image.height, image.outline, &image.pixels, mw2_assign_bytes };
+        if (!picture(windowHeight, &c)) return false;
+        image.version = c.version;
+        image.width = c.width;
+        image.height = c.height;
+        image.outline = c.outline;
+        return true;
+    }
 
-        Sheet(Image& image, uint32_t height, float sheetWidth, float sheetHeight, uint64_t version);
-        int At(float units) const;
-
-        void Fill(float x0, float y0, float x1, float y1, Colour colour);
-        // Left-aligned at x, the line's top at y; returns where the text ends.
-        float Text(Font font, float x, float y, Colour colour, const std::string& text);
-        float Width(Font font, const std::string& text);
-        // An RGBA square, scaled to `size` units.
-        void Picture(float x, float y, float size, const std::vector<uint8_t>& rgba, uint32_t side);
-        // The outline, the dark inside and the heading every screen has.
-        void Frame(const std::string& heading);
-        // "A  Select      B  Back" along the bottom.
-        void Buttons(float y, const std::vector<std::pair<std::string, std::string>>& buttons);
-    };
-
-    // MW2_DUMP_FRAMES keeps the screens too, which the frames do not show.
-    void Dump(const char* name, const Image& image);
+    // The other way, for the C++ build's screens: draws into `image`, as the
+    // presenter's picture had it, and hands the pixels over if it drew.
+    inline bool Answer(mw2_image* c, bool drawn, const Image& image)
+    {
+        if (!drawn) return false;
+        if (image.version != c->version || image.height != c->height)
+            c->sink(c->pixels, reinterpret_cast<const char*>(image.pixels.data()), image.pixels.size());
+        c->version = image.version;
+        c->width = image.width;
+        c->height = image.height;
+        c->outline = image.outline;
+        return true;
+    }
 }

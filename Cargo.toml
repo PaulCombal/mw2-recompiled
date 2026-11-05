@@ -1,0 +1,56 @@
+# The game: cargo links the executable from the guest code (generated/, which
+# cargo xtask writes) and the renderer's C++ (build.rs compiles it). A plain build
+# takes the title cargo xtask last generated:
+#
+#   cargo xtask build --title mp    generates, builds, and is the usual way
+#   cargo build --release           again, once generated/ is there
+[package]
+name = "mw2"
+version = "0.0.0"
+edition = "2024"
+publish = false
+build = "build.rs"
+
+[[bin]]
+name = "mw2"
+path = "src/main.rs"
+
+[features]
+default = ["diagnostics"]
+# The traces, dumps, statistics and test harness (runtime/diagnostics.h).
+diagnostics = []
+# The C++ standard library linked in, for a binary that runs on other machines.
+portable = []
+
+[dependencies]
+ppc_recomp = { path = "generated/ppc_recomp" }
+ppc_rt = { path = "generated/ppc_rt" }
+# SDL, built from its source (the sdl3-src crate, the version named in its own) and
+# linked statically: cmake/sdl.cmake says how.
+sdl3-sys = { version = "=0.7.2", default-features = false, features = ["build-from-source-static"] }
+
+[workspace]
+# Each of these is a workspace of its own.
+exclude = ["generated", "relay", "xtask"]
+
+# The generated workspace's own settings: only the top workspace's count.
+[profile.release]
+opt-level = 3
+codegen-units = 1
+incremental = false
+debug = false
+panic = "abort"
+
+# cargo build: this crate's checks on, and the guest code as in a release, which
+# would overflow the host's stack unoptimised, and needs its wrapping arithmetic
+# unchecked. The C++ runtime is CMake's Release build either way.
+[profile.dev]
+panic = "abort"
+
+[profile.dev.package."*"]
+opt-level = 3
+codegen-units = 1
+incremental = false
+debug = false
+debug-assertions = false
+overflow-checks = false

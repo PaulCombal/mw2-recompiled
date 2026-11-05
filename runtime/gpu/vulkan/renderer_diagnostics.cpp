@@ -576,7 +576,7 @@ namespace vk::renderer::detail
             DumpImage(shot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target.width * target.scale,
                       tall * target.scale, name,
                       target.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT,
-                      target.depth ? g.depthFormat : VK_FORMAT_UNDEFINED);
+                      target.depth ? target.format : VK_FORMAT_UNDEFINED);
         }
         for (const Shot& shot : shots)
             if (shot.target->depth && BeginFrame()) EndReadingDepth(*shot.target);

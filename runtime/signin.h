@@ -30,6 +30,16 @@
 #include <string>
 #include <vector>
 
+extern "C"
+{
+    void mw2_signin_at(uint32_t user, bool* signedIn, uint64_t* id, void* name, mw2_text_sink sink);
+    void mw2_signin_first(uint64_t* id, void* name, mw2_text_sink sink);
+    uint32_t mw2_signin_mask();
+    void mw2_signin_ask();
+    bool mw2_signin_input(uint32_t user, uint16_t buttons);
+    bool mw2_signin_picture(uint32_t windowHeight, mw2_image* image);
+}
+
 namespace signin
 {
     constexpr uint32_t kUsers = 4;
@@ -41,23 +51,37 @@ namespace signin
         std::string name;
     };
     // The player at controller 1, 2 or 3 (the second to the fourth).
-    Player At(uint32_t user);
+    inline Player At(uint32_t user)
+    {
+        Player player;
+        mw2_signin_at(user, &player.signedIn, &player.id, &player.name, mw2_assign_text);
+        return player;
+    }
     // The player at the first controller. Always signed in.
-    Player First();
+    inline Player First()
+    {
+        Player player;
+        player.signedIn = true;
+        mw2_signin_first(&player.id, &player.name, mw2_assign_text);
+        return player;
+    }
     // A bit per signed-in controller, the first's always set.
-    uint32_t Mask();
+    inline uint32_t Mask() { return mw2_signin_mask(); }
 
     // The title asks for the screen: it opens for the controller pressed last.
-    void Ask();
+    inline void Ask() { mw2_signin_ask(); }
 
     // What a controller holds, at every read of it (XINPUT_GAMEPAD buttons,
     // a stick pushed up or down counted as the d-pad, and kGuide). True when
     // the title is not to see it. The Guide button opens the screen for its
     // controller, as it opens the console's.
     constexpr uint16_t kGuide = 0x0400;
-    bool Input(uint32_t user, uint16_t buttons);
+    inline bool Input(uint32_t user, uint16_t buttons) { return mw2_signin_input(user, buttons); }
 
     // The screen, for a window of this height. False while it is shut.
     using Image = screen::Image;
-    bool Picture(uint32_t windowHeight, Image& image);
+    inline bool Picture(uint32_t windowHeight, Image& image)
+    {
+        return screen::Picture(mw2_signin_picture, windowHeight, image);
+    }
 }

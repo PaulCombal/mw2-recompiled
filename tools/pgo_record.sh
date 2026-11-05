@@ -5,7 +5,7 @@
 # campaign flies Team Player and S.S.D.D., the multiplayer walks Terminal and
 # Karachi -- and keeps what the counters saw. About 15 minutes; the game's
 # windows open and close by themselves, and want no input.
-#   Prereqs: the game built once (build.sh), llvm-profdata-18.
+#   Prereqs: the game built once (cargo xtask recompile, for each title), llvm-profdata-18.
 #   TITLES="sp" records only the campaign's.
 # Commit the two archives: a release build uses what is in pgo/. Record again
 # after large changes to the runtime; a function changed since the recording is
@@ -35,7 +35,8 @@ rm -rf $WORK && mkdir -p $WORK pgo
 for TITLE in ${TITLES:-sp mp}; do
     BUILD=out/pgo-$TITLE
     echo "==> $TITLE: the executable with counters, in $BUILD"
-    TITLE=$TITLE BUILD_DIR=$BUILD REGENERATE=0 TARGETS=mw2 CMAKE_EXTRA="-DMW2_PGO_TRAINING=ON" ./build.sh > $WORK/$TITLE-build.log 2>&1 \
+    cargo xtask build --cpp --title $TITLE --build-dir $BUILD --keep-generated --targets mw2 \
+        --cmake-extra -DMW2_PGO_TRAINING=ON > $WORK/$TITLE-build.log 2>&1 \
         || { echo "the build failed; see $WORK/$TITLE-build.log"; exit 1; }
     echo "==> $TITLE: playing"
     if [ $TITLE = sp ]; then

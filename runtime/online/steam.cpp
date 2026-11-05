@@ -485,7 +485,7 @@ namespace
         }
     };
 
-    class Steam final : public online::Service
+    class Steam final : public online::Backend
     {
     public:
         ~Steam() override
@@ -1520,7 +1520,7 @@ namespace
     };
 }
 
-std::unique_ptr<online::Service> online::MakeSteam() { return std::make_unique<Steam>(); }
+std::unique_ptr<online::Backend> online::MakeSteam() { return std::make_unique<Steam>(); }
 
 #ifdef _WIN32
 bool online::EnterSteamNamespace(int& exitCode)

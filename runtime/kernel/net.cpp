@@ -29,7 +29,6 @@
 #include <deque>
 #include <map>
 #include <mutex>
-#include <random>
 #include <vector>
 
 #ifdef _WIN32
@@ -261,7 +260,7 @@ void kernel::TitleXnAddr(void* out36)
     addr->inaOnline = 0;
     addr->abEnet[0] = 0x00; addr->abEnet[1] = 0x22; addr->abEnet[2] = 0x48;
     addr->abEnet[3] = 0x01; addr->abEnet[4] = 0x02; addr->abEnet[5] = 0x03;
-    if (auto* service = online::Get()) WritePeer(*addr, service->LocalId());
+    if (auto* service = online::GetBackend()) WritePeer(*addr, service->LocalId());
 }
 
 void kernel::SetXnAddrPeer(void* addr36, uint64_t peer)
@@ -345,12 +344,7 @@ PPC_FUNC(__imp__NetDll_XNetGetEthernetLinkStatus)
 
 PPC_FUNC(__imp__NetDll_XNetRandom)
 {
-    uint32_t length = ctx.r5.u32;
-    if (auto* p = GuestPtr<uint8_t>(ctx.r4.u32))
-    {
-        thread_local std::mt19937 rng{ std::random_device{}() };
-        for (uint32_t i = 0; i < length; i++) p[i] = uint8_t(rng());
-    }
+    if (auto* p = GuestPtr<uint8_t>(ctx.r4.u32)) kernel::RandomBytes(p, ctx.r5.u32);
     ctx.r3.u64 = 0;
 }
 
@@ -359,7 +353,7 @@ PPC_FUNC(__imp__NetDll_XNetRandom)
 // which the host's sockets carry.
 PPC_FUNC(__imp__NetDll_XNetXnAddrToInAddr)
 {
-    auto* service = online::Get();
+    auto* service = online::GetBackend();
     const auto* addr = GuestPtr<XNADDR>(ctx.r4.u32);
     auto* out = GuestPtr<be32>(ctx.r6.u32);
     uint64_t id;
@@ -377,7 +371,7 @@ PPC_FUNC(__imp__NetDll_XNetXnAddrToInAddr)
 // (xnet, IN_ADDR, XNADDR* out, XNKID* out). Who a datagram came from.
 PPC_FUNC(__imp__NetDll_XNetInAddrToXnAddr)
 {
-    auto* service = online::Get();
+    auto* service = online::GetBackend();
     const uint32_t address = ctx.r4.u32;
     auto* addr = GuestPtr<XNADDR>(ctx.r5.u32);
     uint64_t id = 0;
@@ -401,7 +395,7 @@ PPC_FUNC(__imp__NetDll_XNetInAddrToXnAddr)
 // The service is already a connection to everyone it can name.
 PPC_FUNC(__imp__NetDll_XNetConnect)
 {
-    ctx.r3.u64 = online::Get() ? 0 : X_WSAENETDOWN;
+    ctx.r3.u64 = online::GetBackend() ? 0 : X_WSAENETDOWN;
 }
 PPC_FUNC(__imp__NetDll_XNetGetConnectStatus)  { ctx.r3.u64 = 2; }   // XNET_CONNECT_STATUS_CONNECTED
 PPC_FUNC(__imp__NetDll_XNetUnregisterInAddr)  { ctx.r3.u64 = 0; }
@@ -436,8 +430,7 @@ PPC_FUNC(__imp__NetDll_XNetQosServiceLookup)
     *reinterpret_cast<be32*>(info + 16) = 100000000;     // bits a second, up
     *reinterpret_cast<be32*>(info + 20) = 100000000;     // and down
     *out = qos;
-    if (const uint32_t event = ctx.r5.u32)
-        if (auto signal = kernel::LookupHandleAs<kernel::Event>(event)) signal->Set();
+    if (const uint32_t event = ctx.r5.u32) kernel::SetEvent(event);
     ctx.r3.u64 = 0;
 }
 
@@ -508,8 +501,7 @@ PPC_FUNC(__imp__NetDll_XNetQosLookup)
         }
     }
     *out = qos;
-    if (event)
-        if (auto signal = kernel::LookupHandleAs<kernel::Event>(event)) signal->Set();
+    if (event) kernel::SetEvent(event);
     ctx.r3.u64 = 0;
 }
 
@@ -551,7 +543,7 @@ PPC_FUNC(__imp__NetDll_bind)
     if (s == socket_t(INVALID_SOCKET) || !ReadSockAddr(ctx.r5.u32, addr))
     { t_lastError = 10022; ctx.r3.u64 = uint32_t(-1); return; }
 
-    if (!online::Get() && ::bind(s, reinterpret_cast<sockaddr*>(&addr), sizeof addr) != 0)
+    if (!online::GetBackend() && ::bind(s, reinterpret_cast<sockaddr*>(&addr), sizeof addr) != 0)
     {
         t_lastError = LastHostError();
         // Another copy on this machine has the port, which no console ever
@@ -578,7 +570,7 @@ PPC_FUNC(__imp__NetDll_connect)
     if (s == socket_t(INVALID_SOCKET) || !ReadSockAddr(ctx.r5.u32, addr))
     { t_lastError = 10022; ctx.r3.u64 = uint32_t(-1); return; }
     // Only the socket for Xbox Live's servers connects, and there are none.
-    if (online::Get()) { t_lastError = 10061; ctx.r3.u64 = uint32_t(-1); return; }
+    if (online::GetBackend()) { t_lastError = 10061; ctx.r3.u64 = uint32_t(-1); return; }
     ctx.r3.u64 = ::connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof addr) == 0 ? 0 : uint32_t(-1);
     if (ctx.r3.u64) t_lastError = LastHostError();
 }
@@ -621,7 +613,7 @@ PPC_FUNC(__imp__NetDll_sendto)
     { t_lastError = 10022; ctx.r3.u64 = uint32_t(-1); return; }
 
     auto* buffer = GuestPtr<const char>(ctx.r5.u32);
-    if (auto* service = online::Get())
+    if (auto* service = online::GetBackend())
     {
         const uint32_t to = ntohl(addr.sin_addr.s_addr);
         const uint16_t port = ntohs(UnshiftPort(addr.sin_port));
@@ -663,7 +655,7 @@ PPC_FUNC(__imp__NetDll_recvfrom)
     socket_t s = HostSocket(ctx.r4.u32);
     if (s == socket_t(INVALID_SOCKET)) { t_lastError = 10038; ctx.r3.u64 = uint32_t(-1); return; }
 
-    if (auto* service = online::Get())
+    if (auto* service = online::GetBackend())
     {
         const uint16_t port = FindSocket(ctx.r4.u32).port;
         online::Datagram datagram;
@@ -684,6 +676,7 @@ PPC_FUNC(__imp__NetDll_recvfrom)
             ctx.r3.u64 = uint32_t(-1);
             return;
         }
+        if (!self) datagram.toPort = port;
         if (!self)
             Trace("receive", datagram.from, datagram.fromPort, datagram.toPort,
                   datagram.bytes.data(), datagram.bytes.size());

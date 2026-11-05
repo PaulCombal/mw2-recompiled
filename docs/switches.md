@@ -21,7 +21,7 @@ the launcher looks for Steam's copy once a run and writes the line when it finds
 ([maps.md](maps.md#inputs)).
 
 Switches marked **R** are read by every build. The rest are diagnostic: a build
-without diagnostics (`RELEASE=1 ./build.sh`, `-DMW2_DIAGNOSTICS=OFF`) treats
+without diagnostics (`cargo xtask build --release`, `-DMW2_DIAGNOSTICS=OFF`) treats
 them as unset whatever the environment says, and also drops the keys `F5`, `F7`,
 `F9`, `F10` and `F11`, `kill -USR2` and the end-of-run reports.
 
@@ -91,7 +91,8 @@ walking to it.
 | `MW2_TRACE_ERRORS=1` | the guest call stack under every `Com_Error`; one wrapper raises every error, so the message alone does not say where it came from |
 | `MW2_TRACE_CBUF=1` | every command queued to the title's console, which shows what a menu runs |
 | `MW2_TRACE_FILES=1` | every file opened, read and written. The files asked for and not found are listed at exit regardless |
-| `MW2_TRACE_XMA=1` | every XMA decoder kick with its buffers, and FFmpeg's log |
+| `MW2_TRACE_XMA=1` | every XMA decoder kick with its buffers (the C++ build adds FFmpeg's whole log) |
+| `MW2_XMA_RECORD=<file>` | write down what the title does to the XMA decoder's contexts, for `tools/xma_diff.py` ([audio.md](audio.md)) |
 | `MW2_DUMP=<hex>[:words][,...]` | blocks of guest memory to print when the watchdog fires (16 words by default) |
 | `MW2_WATCH=<hex>[:bytes]` | a write watchpoint (Linux): the page is made read-only, and every guest write into the range is reported with its call stack and thread, up to `MW2_WATCH_REPORTS` (20); the command processor's writes there are reported too. It logs when it gives up on a busy page |
 
@@ -152,4 +153,4 @@ walking to it.
 
 | switch | effect |
 |---|---|
-| `MW2_TITLE=sp\|mp` | which executable the Python tools work on (`tools/title.py`); `build.sh` sets it from `TITLE` |
+| `MW2_TITLE=sp\|mp` | which executable the Python tools work on (`tools/title.py`); `cargo xtask` sets it from `--title` for what it runs |

@@ -1,7 +1,8 @@
 #pragma once
 // A custom map's .arena: what the multiplayer's menus show of it, in the PC
 // game's format, { key "value" ... } a map. The game lists the maps in it
-// (runtime/custom_map_list.cpp) and the launcher's MAPS screen shows them.
+// (src/hooks/custom_map_list.rs, runtime/custom_map_list.cpp in the C++ build)
+// and the launcher's MAPS screen shows them.
 #include <algorithm>
 #include <cctype>
 #include <filesystem>

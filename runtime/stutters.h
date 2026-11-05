@@ -17,6 +17,22 @@
 #include <cstdint>
 #include "diagnostics.h"
 
+#if MW2_DIAGNOSTICS
+extern "C"
+{
+    bool mw2_stutters_wanted();
+    bool mw2_stutters_on();
+    void mw2_stutters_add(int cost, uint64_t nanoseconds);
+    void mw2_stutters_title_presented();
+    void mw2_stutters_finished(uint64_t serial, bool world);
+    void mw2_stutters_shown(uint64_t serial);
+    void mw2_stutters_displayed(uint64_t serial, uint32_t extraBlanks, double gapMs);
+    void mw2_stutters_mark(const char* how);
+    void mw2_stutters_ending();
+    void mw2_stutters_report();
+}
+#endif
+
 namespace stutters
 {
     enum Cost
@@ -32,8 +48,8 @@ namespace stutters
     };
 
 #if MW2_DIAGNOSTICS
-    bool On();
-    void Add(Cost cost, uint64_t nanoseconds);
+    inline bool On() { return mw2_stutters_on(); }
+    inline void Add(Cost cost, uint64_t nanoseconds) { mw2_stutters_add(cost, nanoseconds); }
 
     class Timed
     {
@@ -58,19 +74,22 @@ namespace stutters
     };
 
     // The title's D3D present returned (a guest thread).
-    void TitlePresented();
+    inline void TitlePresented() { if (On()) mw2_stutters_title_presented(); }
     // The renderer finished frame `serial` (the ring consumer).
-    void Finished(uint64_t serial, bool world);
+    inline void Finished(uint64_t serial, bool world) { if (On()) mw2_stutters_finished(serial, world); }
     // The window copied frame `serial` into a present (the window thread).
-    void Shown(uint64_t serial);
+    inline void Shown(uint64_t serial) { if (On()) mw2_stutters_shown(serial); }
     // Frame `serial` reached the screen `extraBlanks` blanks later than one
     // a frame, `gapMs` after the frame before it (the present wait thread).
-    void Displayed(uint64_t serial, uint32_t extraBlanks, double gapMs);
+    inline void Displayed(uint64_t serial, uint32_t extraBlanks, double gapMs)
+    {
+        if (On()) mw2_stutters_displayed(serial, extraBlanks, gapMs);
+    }
     // Somebody felt a hitch: Y on the pad, or F7.
-    void Mark(const char* how);
+    inline void Mark(const char* how) { if (On()) mw2_stutters_mark(how); }
     // The run is ending: a frame that never comes is no stall now.
-    void Ending();
-    void Report();
+    inline void Ending() { mw2_stutters_ending(); }
+    inline void Report() { if (On()) mw2_stutters_report(); }
 #else
     inline bool On() { return false; }
     struct Timed { explicit Timed(Cost) {} };

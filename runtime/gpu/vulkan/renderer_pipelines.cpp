@@ -292,8 +292,9 @@ namespace vk::renderer::detail
     }
 
     constexpr uint32_t kCacheMagic = 0x32574D53;   // 'SMW2'
-    constexpr uint32_t kCacheVersion = 3;   // 3: a vertex program ends by turning
-                                            // window coordinates into clip space
+    constexpr uint32_t kCacheVersion = 4;   // 3: a vertex program ends by turning
+                                            // window coordinates into clip space;
+                                            // 4: D24FS8 surfaces are D32S8 everywhere
 
     void WriteShaderCache()
     {

@@ -26,7 +26,7 @@ The title never looks inside the container, so a package here is a
 **directory**, `saves/<name on disk>/`, and mounting it is an entry in the file
 layer's device table. The save is `saves/savegame.svg/savegame.svg`.
 
-## Content calls (`kernel/content.cpp`)
+## Content calls (`src/runtime/kernel/content.rs`)
 
 | call | behaviour |
 |---|---|
@@ -44,7 +44,7 @@ would fail.
 Package names are sanitised to letters, digits, `_`, `-` and `.`, since they
 become host paths.
 
-## Files inside a package (`kernel/files.cpp`)
+## Files inside a package (`src/runtime/kernel/files.rs`)
 
 The device prefix of a guest path is looked up in the mount table. A path under
 a mount resolves in the package directory, where `NtCreateFile` honours its
@@ -71,7 +71,7 @@ and, when it returns, fills every empty entry with device 1.
 as on the console. The table's address is known for the campaign only; in the
 multiplayer build the seed does nothing.
 
-## The profile (`kernel/profile.cpp`)
+## The profile (`src/runtime/kernel/profile.rs`)
 
 MW2 keeps its own settings (controls, video, and what the player sets on the
 first-boot calibration screens) in the two 1000-byte blobs the console reserves

@@ -182,7 +182,7 @@ namespace
     }
 }
 
-void crash::RegisterThread(const char* name)
+extern "C" void mw2_crash_register_thread(const char* name)
 {
     report::ThreadStarted(name);
     std::lock_guard g(g_threadsLock);
@@ -194,9 +194,9 @@ void crash::RegisterThread(const char* name)
     if (!platform::IsMainThread()) platform::SetThreadName(name);
 }
 
-const char* crash::CurrentThreadName() { return t_name; }
+extern "C" const char* mw2_crash_current_thread_name() { return t_name; }
 
-void crash::UnregisterThread()
+extern "C" void mw2_crash_unregister_thread()
 {
     report::ThreadEnded();
     std::lock_guard g(g_threadsLock);
@@ -205,7 +205,7 @@ void crash::UnregisterThread()
         if (pthread_equal(it->handle, self)) { g_threads.erase(it); return; }
 }
 
-void crash::Install()
+extern "C" void mw2_crash_install()
 {
     struct sigaction sa{};
     sa.sa_sigaction = FaultHandler;
@@ -313,7 +313,7 @@ namespace
     }
 }
 
-void crash::Install()
+extern "C" void mw2_crash_install()
 {
     AddVectoredExceptionHandler(1, Handler);
     if (const unsigned seconds = unsigned(diag::Number("MW2_WATCHDOG")))
@@ -328,7 +328,7 @@ void crash::Install()
     }
 }
 
-void crash::RegisterThread(const char* name)
+extern "C" void mw2_crash_register_thread(const char* name)
 {
     report::ThreadStarted(name);
     std::lock_guard g(g_threadsLock);
@@ -336,8 +336,8 @@ void crash::RegisterThread(const char* name)
     if (!platform::IsMainThread()) platform::SetThreadName(name);
 }
 
-const char* crash::CurrentThreadName() { return t_name; }
-void crash::UnregisterThread() { report::ThreadEnded(); }
+extern "C" const char* mw2_crash_current_thread_name() { return t_name; }
+extern "C" void mw2_crash_unregister_thread() { report::ThreadEnded(); }
 
 extern "C" [[noreturn]] void MW2ReportBadIndirectCall(unsigned int guestAddress)
 {

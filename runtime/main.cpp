@@ -1,3 +1,4 @@
+// The C++ build's main. The Rust build's is src/runtime/run.rs, which does the same.
 #include <ppc_recomp_shared.h>
 #include "title.h"
 #include "guest_memory.h"
@@ -42,6 +43,8 @@
 static void ReportAll()
 {
     report::Write();
+    // A player's report too: underruns are what a crackle in it would be.
+    apu::audio::Report();
     if constexpr (!diag::kOn) return;
     kernel::ReportUnimplemented();
     kernel::ReportMissingFiles();
@@ -51,14 +54,13 @@ static void ReportAll()
     engine::ReportPredicateWaits();
     pacing::Write();
     apu::xma::Report();
-    apu::audio::Report();
 }
 
 void crash::OnFault() { ReportAll(); }
 
 // One shutdown however it is asked for, and on a thread of its own: the caller
 // may be the window thread, which stopping the presenter has to join.
-void crash::RequestExit(const char* why)
+extern "C" void mw2_crash_request_exit(const char* why)
 {
     static std::atomic<bool> asked{ false };
     if (asked.exchange(true)) return;
@@ -220,7 +222,7 @@ int main(int argc, char** argv)
     crash::Install();
     // Logged in before any other thread runs: Steam reads the app id from the
     // environment, which the service sets.
-    online::Get();
+    online::Start();
 
     if (!guest::Initialise()) return 1;
     if (!LoadImage(launch.image)) return 1;

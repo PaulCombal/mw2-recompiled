@@ -1,6 +1,9 @@
 #pragma once
-// The online service the title's network calls are served by: who the player
-// is, and how datagrams reach other players.
+// The online service the title's network calls are served by: who the player is,
+// and how datagrams reach other players. The Rust build's is src/runtime/online/,
+// which its kernel calls directly; main.cpp asks it only to enter Steam's
+// namespace and to log in. What follows those two is the C++ build's:
+// service.cpp and the backends it chooses from.
 //
 // Nothing here is Xbox-shaped. The kernel side (kernel/net.cpp, kernel/xam.cpp)
 // keeps everything the console's API is made of -- XNADDRs, session keys, the
@@ -19,8 +22,26 @@
 #include <string>
 #include <vector>
 
+extern "C"
+{
+    bool mw2_online_enter_namespace(int* exitCode);
+    bool mw2_online_started();
+}
+
 namespace online
 {
+    // Before any thread exists, with steam chosen. A Steam the Flatpak runs is
+    // in a process namespace of its own, and tells its clients apart by process
+    // id, so a client outside it has its connection dropped mid-call. With such
+    // a Steam running, this process joins its namespaces and a child goes on as
+    // the game (true); the parent waits for it and returns false with its exit
+    // status. True and nothing done everywhere else.
+    inline bool EnterServiceNamespace(int& exitCode) { return mw2_online_enter_namespace(&exitCode); }
+
+    // Starts the service, which happens on first use otherwise: the first
+    // backend chosen that starts. False when there is none or none could start.
+    inline bool Start() { return mw2_online_started(); }
+
     struct Datagram
     {
         uint64_t from = 0;
@@ -92,10 +113,10 @@ namespace online
         int online = 0, offline = 0;   // the other friends, not running it
     };
 
-    class Service
+    class Backend
     {
     public:
-        virtual ~Service() = default;
+        virtual ~Backend() = default;
 
         // Logs in. False leaves the title offline, as if no backend were built.
         virtual bool Start() = 0;
@@ -183,29 +204,20 @@ namespace online
     };
 
     // One per backend, in its file.
-    std::unique_ptr<Service> MakeSteam();
-    std::unique_ptr<Service> MakeLan();
-    std::unique_ptr<Service> MakeServer();
+    std::unique_ptr<Backend> MakeSteam();
+    std::unique_ptr<Backend> MakeLan();
+    std::unique_ptr<Backend> MakeServer();
 
-    // Before any thread exists, with steam chosen. A Steam the Flatpak runs is
-    // in a process namespace of its own, and tells its clients apart by process
-    // id, so a client outside it has its connection dropped mid-call. With such a Steam
-    // running, this process joins its namespaces and a child goes on as the
-    // game (true); the parent waits for it and returns false with its exit
-    // status. True and nothing done everywhere else.
-    bool EnterServiceNamespace(int& exitCode);
     bool EnterSteamNamespace(int& exitCode);   // steam.cpp's
 
-    // The service, started on first use: the first backend built in that
-    // starts. Null when there is none or none could start.
-    Service* Get();
-    // Its backend's name, "steam", "lan" or "server"; null without one.
+    // The backend, started on first use: the first chosen that starts. Null
+    // when there is none or none could start.
+    Backend* GetBackend();
+    // Its name, "steam", "lan" or "server"; null without one.
     const char* Name();
-
+    // The service can carry Xbox LIVE lobbies.
+    bool Live();
     // Once a frame on the title's main thread: types an accepted invitation's
     // console line, or hands an accepted Live invitation to the title.
     void Frame();
-
-    // The service can carry Xbox LIVE lobbies.
-    bool Live();
 }

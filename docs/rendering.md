@@ -44,7 +44,15 @@ samples, depth }`. The key comes from `RB_COLOR_INFO` / `RB_DEPTH_INFO` and
 | 6, 7 | `R16G16_SFLOAT`, `R16G16B16A16_SFLOAT` |
 | 14, 15 | `R32_SFLOAT`, `R32G32_SFLOAT` |
 
-Depth is `D24_UNORM_S8_UINT`, or `D32_SFLOAT_S8_UINT` on devices without it.
+Depth is per the surface's format, as Xenia has it: a `D24S8` surface is
+`D24_UNORM_S8_UINT`, or `D32_SFLOAT_S8_UINT` on devices without it (AMD), and a
+`D24FS8` surface is always `D32_SFLOAT_S8_UINT`. MW2 draws all its depth in
+`D24FS8`, reversed (cleared to zero, tested `GEQUAL`), so it is float on every
+device: in a 24-bit integer the distance gets few steps, and the depth bias,
+counted in the format's steps, comes out too strong there. The shader libraries
+are built with the `D24S8` format, which a fragment shader library ignores but
+for there being a depth attachment. A clear decodes `RB_DEPTH_CLEAR` per
+format (Xenia's `UNorm24To32`, `Float20e4To32`).
 Draws use dynamic rendering. Both attachments are `LOAD`/`STORE`, because a
 frame is many rendering instances over the same images and only the title
 clears. Barriers at `BeginRendering` and `EndPass` stand in for render-pass
@@ -321,7 +329,7 @@ game's engine, which draws at any shape. The hooks write the sizes after
 `R_VideoSizes`, and after `R_SetVidConfig` the aspect, the frame's width over
 its height, with square pixels. With the console's frame they do nothing.
 
-**A 4:3 frame.** The video mode (`runtime/kernel/video.cpp`) says the TV is
+**A 4:3 frame.** The video mode (`src/runtime/kernel/video.rs`) says the TV is
 widescreen only for a frame wider than 4:3, so a 4:3 frame is the console on a
 4:3 TV: `R_SetVidConfig`'s aspect is already 4/3, `dvarbool(widescreen)` is 0
 and the menus take their own 4:3 layout, 640 of their units across. The
@@ -376,20 +384,28 @@ a test makes a whole number of what it is given.
 The title's 2x and 4x surfaces are drawn with that many samples. The count is in
 the target, pipeline and output-library keys, rounded up to one the device
 supports for colour, depth and stencil. Multisampling needs Vulkan 1.2 and a
-`SAMPLE_ZERO` depth resolve. Without them, or under `MW2_NO_MSAA=1`, everything
-is 1x. `MW2_MSAA=<n>` forces n.
+`SAMPLE_ZERO` depth and stencil resolve. Without them, or under
+`MW2_NO_MSAA=1`, everything is 1x. `MW2_MSAA=<n>` forces n.
 
-A multisampled image cannot be blitted, copied or sampled, so every read of
-one is a resolve. Colour goes through `vkCmdResolveImage`, which averages as
-the console does. Depth goes through an empty rendering instance with
-`SAMPLE_ZERO`, because an averaged depth describes a surface nothing was drawn
-at. Both resolve straight into the resolve's image, which for depth must be an
-attachment as well. The rendering instance writes where the rectangle sits in
-its surface. So a depth resolve goes through a single-sampled **twin** of the
-surface, and is copied from there, in two cases: when it lands lower in its
-image, and when the image is not yet an attachment but already holds an
-earlier resolve of the frame. The target dumps use the twin too. Sample
-positions are Vulkan's standard ones.
+A multisampled image cannot be blitted or copied, so every read of one is a
+resolve. Colour goes through `vkCmdResolveImage`, which averages as the console
+does. Depth takes sample 0, because an averaged depth describes a surface
+nothing was drawn at. It is copied by a draw over the rectangle whose fragment
+shader fetches the first sample and writes it as its depth, as Xenia reads
+multisampled surfaces with a shader. Where the device cannot sample a
+multisampled depth image of both formats at the counts in use, an empty
+rendering instance resolves it with `SAMPLE_ZERO`, the stencil too though
+nothing reads it: Intel's Windows driver, asked to resolve the depth alone (a
+stencil resolve of `NONE`, which `independentResolveNone` allows), resolved
+nothing, and the depth of field blurred the whole screen when aiming (issue
+#37). The draw costs what a depth-only resolve costs; resolving the stencil as
+well costs 0.3 ms a frame at 1080p on a Renoir iGPU. Both resolve straight into
+the resolve's image, which for depth must be an attachment as well. The resolve
+writes where the rectangle sits in its surface. So a depth resolve goes through
+a single-sampled **twin** of the surface, and is copied from there, in two
+cases: when it lands lower in its image, and when the image is not yet an
+attachment but already holds an earlier resolve of the frame. The target dumps
+use the twin too. Sample positions are Vulkan's standard ones.
 
 ## Anisotropic filtering
 

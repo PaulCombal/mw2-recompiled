@@ -36,7 +36,7 @@ extern "C" float roundevenf(float x)
 
 namespace { DWORD g_mainThread = 0; }
 
-void platform::Initialise()
+extern "C" void mw2_platform_initialise()
 {
     g_mainThread = GetCurrentThreadId();
     timeBeginPeriod(1);
@@ -49,10 +49,10 @@ void platform::Initialise()
     }
 }
 
-uint32_t platform::ThreadId() { return uint32_t(GetCurrentThreadId()); }
-bool platform::IsMainThread() { return GetCurrentThreadId() == g_mainThread; }
+extern "C" uint32_t mw2_platform_thread_id() { return uint32_t(GetCurrentThreadId()); }
+extern "C" bool mw2_platform_is_main_thread() { return GetCurrentThreadId() == g_mainThread; }
 
-void platform::SetThreadName(const char* name)
+extern "C" void mw2_platform_set_thread_name(const char* name)
 {
     wchar_t wide[64];
     const int n = MultiByteToWideChar(CP_UTF8, 0, name, -1, wide, 64);
@@ -64,12 +64,12 @@ void platform::SetThreadName(const char* name)
     if (set) set(GetCurrentThread(), wide);
 }
 
-void platform::LowerThreadPriority() { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL); }
-void platform::IdleThreadPriority() { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_IDLE); }
+extern "C" void mw2_platform_lower_thread_priority() { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL); }
+extern "C" void mw2_platform_idle_thread_priority() { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_IDLE); }
 
 // No symbols without a PDB: each frame as its offset in the executable, which
 // `llvm-symbolizer --obj=mw2.exe` turns back into a name on the build machine.
-void platform::PrintBacktrace(const char* why)
+extern "C" void mw2_platform_print_backtrace(const char* why)
 {
     void* frames[64];
     const USHORT n = CaptureStackBackTrace(0, 64, frames, nullptr);
@@ -90,7 +90,7 @@ void platform::PrintBacktrace(const char* why)
     std::fflush(stderr);
 }
 
-void* platform::OpenLibrary(const char* path)
+extern "C" void* mw2_platform_open_library(const char* path)
 {
     const int n = MultiByteToWideChar(CP_UTF8, 0, path, -1, nullptr, 0);
     std::wstring wide(size_t(n > 0 ? n : 1), L'\0');
@@ -99,7 +99,7 @@ void* platform::OpenLibrary(const char* path)
     return LoadLibraryExW(wide.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
 }
 
-uintptr_t platform::ThreadClock()
+extern "C" uintptr_t mw2_platform_thread_clock()
 {
     HANDLE self = nullptr;
     // A handle of its own: GetCurrentThread's means whichever thread asks.
@@ -117,17 +117,18 @@ namespace
     }
 }
 
-bool platform::ThreadTime(uintptr_t clock, uint64_t& nanoseconds)
+extern "C" bool mw2_platform_thread_time(uintptr_t clock, uint64_t* nanoseconds)
 {
     FILETIME created, exited, kernel, user;
     if (!clock || !GetThreadTimes(reinterpret_cast<HANDLE>(clock), &created, &exited, &kernel, &user))
         return false;
-    nanoseconds = Nanoseconds(kernel) + Nanoseconds(user);
+    *nanoseconds = Nanoseconds(kernel) + Nanoseconds(user);
     return true;
 }
 
-bool platform::ProcessorLoad(Load& load)
+extern "C" bool mw2_platform_processor_load(platform::Load* out)
 {
+    platform::Load& load = *out;
     FILETIME created, exited, kernel, user, idle;
     if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return false;
     load.process = Nanoseconds(kernel) + Nanoseconds(user);
@@ -138,9 +139,9 @@ bool platform::ProcessorLoad(Load& load)
     return true;
 }
 
-platform::Memory platform::MemoryState()
+extern "C" void mw2_platform_memory_state(platform::Memory* out)
 {
-    Memory memory;
+    platform::Memory& memory = *out;
     ULONGLONG kilobytes = 0;
     if (GetPhysicallyInstalledSystemMemory(&kilobytes)) memory.installed = uint64_t(kilobytes) << 10;
     MEMORYSTATUSEX status{ sizeof(status) };
@@ -157,38 +158,37 @@ platform::Memory platform::MemoryState()
         memory.processPeak = counters.PeakWorkingSetSize;
         memory.processCommitted = counters.PeakPagefileUsage;
     }
-    return memory;
 }
 
-void* platform::LoadedLibrary(const char* name) { return GetModuleHandleA(name); }
+extern "C" void* mw2_platform_loaded_library(const char* name) { return GetModuleHandleA(name); }
 
-void* platform::Symbol(void* library, const char* name)
+extern "C" void* mw2_platform_symbol(void* library, const char* name)
 {
     return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(library), name));
 }
 
 #else
 
-void platform::Initialise() {}
-uint32_t platform::ThreadId() { return uint32_t(gettid()); }
-bool platform::IsMainThread() { return gettid() == getpid(); }
+extern "C" void mw2_platform_initialise() {}
+extern "C" uint32_t mw2_platform_thread_id() { return uint32_t(gettid()); }
+extern "C" bool mw2_platform_is_main_thread() { return gettid() == getpid(); }
 
-void platform::SetThreadName(const char* name)
+extern "C" void mw2_platform_set_thread_name(const char* name)
 {
     char shortName[16];
     std::snprintf(shortName, sizeof shortName, "%s", name);
     pthread_setname_np(pthread_self(), shortName);
 }
 
-void platform::LowerThreadPriority() { setpriority(PRIO_PROCESS, static_cast<id_t>(gettid()), 10); }
+extern "C" void mw2_platform_lower_thread_priority() { setpriority(PRIO_PROCESS, static_cast<id_t>(gettid()), 10); }
 
-void platform::IdleThreadPriority()
+extern "C" void mw2_platform_idle_thread_priority()
 {
     sched_param none{};
-    if (pthread_setschedparam(pthread_self(), SCHED_IDLE, &none) != 0) LowerThreadPriority();
+    if (pthread_setschedparam(pthread_self(), SCHED_IDLE, &none) != 0) platform::LowerThreadPriority();
 }
 
-void platform::PrintBacktrace(const char* why)
+extern "C" void mw2_platform_print_backtrace(const char* why)
 {
     void* frames[64];
     const int n = backtrace(frames, 64);
@@ -199,7 +199,7 @@ void platform::PrintBacktrace(const char* why)
     std::fflush(stderr);
 }
 
-uintptr_t platform::ThreadClock()
+extern "C" uintptr_t mw2_platform_thread_clock()
 {
     clockid_t clock;
     if (pthread_getcpuclockid(pthread_self(), &clock) != 0) return 0;
@@ -207,16 +207,17 @@ uintptr_t platform::ThreadClock()
     return uintptr_t(uint32_t(clock)) + 1;
 }
 
-bool platform::ThreadTime(uintptr_t clock, uint64_t& nanoseconds)
+extern "C" bool mw2_platform_thread_time(uintptr_t clock, uint64_t* nanoseconds)
 {
     timespec time;
     if (!clock || clock_gettime(clockid_t(uint32_t(clock - 1)), &time) != 0) return false;
-    nanoseconds = uint64_t(time.tv_sec) * 1000000000u + uint64_t(time.tv_nsec);
+    *nanoseconds = uint64_t(time.tv_sec) * 1000000000u + uint64_t(time.tv_nsec);
     return true;
 }
 
-bool platform::ProcessorLoad(Load& load)
+extern "C" bool mw2_platform_processor_load(platform::Load* out)
 {
+    platform::Load& load = *out;
     timespec time;
     if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &time) != 0) return false;
     load.process = uint64_t(time.tv_sec) * 1000000000u + uint64_t(time.tv_nsec);
@@ -255,17 +256,16 @@ namespace
     }
 }
 
-platform::Memory platform::MemoryState()
+extern "C" void mw2_platform_memory_state(platform::Memory* out)
 {
-    Memory memory;
+    platform::Memory& memory = *out;
     memory.usable = Kilobytes("/proc/meminfo", "MemTotal");
     memory.free = Kilobytes("/proc/meminfo", "MemAvailable");
     memory.processPeak = Kilobytes("/proc/self/status", "VmHWM");
-    return memory;
 }
 
-void* platform::OpenLibrary(const char* path) { return dlopen(path, RTLD_NOW | RTLD_LOCAL); }
-void* platform::LoadedLibrary(const char* name) { return dlopen(name, RTLD_NOW | RTLD_NOLOAD); }
-void* platform::Symbol(void* library, const char* name) { return dlsym(library, name); }
+extern "C" void* mw2_platform_open_library(const char* path) { return dlopen(path, RTLD_NOW | RTLD_LOCAL); }
+extern "C" void* mw2_platform_loaded_library(const char* name) { return dlopen(name, RTLD_NOW | RTLD_NOLOAD); }
+extern "C" void* mw2_platform_symbol(void* library, const char* name) { return dlsym(library, name); }
 
 #endif

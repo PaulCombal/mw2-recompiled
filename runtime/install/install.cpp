@@ -129,29 +129,26 @@ namespace
     }
 }
 
-bool install::PlayerStart(int argc, char**)
+extern "C" void mw2_install_folder(int argc, void* out, mw2_text_sink sink)
 {
-    return argc == 1;
+    const std::string folder = argc == 1 ? Utf8(ExecutableFolder()) : std::string();
+    sink(out, folder.data(), folder.size());
 }
 
-fs::path install::Folder(int argc, char** argv)
+extern "C" bool mw2_install_prepare(void* out, mw2_text_sink sink, int* exitCode)
 {
-    return PlayerStart(argc, argv) ? ExecutableFolder() : fs::path();
-}
-
-bool install::Prepare(int, char**, Launch& launch, int& exitCode)
-{
-    exitCode = 1;
+    *exitCode = 1;
     g_playerStart = true;
     // Everything a player's copy keeps -- game/, saves/ -- is beside the executable.
     std::error_code ec;
     if (const fs::path folder = ExecutableFolder(); !folder.empty()) fs::current_path(folder, ec);
 
     std::string error;
-    switch (LoadInstalled(launch.image, error))
+    std::vector<uint8_t> image;
+    switch (LoadInstalled(image, error))
     {
     case Installed::Yes:
-        launch.gameRoot = kGameFolder;
+        sink(out, reinterpret_cast<const char*>(image.data()), image.size());
         return true;
     case Installed::Unreadable:
         ShowError(error);
@@ -161,28 +158,31 @@ bool install::Prepare(int, char**, Launch& launch, int& exitCode)
     }
     // Not installed, or installed for another version of this build: both are
     // the launcher's to put right.
-    if (StartLauncher()) { exitCode = 0; return false; }
+    if (StartLauncher()) { *exitCode = 0; return false; }
     ShowError(std::string("The game is not installed here, and ") + kLauncher +
               " is not beside this program to install it.");
     return false;
 }
 
-bool install::LoadImageFile(const fs::path& path, std::vector<uint8_t>& image)
+extern "C" bool mw2_install_load_image(const char* utf8, void* out, mw2_text_sink sink)
 {
+    const fs::path path(reinterpret_cast<const char8_t*>(utf8));
     std::ifstream in(path, std::ios::binary);
     if (!in) { LOGE("cannot open image %s", Utf8(path).c_str()); return false; }
     std::vector<uint8_t> file(std::istreambuf_iterator<char>(in), {});
     if (file.size() >= 4 && std::memcmp(file.data(), "XEX2", 4) == 0)
     {
         std::string error;
-        if (!xex::Image(file, image, error)) { LOGE("%s: %s", Utf8(path).c_str(), error.c_str()); return false; }
+        std::vector<uint8_t> image;
+        if (!install::xex::Image(file, image, error)) { LOGE("%s: %s", Utf8(path).c_str(), error.c_str()); return false; }
+        sink(out, reinterpret_cast<const char*>(image.data()), image.size());
         return true;
     }
-    image = std::move(file);
+    sink(out, reinterpret_cast<const char*>(file.data()), file.size());
     return true;
 }
 
-std::vector<uint8_t>& install::LaunchData()
+static std::vector<uint8_t>& LaunchDataHeld()
 {
     static std::vector<uint8_t> data = [] {
         std::vector<uint8_t> bytes;
@@ -198,19 +198,31 @@ std::vector<uint8_t>& install::LaunchData()
     return data;
 }
 
-bool install::CompileShaders(const std::string& device, const std::string& why)
+extern "C" void mw2_install_launch_data(void* out, mw2_text_sink sink)
 {
+    const std::vector<uint8_t>& data = LaunchDataHeld();
+    sink(out, reinterpret_cast<const char*>(data.data()), data.size());
+}
+
+extern "C" void mw2_install_set_launch_data(const uint8_t* data, size_t size)
+{
+    LaunchDataHeld().assign(data, data + size);
+}
+
+extern "C" bool mw2_install_compile_shaders(const char* device, const char* whyText)
+{
+    const std::string why = whyText;
     // The launcher names the device it compiled for in the game it starts
     // after a pass (launcher/main.cpp).
     const char* compiledFor = std::getenv("MW2_SHADERS_COMPILED_FOR");
-    if (compiledFor && device == compiledFor)
+    if (compiledFor && !std::strcmp(device, compiledFor))
     {
         ShowError("The shaders the launcher has just compiled do not fit this game: " + why +
                   "\n\nThe game starts anyway, and compiles shaders as it meets them, which stutters. "
                   "Please report this (REPORT A BUG in the launcher).");
         return false;
     }
-    LOGI("shaders: %s The launcher compiles them for device %s, then starts the game.", why.c_str(), device.c_str());
+    LOGI("shaders: %s The launcher compiles them for device %s, then starts the game.", why.c_str(), device);
 #ifdef MW2_TITLE_MP
     const char* title = "multiplayer";
 #else
@@ -222,9 +234,9 @@ bool install::CompileShaders(const std::string& device, const std::string& why)
     return false;
 }
 
-void install::SetNextTitle(const std::string& xex) { g_nextTitle = xex; }
+extern "C" void mw2_install_set_next_title(const char* xex) { g_nextTitle = xex; }
 
-void install::StartNextTitle()
+extern "C" void mw2_install_start_next_title()
 {
     if (g_nextTitle.empty()) return;
     const char* program = ProgramFor(g_nextTitle);
@@ -241,7 +253,7 @@ void install::StartNextTitle()
     const fs::path file = fs::absolute(program, ec);
     if (!fs::is_regular_file(file, ec)) { ShowError(std::string(program) + " is not beside this program."); return; }
     std::string hex;
-    for (const uint8_t byte : LaunchData())
+    for (const uint8_t byte : LaunchDataHeld())
     {
         char text[3];
         std::snprintf(text, sizeof(text), "%02x", byte);

@@ -179,4 +179,4 @@ namespace
 }
 
 std::unique_ptr<online::Transport> online::MakeLanTransport() { return std::make_unique<Lan>(); }
-std::unique_ptr<online::Service> online::MakeLan() { return MakePlayers(MakeLanTransport()); }
+std::unique_ptr<online::Backend> online::MakeLan() { return MakePlayers(MakeLanTransport()); }

@@ -2,7 +2,7 @@
 // What the game does not need to run: traces, dumps, statistics, the end-of-run
 // reports, the stutter detector and the headless test harness.
 //
-// -DMW2_DIAGNOSTICS=OFF (RELEASE=1 ./build.sh) builds without it. The code is
+// -DMW2_DIAGNOSTICS=OFF (cargo xtask build --release) builds without it. The code is
 // still compiled in that build, behind a constant false, so it cannot rot
 // unnoticed; the optimiser removes it. Only what must not exist at all -- a hook
 // on a guest function, a whole file of dumps -- is behind #if MW2_DIAGNOSTICS.

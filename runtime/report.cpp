@@ -127,9 +127,9 @@ namespace
     }
 }
 
-void report::ThreadStarted(const char* name)
+extern "C" void mw2_report_thread_started(const char* name)
 {
-    if (!On()) return;
+    if (!report::On()) return;
     std::lock_guard lock(g_threadsLock);
     Thread& thread = g_threads.emplace_back();
     // "guest thread 12 (routine 8228B2C8)" is guest thread 12 here.
@@ -139,7 +139,7 @@ void report::ThreadStarted(const char* name)
     t_thread = &thread;
 }
 
-void report::ThreadEnded()
+extern "C" void mw2_report_thread_ended()
 {
     if (!t_thread) return;
     // Read on the way out: the clock goes with the thread.
@@ -151,35 +151,34 @@ void report::ThreadEnded()
     t_thread = nullptr;
 }
 
-void report::ShaderBuilt(int fromCache)
+extern "C" void mw2_report_shader_built(int fromCache)
 {
     g_shaders[std::clamp(fromCache, -1, 1) + 1].fetch_add(1, std::memory_order_relaxed);
 }
 
-void report::ShadersCompiled(std::string state)
+extern "C" void mw2_report_shaders_compiled(const char* state)
 {
     std::lock_guard lock(s.lock);
-    g_compiled = std::move(state);
+    g_compiled = state;
 }
 
-report::Timed::Timed(Time what) : time(what)
+extern "C" uint64_t mw2_report_timed_begin(int time)
 {
-    if (!on) return;
-    began = std::chrono::steady_clock::now();
-    if (time == kExecuting) { g_executingSince = began; g_executing = true; }
+    const auto now = std::chrono::steady_clock::now();
+    if (time == report::kExecuting) { g_executingSince = now; g_executing = true; }
+    return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
 }
 
-report::Timed::~Timed()
+extern "C" void mw2_report_timed_end(int time, uint64_t began)
 {
-    if (!on) return;
-    if (time == kExecuting) g_executing = false;
-    Spent(time, uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                             std::chrono::steady_clock::now() - began).count()));
+    if (time == report::kExecuting) g_executing = false;
+    const auto now = std::chrono::steady_clock::now();
+    mw2_report_spent(time, uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count()) - began);
 }
 
-void report::Frame(bool world)
+extern "C" void mw2_report_frame(bool world)
 {
-    if (!On()) return;
+    using namespace report;
     const auto now = std::chrono::steady_clock::now();
     std::lock_guard lock(s.lock);
     if (!s.frames) s.first = now;
@@ -217,23 +216,24 @@ void report::Frame(bool world)
     }
 }
 
-void report::Spent(Time time, uint64_t nanoseconds)
+extern "C" void mw2_report_spent(int time, uint64_t nanoseconds)
 {
     g_spent[time].fetch_add(nanoseconds, std::memory_order_relaxed);
 }
 
-void report::Add(Cost cost, uint64_t microseconds)
+extern "C" void mw2_report_add(int cost, uint64_t microseconds)
 {
-    if (!On()) return;
+    using namespace report;
     std::lock_guard lock(s.lock);
     s.costCount[cost]++;
     s.costMicroseconds[cost] += microseconds;
     s.costLongest[cost] = std::max(s.costLongest[cost], microseconds);
-    Spent(kCompiling, microseconds * 1000);
+    mw2_report_spent(kCompiling, microseconds * 1000);
 }
 
-void report::Write()
+extern "C" void mw2_report_write()
 {
+    using namespace report;
     if (!On()) return;
     std::lock_guard lock(s.lock);
     if (s.written) return;

@@ -108,37 +108,40 @@ namespace
     }
 }
 
-bool stutters::On()
+// A frame at every blank is the console's pacing; off it (MW2_FPS_LIMIT)
+// there is no blank a frame was due at.
+extern "C" bool mw2_stutters_wanted()
 {
-    // A frame at every blank is the console's pacing; off it (MW2_FPS_LIMIT)
-    // there is no blank a frame was due at.
-    static const bool on = [] {
-        if (!diag::Flag("MW2_STUTTERS")) return false;
-        if (!frame_rate::Console()) LOGW("stutters: MW2_STUTTERS is for the console's 60, not MW2_FPS_LIMIT; off");
-        return frame_rate::Console();
-    }();
+    if (!diag::Flag("MW2_STUTTERS")) return false;
+    if (!frame_rate::Console()) LOGW("stutters: MW2_STUTTERS is for the console's 60, not MW2_FPS_LIMIT; off");
+    return frame_rate::Console();
+}
+
+extern "C" bool mw2_stutters_on()
+{
+    static const bool on = mw2_stutters_wanted();
     return on;
 }
 
-void stutters::Add(Cost cost, uint64_t nanoseconds)
+extern "C" void mw2_stutters_add(int cost, uint64_t nanoseconds)
 {
     g_costs[cost].nanoseconds.fetch_add(nanoseconds, std::memory_order_relaxed);
     g_costs[cost].times.fetch_add(1, std::memory_order_relaxed);
 }
 
-void stutters::TitlePresented()
+extern "C" void mw2_stutters_title_presented()
 {
-    if (!On()) return;
     const int64_t now = pacing::Microseconds();
     const int64_t last = g_lastPresentUs.exchange(now, std::memory_order_relaxed);
     if (last >= 0 && now - last > g_longestPresentGapUs.load(std::memory_order_relaxed))
         g_longestPresentGapUs.store(now - last, std::memory_order_relaxed);
 }
 
-void stutters::Finished(uint64_t serial, bool world)
+extern "C" void mw2_stutters_finished(uint64_t serial, bool world)
 {
+    using namespace stutters;
     (void)serial;
-    if (!On() || !world) return;
+    if (!world) return;
     const int64_t now = pacing::Microseconds();
     const int64_t gap = r.lastWorldUs < 0 ? 0 : now - r.lastWorldUs;
     const int64_t titleGap = g_longestPresentGapUs.exchange(0, std::memory_order_relaxed);
@@ -214,9 +217,8 @@ void stutters::Finished(uint64_t serial, bool world)
     remember();
 }
 
-void stutters::Shown(uint64_t serial)
+extern "C" void mw2_stutters_shown(uint64_t serial)
 {
-    if (!On()) return;
     const uint64_t last = w.lastSerial;
     w.lastSerial = serial;
     if (!g_inPlay.load(std::memory_order_relaxed) || !last) return;
@@ -230,9 +232,9 @@ void stutters::Shown(uint64_t serial)
              serial - last - 1 == 1 ? "" : "s", (unsigned long long)serial);
 }
 
-void stutters::Displayed(uint64_t serial, uint32_t extraBlanks, double gapMs)
+extern "C" void mw2_stutters_displayed(uint64_t serial, uint32_t extraBlanks, double gapMs)
 {
-    if (!On() || !g_inPlay.load(std::memory_order_relaxed)) return;
+    if (!g_inPlay.load(std::memory_order_relaxed)) return;
     w.held++;
     w.blanksHeld += extraBlanks;
     if (w.lines.fetch_add(1, std::memory_order_relaxed) < kLinesShown)
@@ -241,9 +243,8 @@ void stutters::Displayed(uint64_t serial, uint32_t extraBlanks, double gapMs)
              (unsigned long long)serial, extraBlanks, extraBlanks == 1 ? "" : "s", gapMs);
 }
 
-void stutters::Mark(const char* how)
+extern "C" void mw2_stutters_mark(const char* how)
 {
-    if (!On()) return;
     const int64_t now = pacing::Microseconds();
     const int64_t last = g_lastStutterUs.load(std::memory_order_relaxed);
     const uint32_t n = g_marks.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -254,11 +255,11 @@ void stutters::Mark(const char* how)
              Seconds(now), double(now - last) / 1000.0);
 }
 
-void stutters::Ending() { g_ending.store(true, std::memory_order_relaxed); }
+extern "C" void mw2_stutters_ending() { g_ending.store(true, std::memory_order_relaxed); }
 
-void stutters::Report()
+extern "C" void mw2_stutters_report()
 {
-    if (!On()) return;
+    using namespace stutters;
     const double minutes = double(r.playUs) / 60e6;
     LOGI("stutters: %llu in %.1f s of play (%.1f a minute), %llu frames lost; by length:"
          " 1:%llu 2:%llu 3:%llu 4-7:%llu 8-15:%llu 16+:%llu; %llu pauses over a second",

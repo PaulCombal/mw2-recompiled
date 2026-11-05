@@ -51,7 +51,7 @@ namespace online
     };
 
     // The service over a transport (players.cpp).
-    std::unique_ptr<Service> MakePlayers(std::unique_ptr<Transport> transport);
+    std::unique_ptr<Backend> MakePlayers(std::unique_ptr<Transport> transport);
 
     // The transports, each in its own file.
     std::unique_ptr<Transport> MakeLanTransport();

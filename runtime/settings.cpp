@@ -3,10 +3,10 @@
 #include <cstdlib>
 #include <fstream>
 
-std::string settings::Load(const std::filesystem::path& path)
+extern "C" void mw2_settings_load(const char* utf8, void* out, mw2_text_sink sink)
 {
     std::string set;
-    std::ifstream file(path);
+    std::ifstream file(std::filesystem::path(reinterpret_cast<const char8_t*>(utf8)));
     for (std::string line; std::getline(file, line);)
     {
         while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
@@ -24,5 +24,5 @@ std::string settings::Load(const std::filesystem::path& path)
         const bool secret = name.find("PASSWORD") != std::string::npos;
         set += (set.empty() ? "" : " ") + (secret ? name + "=(hidden)" : line);
     }
-    return set;
+    sink(out, set.data(), set.size());
 }

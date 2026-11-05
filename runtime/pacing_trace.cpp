@@ -31,28 +31,27 @@ namespace
     }
 }
 
-int64_t pacing::Microseconds()
+extern "C" int64_t mw2_pacing_microseconds()
 {
     return std::chrono::duration_cast<std::chrono::microseconds>(
                std::chrono::steady_clock::now() - g_began).count();
 }
 
 #if MW2_DIAGNOSTICS
-bool pacing::On() { return Path() != nullptr; }
+extern "C" bool mw2_pacing_wanted() { return Path() != nullptr; }
 
-void pacing::Note(Event event, uint32_t value)
+extern "C" void mw2_pacing_note(char event, uint32_t value)
 {
-    if (!On()) return;
     static const bool sized = (g_entries.resize(kEntries), true);
     (void)sized;
     const size_t at = g_next.fetch_add(1, std::memory_order_relaxed);
     if (at >= kEntries) return;
-    g_entries[at] = { Microseconds(), value, platform::ThreadId(), char(event) };
+    g_entries[at] = { mw2_pacing_microseconds(), value, platform::ThreadId(), event };
 }
 
-void pacing::Write()
+extern "C" void mw2_pacing_write()
 {
-    if (!On()) return;
+    if (!pacing::On()) return;
     FILE* f = std::fopen(Path(), "w");
     if (!f) return;
     // The threads by name, for the thread column.
@@ -82,9 +81,8 @@ void pacing::Write()
     LOGI("pacing: %zu events written to %s", count, Path());
 }
 
-void pacing::NoteCallers(uint32_t r1)
+extern "C" void mw2_pacing_note_callers(uint32_t r1)
 {
-    if (!On()) return;
     // Each frame's back chain is at 0(r1); a function saves its return
     // address at -8 from its caller's stack pointer.
     uint32_t frame = r1;
@@ -92,7 +90,7 @@ void pacing::NoteCallers(uint32_t r1)
     {
         const uint32_t caller = uint32_t(*GuestPtr<be32>(frame));
         if (!caller) break;
-        Note(kCaller, uint32_t(*GuestPtr<be32>(caller - 8)));
+        mw2_pacing_note(char(pacing::kCaller), uint32_t(*GuestPtr<be32>(caller - 8)));
         frame = caller;
     }
 }

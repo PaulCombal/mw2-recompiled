@@ -78,7 +78,7 @@ namespace
     }
 }
 
-void console::RunNow(const char* text)
+extern "C" void mw2_console_run_now(const char* text)
 {
     std::lock_guard g(g_lock);
     if (!g_parsed) Parse();
@@ -88,13 +88,13 @@ void console::RunNow(const char* text)
     g_script.push_back(std::move(e));
 }
 
-void console::Place(const char* text)
+extern "C" void mw2_console_place(const char* text)
 {
     std::lock_guard g(g_lock);
     g_place = text;
 }
 
-void console::Pump(PPCContext& ctx, uint8_t* base)
+extern "C" void mw2_console_pump(PPCContext& ctx, uint8_t* base)
 {
     std::string text;
     bool placing = false;

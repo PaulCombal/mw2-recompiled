@@ -117,6 +117,10 @@ namespace vk::renderer::detail
         VkImage singleImage = VK_NULL_HANDLE;
         VkDeviceMemory singleMemory = VK_NULL_HANDLE;
         VkImageView singleView = VK_NULL_HANDLE;
+        // A multisampled depth target's depth, for DrawDepthResolve to fetch,
+        // and the set that names it.
+        VkImageView sampledView = VK_NULL_HANDLE;
+        VkDescriptorSet sampledSet = VK_NULL_HANDLE;
         // A surface nothing presents looks exactly like a surface nothing draws into.
         uint64_t draws = 0, presented = 0;
         // Colour draws this frame; a multisampled target with any is the world pass.
@@ -224,15 +228,19 @@ namespace vk::renderer::detail
         VkQueue queue = VK_NULL_HANDLE;
         VkPhysicalDeviceMemoryProperties memory{};
         uint32_t uniformAlignment = 256;
+        // The host formats of the title's D24S8 and D24FS8 depth surfaces
+        // (DepthFormat, FloatDepthFormat): DepthFormatFor picks.
         VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+        VkFormat floatDepthFormat = VK_FORMAT_UNDEFINED;
         // Whether the console's multisampled surfaces are drawn multisampled
         // (MW2_NO_MSAA=1 turns it off), and the counts the device offers for
         // colour, depth and stencil alike.
         bool msaa = false;
+        // Whether a multisampled depth surface's first sample is copied by a
+        // draw that fetches it (DrawDepthResolve) rather than by a rendering
+        // instance's resolve: wherever the device can sample the surface.
+        bool drawnDepthResolve = false;
         VkSampleCountFlags sampleCounts = VK_SAMPLE_COUNT_1_BIT;
-        // Whether a depth resolve may leave the stencil beside it unresolved
-        // (independentResolveNone): it stays attached, kept, and costs nothing.
-        bool stencilUnresolved = false;
         // MW2_SCALE: how many times wider and taller than the title's every
         // EDRAM surface and resolve copy is. The title is not told: a Target's
         // and a Resolved's sizes, and every rectangle worked out from the
@@ -656,6 +664,10 @@ namespace vk::renderer::detail
     bool MakeImage(Target& target, VkImageUsageFlags usage, VkImageAspectFlags aspect);
     VkFormat ColourFormatFor(uint32_t format);
     TargetKey DepthKey(uint32_t baseTile, uint32_t format, uint32_t samples, uint32_t scale);
+    // The host format of a depth surface of RB_DEPTH_INFO's format, and the
+    // depth RB_DEPTH_CLEAR's upper 24 bits mean in it.
+    VkFormat DepthFormatFor(uint32_t guestFormat);
+    float DepthClearValue(uint32_t guestFormat, uint32_t packed);
     VkSampleCountFlagBits HostSamples(uint32_t guestSamples);
     Target* FindTarget(const TargetKey& key);
     Target* EnsureTarget(const TargetKey& key, uint32_t width, uint32_t height,
@@ -677,6 +689,12 @@ namespace vk::renderer::detail
     // at the same place (renderer_targets.cpp).
     void ResolveColourInto(Target& target, VkOffset2D at, uint32_t width, uint32_t height, VkImage into);
     void ResolveDepthInto(Target& target, VkOffset2D at, uint32_t width, uint32_t height,
+                          VkImage into, VkImageView intoView, VkImageLayout before, VkPipelineStageFlags usedBy,
+                          VkImageLayout after, VkAccessFlags readAs, VkPipelineStageFlags readBy);
+    void MakeSampledDepth(Target& target);
+    void ForgetSampledDepth(Target& target);
+    void DestroyDrawnResolve();
+    bool DrawDepthResolve(Target& target, VkOffset2D at, uint32_t width, uint32_t height,
                           VkImage into, VkImageView intoView, VkImageLayout before, VkPipelineStageFlags usedBy,
                           VkImageLayout after, VkAccessFlags readAs, VkPipelineStageFlags readBy);
     void ClearAliasedDepth(uint32_t fromTile);

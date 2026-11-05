@@ -1,0 +1,7 @@
+# The version the guest code was tested with. Before moving it, run
+# XenonRecomp-rs/XenonTests/rust_backend/union_locals.rs on the new one: rustc 1.97
+# miscompiles named union constants, and a later one may do so differently.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-pc-windows-gnullvm"]
