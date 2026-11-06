@@ -150,12 +150,16 @@ list(REMOVE_ITEM RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/rust_renderer.cpp"
 list(REMOVE_ITEM RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/apu/xma_codec.cpp")
 
 # What this build's shaders come out as (runtime/gpu/vulkan/shader_build.h):
-# a SHA-256 of the sources that decide it, the translator's and the pipeline
-# layout's, and the launcher's reader of which shaders the game has. The
+# a SHA-256 of the sources that decide it, the translators' (this C++ one,
+# and the Rust one in src/runtime/gpu/shader with its forwarders, which the
+# game runs) and the pipeline layout's, and the launcher's reader of which
+# shaders the game has. build.rs hashes the same files. The
 # compile pass's cache is for one of these, and a player's copy compiles
 # again when it changes.
 file(GLOB MW2_SHADER_BUILD_INPUTS RELATIVE "${CMAKE_SOURCE_DIR}" CONFIGURE_DEPENDS
      "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_translator.*"
+     "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_translator_rust.cpp"
+     "${CMAKE_SOURCE_DIR}/src/runtime/gpu/shader/*.rs"
      "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/spirv.*"
      "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/bindings.h"
      "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/xenos_ucode.h"

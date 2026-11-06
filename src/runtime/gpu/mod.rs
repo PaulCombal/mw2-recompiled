@@ -11,4 +11,6 @@
 mod exports;
 // Texture layouts and the untiler: raw guest reads, so not under deny(unsafe_code).
 pub mod texture;
+// The shader translator: safe code, but for its C interface (shader/ffi.rs).
+pub mod shader;
 pub mod vulkan;

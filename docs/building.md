@@ -365,9 +365,9 @@ machine without the Vulkan development files builds the window-less game only wi
 build script would add to the link, so the game links the system's loader.
 
 Whatever decides the shaders' SPIR-V is part of the shader build's hash
-([shaders.md](shaders.md)), so when the translator moves, its Rust folder joins the
-C++ files in `build.rs`'s and CMake's lists alike, while the launcher keeps compiling
-the C++ copy, which stays hashed too. Built-in shaders (the backdrop, the display
+([shaders.md](shaders.md)), so the translator's Rust folder is in `build.rs`'s and
+CMake's lists alike, beside the C++ copy the launcher keeps compiling, which stays
+hashed too. Built-in shaders (the backdrop, the display
 table, the drawn resolve) are made outside that folder, so they do not change the
 hash.
 
@@ -586,8 +586,10 @@ hands over when its shaders do not fit: the window, the compile, then the game.
 
 The shader code's build, `MW2_SHADER_BUILD`, is a SHA-256 that CMake takes at
 configure time of the sources that decide what a compiled shader is (the
-translator, the pipeline layout, `shader_build.*`, `launcher/precompile.*` and
-`launcher/zone/`), and `build.rs` the same way for a Cargo build's game: the two must
+translators -- `runtime/gpu/vulkan/shader_translator.*`, `spirv.*`, `bindings.h`,
+`xenos_ucode.h`, and `src/runtime/gpu/shader/*.rs` with
+`shader_translator_rust.cpp` --, the pipeline layout, `shader_build.*`,
+`launcher/precompile.*` and `launcher/zone/`), and `build.rs` the same way for a Cargo build's game: the two must
 agree, or the launcher's compile pass is for another build. A change to any of them makes a player's copy compile again.
 
 ### Updating itself

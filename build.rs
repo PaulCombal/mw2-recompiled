@@ -129,14 +129,18 @@ fn write_title(root: &Path, out: &Path, title: &str, version: &str) {
 }
 
 // What this build's shaders come out as (runtime/gpu/vulkan/shader_build.h): a
-// SHA-256 of the sources that decide it, the translator's and the pipeline layout's,
-// and the launcher's reader of which shaders the game has. The compile pass's cache
+// SHA-256 of the sources that decide it, the translators' (the C++ one, which the
+// launcher compiles, and the Rust one in src/runtime/gpu/shader with its forwarders,
+// which the game runs) and the pipeline layout's, and the launcher's reader of which
+// shaders the game has. The compile pass's cache
 // is for one of these, and a player's copy compiles again when it changes. CMake
 // works out the launcher's the same way (CMakeLists.txt), and the two must agree.
 fn shader_build(root: &Path) -> String {
     type Pattern = (&'static str, fn(&str) -> bool);
-    let patterns: [Pattern; 12] = [
+    let patterns: [Pattern; 14] = [
         ("runtime/gpu/vulkan", |name| name.starts_with("shader_translator.")),
+        ("runtime/gpu/vulkan", |name| name == "shader_translator_rust.cpp"),
+        ("src/runtime/gpu/shader", |name| name.ends_with(".rs")),
         ("runtime/gpu/vulkan", |name| name.starts_with("spirv.")),
         ("runtime/gpu/vulkan", |name| name == "bindings.h"),
         ("runtime/gpu/vulkan", |name| name == "xenos_ucode.h"),
@@ -411,8 +415,9 @@ fn check_sdl(root: &Path, sdl: &Path) {
 // stands in for it (its hooks, its exports, bridge.rs's routes), and the files that
 // exist only to forward the C++ renderer's calls to Rust are compiled. Without the
 // feature the C++ renderer is built whole, as it was.
-const RUST_OWNS: &[&str] = &["runtime/gpu/texture.cpp", "runtime/gpu/vulkan/texture_formats.cpp"];
-const RUST_ONLY: &[&str] = &["runtime/rust_renderer.cpp"];
+const RUST_OWNS: &[&str] =
+    &["runtime/gpu/texture.cpp", "runtime/gpu/vulkan/texture_formats.cpp", "runtime/gpu/vulkan/shader_translator.cpp"];
+const RUST_ONLY: &[&str] = &["runtime/rust_renderer.cpp", "runtime/gpu/vulkan/shader_translator_rust.cpp"];
 
 fn main() {
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());

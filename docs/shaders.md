@@ -9,13 +9,31 @@ translation.
 
 | Piece | Where |
 |---|---|
-| Microcode field layouts | `runtime/gpu/vulkan/xenos_ucode.h` |
-| Translator | `runtime/gpu/vulkan/shader_translator.{h,cpp}` |
-| SPIR-V binary writer | `runtime/gpu/vulkan/spirv.{h,cpp}` |
-| Resource interface | `runtime/gpu/vulkan/bindings.h` |
+| Microcode field layouts | `src/runtime/gpu/shader/ucode.rs`; `runtime/gpu/vulkan/xenos_ucode.h` |
+| Translator | `src/runtime/gpu/shader/translator*.rs`, which the game runs (the C++ renderer calls it through `runtime/gpu/vulkan/shader_translator_rust.cpp`); `runtime/gpu/vulkan/shader_translator.{h,cpp}`, which the launcher and the `--renderer cpp` build compile |
+| SPIR-V binary writer | `src/runtime/gpu/shader/spirv.rs` (what the translator uses); `runtime/gpu/vulkan/spirv.{h,cpp}` |
+| Resource interface | `src/runtime/gpu/shader/bindings.rs`; `runtime/gpu/vulkan/bindings.h` |
+| The Rust against the C++ | `tools/shader_diff/shader_diff.py` (corpus, fuzzer, bindings, layouts; `--windows <llvm-mingw>` under Wine, `--bench`) |
 | Offline translator | `tools/translate_shader.cpp` (target `translate-shader`) |
 | Disassembler | `tools/xenos_shader.py` (control flow), `tools/xenos_isa.py` (ALU and fetch) |
 | Fastfile extractor | `tools/extract_shaders.py` |
+
+## Two translators
+
+Until the launcher is Rust, the translator exists twice: the Rust one the game
+runs and the C++ one the launcher compiles shaders with ahead of the game. They
+must give the same SPIR-V word for word, or the launcher's cache holds modules
+the game would not have made. A change goes into both, and
+`tools/shader_diff/shader_diff.py` must find them the same on Linux and with
+`--windows` (every `*.ucode` under `diagnosis/`, including the game's own
+shaders dumped there by `zone-shaders --dump`).
+
+Every `*.rs` directly in `src/runtime/gpu/shader/` is in the shader build's
+hash, beside the C++ translator's ([building.md](building.md)), so a change
+there makes a player's copy compile its shaders again. Subfolders and included
+files are not hashed: the translator keeps to that one flat folder. SPIR-V builder methods that only the
+built-in shaders use (the backdrop, the display table, the drawn resolve) live
+outside that folder, so that adding one leaves the hash as it is.
 
 ## How shaders reach the GPU
 
@@ -403,7 +421,7 @@ the sampler comes from the fetch constant alone.
 ```
 cmake --build build --target translate-shader
 ./build/translate-shader [--compile] vertex_<hash>.ucode out.spv
-spirv-val --target-env vulkan1.0 out.spv
+spirv-val --target-env vulkan1.1 out.spv
 ```
 
 The shader type comes from the file name (`pixel`/`ps_` means pixel). Run both

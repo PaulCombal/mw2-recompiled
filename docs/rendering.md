@@ -621,8 +621,9 @@ pipeline cache it starts with, `shaders/pipelines.bin`. The launcher fills it
 - **The marker.** `shaders/compiled.txt` is written last, after the cache is in
   place. Both files are written beside their place and renamed over it. The
   marker records what the cache was made for:
-  - the build of the shader code: `MW2_SHADER_BUILD`, a SHA-256 CMake takes of
-    the translator's, the layout's and the reader's sources;
+  - the build of the shader code: `MW2_SHADER_BUILD`, a SHA-256 CMake (and
+    `build.rs`, for the game) takes of both translators', the layout's and the
+    reader's sources;
   - the device (`deviceUUID`), its driver version and `pipelineCacheUUID`;
   - the resolution scale;
   - each fastfile's and executable's name, size and time.
