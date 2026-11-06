@@ -4,8 +4,8 @@ MW2 links Direct3D 9 statically (LTCG, no symbols), so there is no API
 boundary to intercept. The library runs as recompiled guest code. It builds
 PM4 command streams in guest memory and submits them through a ring buffer and
 the `Vd*` kernel imports. The runtime stands in for the GPU: it executes that
-stream as the Xenos command processor would (`runtime/gpu/command_processor.cpp`),
-and it hooks a few library functions by address (`runtime/title.h`). How draws
+stream as the Xenos command processor would (`src/runtime/gpu/command_processor.rs`;
+`runtime/gpu/command_processor.cpp` in the `--renderer cpp` build), and it hooks a few library functions by address (`runtime/title.h`). How draws
 become Vulkan work is covered in [rendering.md](rendering.md).
 
 ## The library
@@ -25,13 +25,15 @@ Resource creation must therefore keep running the title's code. A host backend
 can adopt the guest structs but cannot replace them.
 
 The D3D hooks below are `src/hooks/d3d_hooks.rs` (`runtime/gpu/d3d_hooks.cpp` in the
-`--renderer cpp` build), and the shader hooks `runtime/shader_preload.cpp`.
+`--renderer cpp` build), the image pool's `src/hooks/image_move.rs`
+(`runtime/image_move.cpp`), and the shader hooks `runtime/shader_preload.cpp`.
 
 | Hook (`title.h`) | Campaign | MP | Purpose |
 |---|---|---|---|
 | `T_D3D_Present` | `820C3390` | `820DFD10` | notes the present for pacing and stutter tracking; under `MW2_FPS_LIMIT`, sets the present interval |
 | `T_D3D_ArenaWait` | `820B9800` | `820E1E70` | learns the arena progress block from `[r3+10896]` |
 | `T_D3D_ReplayRecording` | `820C6130` | `820E4848` | diagnostics: warns of a recorded chunk list (`[object+116]`: next +0, count +4) with a zero count or a cycle, which the do-while replay loop would never leave |
+| `T_Image_FlushMove` | `823DE738` | `823DD658` | queues the image pool's block move for the command processor to make at its copy draw, or makes it at once when nothing consumes the stream (below) |
 | `T_D3D_InitPixelShader`, `T_D3D_PatchVertexFetches` | `820B8B58`, `820B6B10` | `820D7268`, `820D5220` | hand shader microcode to the renderer at load: a pixel shader as it is made, a vertex shader once D3D has bound it to a declaration (`shader_preload.cpp`, [rendering.md](rendering.md#pipelines)) |
 
 ## The `Vd*` imports (`src/runtime/kernel/video.rs`)
@@ -53,20 +55,35 @@ Every address handed to the GPU is physical. `kernel::from_physical` maps it bac
 
 The ring consumer, the vblank and the interrupts they raise are
 `src/runtime/gpu/gpu.rs`, and the arena's progress `src/runtime/gpu/arena.rs`;
-`runtime/gpu/gpu.cpp` and `arena.cpp` are the `--renderer cpp` build's. The C++
-command processor, census, image pool and capture reach them through
-`runtime/rust_renderer.cpp` (`gpu::FrameCount`, `gpu::Consuming`,
-`RaiseCommandProcessorInterrupt`, `ArenaProgress` and the rest of `internal.h`'s), and
-they call the command processor, the renderer's start, end and reports and the
-capture's batch brackets through `runtime/rust_calls.cpp`. The ring's place, size and
-read index, the read-pointer write-back and the interrupt callback with its context
-(one word) are atomics, as other threads write them. A second `shutdown` (the exit
-thread's while the run thread shuts down) waits for the first to finish, then returns.
-`tools/gpu_diff.py --rig arena_progress,interrupts` holds them against the C++
+`runtime/gpu/gpu.cpp` and `arena.cpp` are the `--renderer cpp` build's. The ring's
+place, size and read index, the read-pointer write-back and the interrupt callback with
+its context (one word) are atomics, as other threads write them. A second `shutdown`
+(the exit thread's while the run thread shuts down) waits for the first to finish, then
+returns. `tools/gpu_diff.py --rig arena_progress,interrupts` holds them against the C++
 originals, the lines each side prints included: the interrupts rig also runs both
 sides' consumer and vblank loops on a clock of its own, recording every sleep, blank,
 batch and idle call. `tools/hook_diff.py` holds the hooks, their pacing notes and
 stutter calls included.
+
+The command processor, the register file, the census and the image pool are Rust too:
+`src/runtime/gpu/command_processor.rs`, `registers.rs`, `hash.rs`, `census.rs` and
+`image_move.rs` (`runtime/gpu/command_processor.cpp`, `registers.h`, `internal.h`,
+`census.cpp` and `runtime/image_move.cpp` in the `--renderer cpp` build). They call the
+C++ renderer once a draw, resolve, swap, completion point and occlusion event, the
+memory watch at each `IM_LOAD` and the GPU capture's hooks, through
+`runtime/rust_calls.cpp` (`mw2_renderer_*`, `mw2_watch_*`, `mw2_stream_*`): the register
+file and the draw go by pointer, `RegisterFile` (`values` at 0, `stamps` at 81936,
+`writes` at 84504, 84512 bytes) and `DrawCall` (64 bytes) laid out as the C++'s, which
+both sides assert. The C++ that stays reaches them through `runtime/rust_renderer.cpp`:
+the display table (`gpu::DisplayColourTable`), the moves around a texture
+(`imagepool::DescribeMovesAround`), and the capture's swap count, state and replayed
+moves. The state is the consumer's, as the C++'s file statics were; what the reports
+print are single-writer atomics, and the display table's finished ramp a mutex with a
+release flag. `tools/gpu_diff.py --rig pm4,image_pool` holds them against the C++ one
+side a process, on generated streams (with the sleeps between polls, shaders reloaded
+at another length and states restored and refused) and, with `--capture`, on the game's
+captured ones; `tools/hook_diff.py` holds `T_Image_FlushMove`, the move it queues
+included.
 
 The ring consumer thread has its own KPCR, as a hardware thread does. It polls
 `CP_RB_WPTR` in the register aperture (`0x7FC80000 + 0x714`), executes up to
@@ -77,8 +94,8 @@ for registers the stream never wrote.
 
 ## Executing PM4
 
-All state is one `gpu::RegisterFile` of `0x5003` dwords (`registers.h`).
-Writes outside it are dropped.
+All state is one `gpu::RegisterFile` of `0x5003` dwords (`registers.rs`,
+`registers.h` in the C++). Writes outside it are dropped.
 
 | Window | Base | |
 |---|---|---|
@@ -133,7 +150,7 @@ identified by an FNV-1a hash of the microcode. Its initiator goes to
 base. If `RB_MODECONTROL & 7` is 6 (`Copy`) the draw is a resolve; otherwise
 it is a draw. While the image pool has block copies pending, each draw's `c0.x`
 is checked against them. Those copies are memory-export draws, and the runtime
-makes each one on the CPU at its draw (`runtime/image_move.cpp`).
+makes each one on the CPU at its draw (`src/runtime/gpu/image_move.rs`).
 
 **Scratch write-back.** A write to `SCRATCH_REG0..7` (`0x578`+n) whose bit is
 set in `SCRATCH_UMSK` (`0x1DC`) is also stored at `SCRATCH_ADDR` (`0x1DD`) +
@@ -143,7 +160,8 @@ set in `SCRATCH_UMSK` (`0x1DC`) is also stored at `SCRATCH_ADDR` (`0x1DD`) +
 register, or on memory when `info & 0x10` is set, comparing with the function in
 `info & 7`. Memory is byte-swapped according to the address's low two bits
 (Xenia's `GpuSwap`). `COHER_STATUS_HOST` (`0x0A31`) is satisfied at once. An
-unsatisfied wait polls every 50 us and gives up with a warning after 500 ms.
+unsatisfied wait polls every 50 us (`std::this_thread::sleep_for`, which on Windows is a
+`Sleep` of a whole millisecond) and gives up with a warning after 500 ms.
 
 ### Completion points
 

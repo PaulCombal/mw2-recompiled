@@ -195,6 +195,7 @@ arguments!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7);
 arguments!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8);
 arguments!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9);
 arguments!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9, K 10);
+arguments!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9, K 10, L 11);
 
 // %g, %f, %s, %d, %u, %x, %X, %p with printf's flags, width and precision, %llu, %llx
 // and %llX for a u64, %lld for an i64, and %%: each for its types, and as many as there are arguments.

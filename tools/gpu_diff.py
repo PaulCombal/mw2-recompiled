@@ -11,9 +11,13 @@
 # with a stub of the title's handler (interrupts.cpp), the consumer's and the vblank's
 # loops on a clock of the rig's (gpu_cpp.cpp, gpu.rs's rig_loop_*); these two compare
 # what each side printed too (rig_log.h), so their Rust is built with its log on.
+# The command processor, census and image pool (pm4, image_pool) run one side a process
+# (--side), the same program twice, and the two outputs are compared case by case; the
+# first case that differs is shown whole from both (pm4.cpp says what a case logs).
+# --capture <dir> feeds a capture of the game's GPU input (MW2_CAPTURE_GPU) to pm4.
 #
 #   usage: gpu_diff.py <build folder> --rig <name>[,<name>...] [--seeds N] [--cases N]
-#                      [--src folder] [--bench]
+#                      [--src folder] [--bench] [--side cpp|rust] [--capture <dir>]
 #
 # The build folder must be a Rust-renderer build (cargo xtask build): its cfgs say
 # which files Rust owns. --src takes the Rust from another folder, to try a deliberate
@@ -28,6 +32,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEXTURE = ["gpu/texture.cpp", "gpu/vulkan/texture_formats.cpp"]
 PRESENTER = ["gpu/vulkan/presenter.cpp", "gpu/vulkan/backdrop.cpp", "gpu/vulkan/gpu_time.cpp", "gpu/vulkan/capture.cpp"]
 THREADS = ["gpu/gpu.cpp", "gpu/arena.cpp", "gpu/d3d_hooks.cpp"]
+PM4 = ["gpu/command_processor.cpp", "gpu/census.cpp", "image_move.cpp"]
 RIGS = {
     "tiling": (TEXTURE, "texture", ["tiling"]),
     "texture": (TEXTURE, "texture", ["texture"]),
@@ -37,6 +42,8 @@ RIGS = {
                                            "shaders", "queue", "gpu_time", "abi"]),
     "arena_progress": (THREADS, "arena", ["arena"]),
     "interrupts": (THREADS, "interrupts", ["interrupts", "vblank", "worker"]),
+    "pm4": (PM4, "pm4", ["pm4"]),
+    "image_pool": (PM4, "pm4", ["image_pool"]),
 }
 # What each program compiles: the originals as they are, then its helpers.
 PROGRAMS = {
@@ -48,11 +55,26 @@ PROGRAMS = {
     # arena.cpp as it is; gpu.cpp included whole by gpu_cpp.cpp, for its file statics.
     "arena": (["gpu/arena.cpp"], ["rig_bridge"]),
     "interrupts": ([], ["gpu_cpp", "rig_bridge"]),
+    # The command processor, census, image pool and arena as they are; the guest's clock
+    # in the command processor is the rig's (rig_timebase), and its mw2_* export renamed.
+    "pm4": (["gpu/command_processor.cpp", "gpu/census.cpp", "image_move.cpp", "gpu/arena.cpp"], ["rig_bridge"]),
 }
+# Flags of one original's own.
+# Its sleeps between WAIT_REG_MEM polls, the rig's (pm4_sleep.h).
+SOURCE_FLAGS = {"gpu/command_processor.cpp": ["-DPPC_QueryTimebase=rig_timebase", "-include",
+                                              f"{ROOT}/tools/gpu_diff/pm4_sleep.h"]}
+# Programs whose originals define mw2_* names the Rust defines too: renamed cpp_mw2_*.
+RENAMED = {"pm4"}
+# Programs run one side a process, the two outputs compared.
+TWO_SIDED = {"pm4"}
+# The switches each seed of a two-sided program runs under, both sides alike.
+PM4_ENVIRONMENTS = [{}, {"MW2_TRACE_FRAME": "6", "MW2_TRACE_DRAWS": "60"},
+                    {"MW2_WATCH": "A0380000:65536", "MW2_TRACE_SHADER_LOADS": "1"}, {"MW2_RENDER": "0"},
+                    {"MW2_TRACE_DRAWS": "200", "MW2_TRACE_DRAWS_AFTER": "300"}, {"MW2_RENDER": "1", "MW2_WATCH": "A0390000"}]
 # What a program's C++ needs beyond the others': gpu.cpp includes the title's table and
 # the recompiled code's header. These programs compare the lines each side prints, so
 # their C++ and their Rust log, into memory (rig_log.h); the others' do not.
-TITLED = {"arena", "interrupts"}
+TITLED = {"arena", "interrupts", "pm4"}
 
 def run(*command, **options):
     return subprocess.run(command, check=True, text=True, **options)
@@ -66,6 +88,8 @@ def main():
     parser.add_argument("--src", default=f"{ROOT}/src")
     parser.add_argument("--bench", action="store_true")
     parser.add_argument("--work")
+    parser.add_argument("--side", choices=["cpp", "rust"])
+    parser.add_argument("--capture")
     arguments = parser.parse_args()
 
     build = os.path.abspath(arguments.build)
@@ -132,7 +156,13 @@ def main():
         objects = []
         for source in sources:
             target = f"{work}/{source.replace('/', '_')}.o"
-            run(*flags, "-c", f"{ROOT}/runtime/{source}", "-o", target)
+            run(*flags, *SOURCE_FLAGS.get(source, []), "-c", f"{ROOT}/runtime/{source}", "-o", target)
+            if program_name in RENAMED:
+                defined = subprocess.run(["nm", "--defined-only", "--extern-only", target], check=True, text=True,
+                                         capture_output=True).stdout.split()
+                renames = sum((["--redefine-sym", f"{name}=cpp_{name}"] for name in defined if name.startswith("mw2_")), [])
+                if renames:
+                    run("objcopy", *renames, target)
             objects.append(target)
         # The texture rig measures how far the C++ reader reads (texture_reach.cpp) and
         # runs the build's C++ forwarders (texture_forwarders.cpp); the presenter rig's
@@ -146,6 +176,9 @@ def main():
         run(*flags, f"{ROOT}/tools/gpu_diff/{program_name}.cpp", *objects, library, "-fuse-ld=lld",
             "-Wl,--gc-sections,--unresolved-symbols=ignore-all", "-lvulkan", "-lpthread", "-ldl", "-lm", "-lgcc_s",
             "-o", program)
+        if program_name in TWO_SIDED:
+            two_sided(program, name, parts, arguments, work)
+            continue
         seeds = 1 if arguments.bench else arguments.seeds
         for seed in range(1, seeds + 1):
             result = subprocess.run([program, str(seed), str(arguments.cases), *parts], text=True,
@@ -156,5 +189,127 @@ def main():
             if seed in (1, seeds):
                 print(f"{name} seed {seed}: " + result.stdout.strip().replace("\n", f"\n{name} seed {seed}: "))
         print(f"{name}: all the same over {seeds} seeds of {arguments.cases} cases")
+
+def capture_file(folder, path):
+    """A capture (MW2_CAPTURE_GPU, read as src/runtime/gpu_replay.rs reads it) as pm4.cpp's
+    Capture takes it: little-endian words, the pages' bytes inline."""
+    import mmap, struct
+    lines = open(f"{folder}/capture.idx").read().splitlines()
+    if lines[0] != "mw2 gpu capture 2":
+        sys.exit(f"{folder}: {lines[0]!r}, not capture format 2")
+    blobs_file = open(f"{folder}/pages.blob", "rb")
+    blobs = mmap.mmap(blobs_file.fileno(), 0, access=mmap.ACCESS_READ)
+    ring = open(f"{folder}/ring.bin", "rb").read()
+    state = open(f"{folder}/state.bin", "rb").read()
+    blob = lambda i: blobs[i * 4096:(i + 1) * 4096]
+    top = ring_base = ring_dwords = write_back = 0
+    snapshot, batches = [], []
+    at = 1
+    while at < len(lines):
+        words = lines[at].split()
+        at += 1
+        if words[0] == "ring":
+            ring_base, ring_dwords = int(words[1], 16), int(words[2])
+        elif words[0] == "writeback":
+            write_back = int(words[1], 16)
+        elif words[0] == "top":
+            top = int(words[1], 16)
+        elif words[0] == "snapshot":
+            for _ in range(int(words[1])):
+                page, b = lines[at].split()
+                at += 1
+                snapshot.append((int(page, 16), int(b)))
+        elif words[0] == "batch":
+            dwords, npages, nevents = int(words[3]), int(words[5]), int(words[7])
+            pages, events = [], []
+            for _ in range(npages + nevents):
+                w = lines[at].split()
+                at += 1
+                kinds = {"pool": 1, "wait": 2, "aperture": 3, "arena": 4}
+                if w[0] not in kinds:
+                    pages.append((int(w[0]), int(w[1], 16), int(w[2]), len(w) > 3 and w[3] == "own"))
+                    continue
+                kind, packet = kinds[w[0]], int(w[1])
+                if kind == 1:
+                    a, b, c, d, e = int(w[2], 16), int(w[3], 16), int(w[4], 16), int(w[5], 16), int(w[6])
+                elif kind == 2:
+                    a, b, c, d, e = int(w[2]), int(w[3], 16), int(w[4], 16), int(w[5]), int(w[6])
+                elif kind == 3:
+                    a, b, c, d, e = int(w[2], 16), int(w[3], 16), 0, 0, 0
+                else:
+                    a, b, c, d, e = int(w[2], 16), 0, 0, 0, 0
+                events.append((kind, packet, a, b, c, d, e))
+            batches.append((dwords, pages, events))
+    with open(path, "wb") as out:
+        out.write(struct.pack("<8I", 0x5232574D, top, ring_base, ring_dwords, write_back, len(state), len(snapshot),
+                              len(batches)))
+        out.write(state)
+        for page, b in snapshot:
+            out.write(struct.pack("<I", page))
+            out.write(blob(b))
+        ring_at = 0
+        for dwords, pages, events in batches:
+            out.write(struct.pack("<3I", dwords, len(pages), len(events)))
+            out.write(ring[ring_at * 4:(ring_at + dwords) * 4])
+            ring_at += dwords
+            for packet, page, b, own in pages:
+                out.write(struct.pack("<3I", packet, page, int(own)))
+                out.write(blob(b))
+            for kind, packet, a, b, c, d, e in events:
+                out.write(struct.pack("<6IQ", kind, packet, a, b, c, d, e))
+    return len(batches)
+
+def two_sided(program, name, parts, arguments, work):
+    """Each side in a process of its own; their outputs, a line a case, compared. The
+    first case that differs is run again on both, shown whole."""
+    def side(which, seed, cases, extra, environment):
+        return subprocess.run([program, str(seed), str(cases), which, *extra], text=True, errors="replace",
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=7200,
+                              env={**os.environ, **environment})
+    runs = []
+    if arguments.capture:
+        capture = f"{work}/capture.bin"
+        batches = capture_file(arguments.capture, capture)
+        runs.append((1, 0, [f"capture:{capture}"], {}, f"capture {os.path.basename(arguments.capture.rstrip('/'))} ({batches} batches)"))
+    else:
+        for seed in range(1, arguments.seeds + 1):
+            runs.append((seed, arguments.cases, parts, PM4_ENVIRONMENTS[seed % len(PM4_ENVIRONMENTS)], f"seed {seed}"))
+    for seed, cases, extra, environment, label in runs:
+        if arguments.side:
+            result = side(arguments.side, seed, cases, extra, environment)
+            print(result.stdout[-2000:], end="")
+            continue
+        out = {}
+        for which in ("cpp", "rust"):
+            result = side(which, seed, cases, extra, environment)
+            if result.returncode != 0:
+                print(result.stdout[-3000:], result.stderr[-3000:])
+                sys.exit(f"{name}: {label}: the {which} side exits {result.returncode}")
+            out[which] = result.stdout.splitlines()
+        if out["cpp"] != out["rust"]:
+            first = next((i for i, (a, b) in enumerate(zip(out["cpp"], out["rust"])) if a != b),
+                         min(len(out["cpp"]), len(out["rust"])))
+            line = (out["cpp"] + [""])[first]
+            print(f"DIFFERENCE: {name}: {label}: line {first + 1}: C++ {line!r}, Rust {(out['rust'] + [''])[first]!r}",
+                  flush=True)
+            words = line.split()
+            if len(words) >= 2 and words[0] in ("case", "pool", "batch") and words[1].isdigit():
+                shown = {which: side(which, seed, cases, [*extra, "--show", words[1]], environment).stdout.splitlines()
+                         for which in ("cpp", "rust")}
+                # The case's first differing line, with what came before it: a case can log
+                # millions of lines, too many for a diff.
+                a, b = shown["cpp"], shown["rust"]
+                at = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
+                print(f"case {words[1]}: {len(a)} lines from C++, {len(b)} from Rust; the first difference at line {at + 1}:")
+                for i in range(max(0, at - 12), at):
+                    print(f"   {a[i]}")
+                for i in range(at, min(at + 8, max(len(a), len(b)))):
+                    print(f"  C++:  {a[i] if i < len(a) else '(nothing)'}")
+                    print(f"  Rust: {b[i] if i < len(b) else '(nothing)'}")
+            sys.exit(1)
+        tail = [l for l in out["cpp"] if l.endswith("fields compared")]
+        print(f"{name} {label}: {len(out['cpp'])} lines the same; {tail[-1] if tail else ''}")
+    print(f"{name}: all the same over {len(runs)} {'captures' if arguments.capture else 'seeds'}"
+          f"{'' if arguments.capture else f' of {arguments.cases} cases'}")
 
 main()

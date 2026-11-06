@@ -37,7 +37,7 @@ outside that folder, so that adding one leaves the hash as it is.
 
 ## How shaders reach the GPU
 
-The command processor (`runtime/gpu/command_processor.cpp`) loads a program
+The command processor (`src/runtime/gpu/command_processor.rs`) loads a program
 from two packets:
 
 | Packet | Payload |

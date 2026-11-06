@@ -54,6 +54,28 @@ namespace
 }
 
 #include "hook_diff_table.h"   // kHooks, kStubs, kData, and a function per stub
+
+// The image pool's hook (below, with the renderer's loggers).
+extern uint64_t g_frameCount;
+extern bool g_consuming;
+extern "C" void mw2_rig_hook_gpu_values(uint64_t frames, bool consuming);
+extern "C" bool mw2_rig_hook_pool_waiting();
+extern "C" void mw2_rig_hook_pool_report();
+extern "C" void mw2_rig_hook_pool_look();
+namespace imagepool
+{
+    bool CopiesWaiting();
+    void AtDraw(uint32_t streamConstant, uint64_t vertexShader);
+    void Report();
+}
+namespace gpu::stream::detail
+{
+    extern bool capturing, replaying, counting;
+}
+namespace
+{
+    void Logged(const char* what, uint64_t a = 0, uint64_t b = 0);
+}
 #include "kernel/kernel.h"
 
 // src/runtime/exports.rs's, built with --cfg mw2_hook_rig.
@@ -692,6 +714,19 @@ namespace
     void Tune(const Hook& hook, PPCContext& ctx, Random& random)
     {
         const std::string name = hook.name;
+        if (name == "T_Image_FlushMove")
+        {
+            // Two blocks of the arena, now and then none, an unaligned destination, or
+            // one whose physical address is 0; a frame and a consumer drawn, both sides alike.
+            ctx.r3.u64 = random.Below(16) ? kArena + 0x10000 + random.Below(16) * 0x1000 + (random.Below(8) ? 0 : 1 + random.Below(3))
+                                          : (random.Below(2) ? 0 : 0xE0000000u);
+            ctx.r4.u64 = random.Below(16) ? kArena + 0x20000 + random.Below(16) * 0x1000 : 0;
+            ctx.r5.u64 = random.Below(8) ? (1 + random.Below(0x800)) * 4 : random.Below(4);
+            if (random.Below(8) == 0) ctx.r3.u64 |= random.Next() << 32;
+            g_frameCount = random.Below(4) ? g_frameCount + random.Below(2) : random.Below(100);
+            g_consuming = random.Below(2) != 0;
+            mw2_rig_hook_gpu_values(g_frameCount, g_consuming);
+        }
         if (name == "T_Com_Error" || name == "T_Com_Printf" || name == "T_Com_DPrintf" || name == "T_Com_PrintError" ||
             name == "T_Com_PrintWarning")
             Print(ctx, random);
@@ -1129,6 +1164,21 @@ namespace
         std::memcpy(&outcome.ctx, &start, sizeof start);
         if (!setjmp(g_escape))
             hook.side[side](outcome.ctx, g_base);
+        // What the image pool's hook leaves queued for the command processor.
+        if (std::string(hook.name) == "T_Image_FlushMove")
+        {
+            Logged("copies waiting", side ? mw2_rig_hook_pool_waiting() : imagepool::CopiesWaiting());
+            // And what it queued -- destination, source, size, stream constant and frame --
+            // as a capture's journal sees the queue (PoolSeen, below): a draw whose stream
+            // constant names no copy the hook can queue (its physical address is never 0).
+            gpu::stream::detail::capturing = true;
+            if (side) mw2_rig_hook_pool_look();
+            else imagepool::AtDraw(0x40000000u, 0);
+            gpu::stream::detail::capturing = false;
+            // And what it has counted: the moves asked for, their bytes, those made at once.
+            if (side) mw2_rig_hook_pool_report();
+            else imagepool::Report();
+        }
         outcome.written = Harvest();
         outcome.calls = g_calls;
         outcome.log = TakeLog();
@@ -1203,19 +1253,26 @@ extern "C" void mw2_renderer_flash_seen(const char*) { std::abort(); }
 // runtime/rust_calls.cpp.
 namespace
 {
-    void Logged(const char* what, uint64_t a = 0, uint64_t b = 0)
+    void Logged(const char* what, uint64_t a, uint64_t b)
     {
         std::fprintf(stderr, "[renderer] %s %llx %llx\n", what, (unsigned long long)a, (unsigned long long)b);
         std::fflush(stderr);
     }
 }
 
+// The GPU's frame count and whether a consumer runs: drawn for the image pool's hook,
+// and given to gpu.rs's Rust callers too (gpu::rig, mw2_rig_hook_gpu_values).
+uint64_t g_frameCount = 0;
+bool g_consuming = false;
 namespace gpu
 {
     void Presented() { Logged("present"); }
-    // Values, which gpu.rs gives its Rust callers too (gpu::rig).
-    uint64_t FrameCount() { return 0; }
-    bool Consuming() { return false; }
+    uint64_t FrameCount() { return g_frameCount; }
+    bool Consuming() { return g_consuming; }
+}
+namespace gpu::watch
+{
+    void WillWrite(uint32_t address, uint32_t bytes) { Logged("will write", address, bytes); }
 }
 namespace vk::renderer
 {
@@ -1234,6 +1291,27 @@ namespace gpu::stream::detail
 {
     bool capturing = false, replaying = false, counting = false;
 }
+// The image pool's queue as a capture's journal sees it: the C++'s and the Rust's.
+namespace gpu::stream
+{
+    void PoolSeen(uint32_t destination, uint32_t source, uint32_t size, uint32_t streamConstant, uint64_t frame)
+    {
+        Logged("pool seen", uint64_t(destination) << 32 | source, uint64_t(size) << 32 | streamConstant);
+        Logged("pool seen frame", frame);
+    }
+}
+extern "C" const bool* const mw2_stream_capturing = &gpu::stream::detail::capturing;
+extern "C" const bool* const mw2_stream_replaying = &gpu::stream::detail::replaying;
+extern "C" const bool* const mw2_stream_counting = &gpu::stream::detail::counting;
+extern "C" void mw2_stream_pool_seen(uint32_t destination, uint32_t source, uint32_t size, uint32_t streamConstant,
+                                     uint64_t frame)
+{
+    gpu::stream::PoolSeen(destination, source, size, streamConstant, frame);
+}
+// What the Rust's copy at its draw notes while capturing, which the look above never
+// makes: defined, so the program loads.
+extern "C" void mw2_stream_read(uint32_t address, uint64_t bytes) { Logged("capture read", address, bytes); }
+extern "C" void mw2_stream_write(uint32_t address, uint32_t bytes, bool done) { Logged("capture write", address, bytes); }
 extern "C" void mw2_census_present() { Logged("present"); }
 extern "C" void mw2_renderer_before_stream_write(uint32_t physical, uint32_t size) { Logged("before stream write", physical, size); }
 extern "C" void mw2_renderer_prepare_shader(bool pixel, const uint32_t* code, size_t words)
@@ -1241,6 +1319,7 @@ extern "C" void mw2_renderer_prepare_shader(bool pixel, const uint32_t* code, si
     Logged("prepare shader", pixel, words ? code[0] ^ code[words - 1] ^ words : 0);
 }
 extern "C" void mw2_textures_memory_written(uint32_t physical, uint32_t size) { Logged("memory written", physical, size); }
+extern "C" void mw2_watch_will_write(uint32_t address, uint32_t bytes) { Logged("will write", address, bytes); }
 
 int main(int argc, char** argv)
 {

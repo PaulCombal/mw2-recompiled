@@ -55,6 +55,8 @@ mod glass_piece_count;
 mod hud_elem_field_index;
 #[cfg(all(T_MSG_ReadBitsCompress, T_Huffman_DecodeSymbol))]
 mod huffman_overflow;
+#[cfg(all(mw2_owns_image_move, T_Image_FlushMove))]
+mod image_move;
 #[cfg(T_PartyHost_HandleJoinPartyRequest)]
 mod joinparty_overflow;
 #[cfg(T_DATA_MapNameDvar)]

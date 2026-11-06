@@ -768,7 +768,7 @@ report counters.
   progress (its block, the last sequence, the pending position).
 - *Page versions.* Every guest read on the GPU side notes its range: the
   indirect buffers, `IM_LOAD` microcode, `LOAD_ALU_CONSTANT` sources and
-  `WAIT_REG_MEM` dwords in `command_processor.cpp`, vertex windows, rectangle
+  `WAIT_REG_MEM` dwords in `src/runtime/gpu/command_processor.rs`, vertex windows, rectangle
   corners and indices in `renderer_arena.cpp`, every texture range the cache
   reads or signs (with the page after it, which the reader can reach), the
   pages the memory watch copies into its shadow, and the source of an
@@ -827,6 +827,6 @@ report counters.
 
 - Resolve write-back: the CPU cannot read resolved pixels from guest memory.
 - Memory export in shaders. Its one use, the image pool's block copy, is made
-  on the CPU at its draw (`runtime/image_move.cpp`).
+  on the CPU at its draw (`src/runtime/gpu/image_move.rs`).
 - Multiple render targets, the console's sample positions, and alpha to
   coverage (MW2 never sets `RB_COLORCONTROL`'s alpha-to-mask bit).

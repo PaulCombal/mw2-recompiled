@@ -218,6 +218,182 @@ mod arena {
     }
 }
 
+// What the C++ that stays calls of command_processor.cpp and image_move.cpp
+// (gpu/command_processor.rs, gpu/image_move.rs): the display table (display_table.cpp),
+// the moves around a texture (texture_cache.cpp) and the GPU capture's state, swap count
+// and replayed moves (stream_capture.cpp), and the replay driver's restore.
+#[cfg(mw2_owns_command_processor)]
+mod command_processor {
+    use crate::runtime::gpu::command_processor as cp;
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn mw2_cp_display_colour_table(out: *mut u32) -> bool {
+        let Some(table) = cp::display_colour_table() else { return false };
+        // SAFETY: the forwarder's uint32_t out[256].
+        unsafe { out.cast::<[u32; 256]>().write(table) };
+        true
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_cp_swaps_parsed() -> u64 {
+        cp::swaps_parsed()
+    }
+
+    #[cfg(feature = "diagnostics")]
+    type Reserve = unsafe extern "C" fn(context: *mut std::ffi::c_void, size: usize) -> *mut u8;
+
+    /// state.bin's part: the bytes go where `reserve(size)` puts them (the forwarder's
+    /// std::vector, resized).
+    #[cfg(feature = "diagnostics")]
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn mw2_cp_save(reserve: Reserve, context: *mut std::ffi::c_void) {
+        let bytes = cp::save();
+        // SAFETY: reserve returns `size` writable bytes of the forwarder's vector.
+        unsafe {
+            let to = reserve(context, bytes.len());
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), to, bytes.len());
+        }
+    }
+
+    /// The replay driver's step 4 (bridge::replay::restore).
+    #[cfg(feature = "diagnostics")]
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn mw2_cp_restore_for_replay(bytes: *const u8, size: u64) -> bool {
+        if bytes.is_null() {
+            return false;
+        }
+        // SAFETY: the driver's state.bin, `size` bytes, read for the call.
+        cp::restore_for_replay(unsafe { std::slice::from_raw_parts(bytes, size as usize) })
+    }
+}
+
+#[cfg(mw2_owns_image_move)]
+mod image_move {
+    use crate::runtime::gpu::image_move as pool;
+    use std::ffi::c_char;
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn mw2_imagepool_describe_moves_around(
+        physical: u32,
+        size: u32,
+        frames: u64,
+        out: *mut c_char,
+        bytes: usize,
+    ) {
+        if out.is_null() || bytes == 0 {
+            return;
+        }
+        // SAFETY: the caller's buffer of `bytes` (texture_cache.cpp's char[1024]).
+        let out = unsafe { std::slice::from_raw_parts_mut(out.cast::<u8>(), bytes) };
+        pool::describe_moves_around(physical, size, frames, out);
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_imagepool_queue_for_replay(
+        destination: u32,
+        source: u32,
+        size: u32,
+        stream_constant: u32,
+        frame: u64,
+    ) {
+        pool::queue_for_replay(destination, source, size, stream_constant, frame);
+    }
+}
+
+// tools/hook_diff.py: the values the C++ hooks' gpu::FrameCount and gpu::Consuming give,
+// given to the Rust's too, and what the image pool's hook leaves queued.
+#[cfg(all(mw2_hook_rig, mw2_owns_gpu))]
+#[unsafe(no_mangle)]
+extern "C" fn mw2_rig_hook_gpu_values(frames: u64, consuming: bool) {
+    crate::runtime::gpu::gpu::rig::set(frames, consuming);
+}
+
+#[cfg(all(mw2_hook_rig, mw2_owns_image_move))]
+#[unsafe(no_mangle)]
+extern "C" fn mw2_rig_hook_pool_waiting() -> bool {
+    crate::runtime::gpu::image_move::copies_waiting()
+}
+
+#[cfg(all(mw2_hook_rig, mw2_owns_image_move))]
+#[unsafe(no_mangle)]
+extern "C" fn mw2_rig_hook_pool_report() {
+    crate::runtime::gpu::image_move::report();
+}
+
+// A draw whose stream constant names no copy the hook queues: under capturing, the queue
+// journalled as the C++'s AtDraw journals it.
+#[cfg(all(mw2_hook_rig, mw2_owns_image_move))]
+#[unsafe(no_mangle)]
+extern "C" fn mw2_rig_hook_pool_look() {
+    crate::runtime::gpu::image_move::at_draw(0x4000_0000, 0);
+}
+
+// tools/gpu_diff.py --rig pm4 and --rig image_pool: what the rig drives of the command
+// processor, the census and the image pool beyond the C interface above, and the GPU's
+// values it gives both sides (gpu.rs's rig module).
+#[cfg(all(mw2_gpu_rig, mw2_owns_gpu, mw2_owns_command_processor, mw2_owns_census, mw2_owns_image_move))]
+mod pm4_rig {
+    use crate::runtime::gpu::{census, command_processor as cp, gpu, image_move as pool};
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_set_gpu_values(frames: u64, consuming: bool, seconds: f64) {
+        gpu::rig::set(frames, consuming);
+        gpu::rig::set_seconds(seconds);
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_cp_execute_ring(base: u32, read_index: u32, mask: u32, dwords: u32) {
+        cp::execute_ring(base, read_index, mask, dwords);
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_cp_deliver_occlusion_queries() {
+        cp::deliver_occlusion_queries();
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_cp_write_physical(physical: u32, value: u32) {
+        cp::write_physical(physical, value);
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_cp_report() {
+        cp::report();
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_census_present() {
+        census::present();
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_census_report() {
+        census::report();
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_pool_report() {
+        pool::report();
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_pool_copies_waiting() -> bool {
+        pool::copies_waiting()
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_pool_at_draw(stream_constant: u32, vertex_shader: u64) {
+        pool::at_draw(stream_constant, vertex_shader);
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_pool_at_frame_end(parsed_frames: u64) {
+        pool::at_frame_end(parsed_frames);
+    }
+}
+
 // tools/gpu_diff.py --rig arena_progress and --rig interrupts: what the rig drives of
 // arena.rs and gpu.rs beyond the C interface above. The interrupts run on a thread made
 // as the consumer's is, with the rig's guest memory and its stub of a handler.

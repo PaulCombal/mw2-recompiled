@@ -287,8 +287,9 @@ fn guest_blank_period() -> u64 {
 }
 
 // std::this_thread::sleep_for as the C++ build's library has it: nanosleep on Linux, and
-// on Windows libc++'s Sleep of the time rounded up to a whole millisecond.
-fn sleep_for(time: Duration) {
+// on Windows libc++'s Sleep of the time rounded up to a whole millisecond. The command
+// processor's WAIT_REG_MEM polls sleep through it too.
+pub(super) fn sleep_for(time: Duration) {
     #[cfg(mw2_gpu_rig)]
     // SAFETY: the rig's function.
     unsafe {
@@ -450,6 +451,10 @@ pub fn running() -> bool {
 
 /// Seconds since the GPU started, for the per-second tables and traces.
 pub fn seconds() -> f64 {
+    #[cfg(mw2_gpu_rig)]
+    if let Some(seconds) = rig::seconds() {
+        return seconds;
+    }
     clock::nanoseconds().wrapping_sub(START.load(Ordering::Relaxed)) as f64 / 1e9
 }
 
@@ -527,7 +532,7 @@ pub fn shutdown() {
 /// True while a command processor is consuming the ring, so work that must happen at a
 /// point in the stream can be left to it.
 pub fn consuming() -> bool {
-    #[cfg(mw2_hook_rig)]
+    #[cfg(any(mw2_hook_rig, mw2_gpu_rig))]
     if let Some(consuming) = rig::consuming() {
         return consuming;
     }
@@ -581,7 +586,7 @@ pub fn swap() {
 
 /// Frames the title has submitted (VdSwap calls).
 pub fn frame_count() -> u64 {
-    #[cfg(mw2_hook_rig)]
+    #[cfg(any(mw2_hook_rig, mw2_gpu_rig))]
     if let Some(frames) = rig::frames() {
         return frames;
     }
@@ -626,20 +631,34 @@ pub fn report() {
     calls::stream_report();
 }
 
-// tools/hook_diff.py: what the C++ hooks' stand-ins for gpu::FrameCount and
-// gpu::Consuming return, given to the Rust hooks too.
-#[cfg(mw2_hook_rig)]
+// tools/hook_diff.py and tools/gpu_diff.py --rig pm4: what the C++ side's stand-ins for
+// gpu::FrameCount, gpu::Consuming and gpu::detail::Seconds return, given to the Rust too.
+#[cfg(any(mw2_hook_rig, mw2_gpu_rig))]
 pub mod rig {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     // 0 unset; else the frame count plus one, and the consuming flag plus one.
     static FRAMES: AtomicU64 = AtomicU64::new(0);
     static CONSUMING: AtomicU64 = AtomicU64::new(0);
+    // The seconds' bits, and whether they are set.
+    static SECONDS: AtomicU64 = AtomicU64::new(0);
+    static SECONDS_SET: AtomicU64 = AtomicU64::new(0);
 
     #[allow(dead_code)]
     pub fn set(frames: u64, consuming: bool) {
         FRAMES.store(frames.wrapping_add(1), Ordering::Relaxed);
         CONSUMING.store(u64::from(consuming) + 1, Ordering::Relaxed);
+    }
+
+    #[allow(dead_code)]
+    pub fn set_seconds(seconds: f64) {
+        SECONDS.store(seconds.to_bits(), Ordering::Relaxed);
+        SECONDS_SET.store(1, Ordering::Relaxed);
+    }
+
+    #[allow(dead_code)]
+    pub fn seconds() -> Option<f64> {
+        (SECONDS_SET.load(Ordering::Relaxed) != 0).then(|| f64::from_bits(SECONDS.load(Ordering::Relaxed)))
     }
 
     pub fn frames() -> Option<u64> {

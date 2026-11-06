@@ -345,7 +345,14 @@ with the feature they are not compiled, and each gives rustc the cfg
 `mw2_owns_<stem>` (`mw2_owns_texture` for `runtime/gpu/texture.cpp`). Every Rust
 hook, export and `bridge.rs` route that stands in for such a file is under that cfg,
 never under the feature alone, so each function exists once in every build, and
-taking a file back out of the list unwires its Rust with it. `RUST_ONLY` holds the
+taking a file back out of the list unwires its Rust with it. The command processor,
+the census and the image pool are the exception: the Rust command processor calls
+only the Rust census and pool, so the three leave or stay together, and a build that
+lists some of them stops at a `compile_error!` in `src/runtime/gpu/mod.rs`. The C++ glue is told the
+same list as definitions, `MW2_OWNS_<STEM>` (`MW2_OWNS_COMMAND_PROCESSOR`): for the
+command processor, the census and the image pool, `rust_calls.cpp` routes into the C++
+file only while it is compiled and `rust_renderer.cpp` forwards to the Rust only while
+Rust owns it. `RUST_ONLY` holds the
 C++ that exists only beside the Rust renderer: `runtime/rust_renderer.cpp` defines
 the C++ declarations of what moved as calls to `src/runtime/gpu/exports.rs`, so no
 header and no caller of the C++ renderer changes. Calls from the Rust into the C++
@@ -757,9 +764,9 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `kernel/` | kernel and XAM imports: memory, objects and waits, threads, files, content and profile, input, networking, video, audio |
 | `apu/` | the XAudio render driver and the XMA decoder (the C++ build's), and `xma_codec.cpp`, FFmpeg's decoder behind C calls for `tools/xma_diff.py` |
 | `online/` | the online services (`lan`, `server`, `steam`), chosen as the game starts |
-| `gpu/` | the command processor: ring and PM4 packets, interrupts, D3D9's command-buffer arena, texture fetch and tiling, the D3D9 hooks, the write watch (`memory_watch.*`) |
+| `gpu/` | the command processor: ring and PM4 packets, interrupts, D3D9's command-buffer arena, texture fetch and tiling, the D3D9 hooks, the write watch (`memory_watch.*`); the ring consumer, the arena, the command processor, the register file, the census, the D3D9 hooks and texture tiling are `src/runtime/gpu/`'s and `src/hooks/d3d_hooks.rs`, and their C++ the `--renderer cpp` build's |
 | `gpu/vulkan/` | the Vulkan renderer: draws, targets, resolves, frames, pipelines and pipeline libraries, the shader translator, the texture cache, the recorder thread, the display table; the presenter window, its backdrop, the GPU's busy time and RenderDoc capture are `src/runtime/gpu/vulkan/`'s, and their C++ the `--renderer cpp` build's |
-| `image_move.cpp` | the image pool's block copy, which the console makes with a memory-export draw |
+| `image_move.cpp` | the image pool's block copy, which the console makes with a memory-export draw; `src/runtime/gpu/image_move.rs` and `src/hooks/image_move.rs`, and this the `--renderer cpp` build's |
 | `shader_preload.cpp` | hands shaders loaded with a level to the renderer to compile |
 | `engine.h`, `engine_log.cpp`, `predicate_waits.cpp`, `console.cpp` | hooks into the engine: print and error paths, spin waits, the console command buffer |
 | `player.cpp` | the headless walker and route recorder |

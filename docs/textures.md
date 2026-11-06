@@ -12,7 +12,7 @@ would sample at the moment a draw executes.
 | Images, samplers, the texture set, re-reads | `runtime/gpu/vulkan/texture_cache.{h,cpp}` |
 | The images' memory, in blocks | `runtime/gpu/vulkan/image_memory.{h,cpp}` |
 | Write watch on guest pages | `runtime/gpu/memory_watch.{h,cpp}` |
-| The image pool's block copy | `runtime/image_move.{h,cpp}` |
+| The image pool's block copy | `src/runtime/gpu/image_move.rs` and the hook `src/hooks/image_move.rs`; `runtime/image_move.{h,cpp}` is the `--renderer cpp` build's |
 | Upload round-trip test | `tools/upload_texture.cpp` (target `upload-texture`) |
 
 ## The fetch constant
@@ -261,7 +261,7 @@ address names.
 
 A submission is therefore cut into **segments** at every point where the
 command processor tells the title that work has finished
-(`vk::renderer::BeforeCompletion`, called from `command_processor.cpp`):
+(`vk::renderer::BeforeCompletion`, called from `src/runtime/gpu/command_processor.rs`):
 
 - `EVENT_WRITE_SHD` and `EVENT_WRITE_CFL` (end-of-pipe writes; D3D's fence is
   one);
@@ -303,17 +303,17 @@ c0.x = 0x40000000 | (destination physical address / 4)
 ```
 
 The translator drops memory exports ([shaders.md](shaders.md#exports)), so
-`runtime/image_move.cpp` makes the copy on the CPU, at that draw:
+`src/runtime/gpu/image_move.rs` makes the copy on the CPU, at that draw:
 
 1. A hook on `T_Image_FlushMove` records `{destination, source, size, stream
    constant}` before the title's own call writes the draw, so the parse never
    meets the draw first.
 2. At every draw while copies are pending, the command processor calls
-   `imagepool::AtDraw(c0.x, vertex shader hash)`. A match makes the copy there:
+   `image_move::at_draw(c0.x, vertex shader hash)`. A match makes the copy there:
    every draw queued before it sees the old bytes, every one after the new.
    Once the copy shader is known, a matching `c0.x` under another shader is not
    a copy, because `c0` outlives the draw that set it.
-3. `imagepool::AtFrameEnd` makes any copy whose frame the parse has left
+3. `image_move::at_frame_end` makes any copy whose frame the parse has left
    without meeting its draw, so a block is never left uncopied. With nothing
    consuming the command stream the copy is made immediately.
 

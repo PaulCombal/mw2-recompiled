@@ -231,4 +231,53 @@ void gpu::detail::RestoreArena(const ArenaState& state) { mw2_arena_restore(&sta
 void gpu::detail::SetArenaBlock(uint32_t physical) { mw2_arena_set_block(physical); }
 #endif
 
+// ---- gpu/command_processor.cpp, gpu/census.cpp, image_move.cpp (gpu/command_processor.rs,
+// gpu/census.rs, gpu/image_move.rs). What the C++ that stays calls of them: the display
+// table (display_table.cpp), the moves around a texture (texture_cache.cpp), and the GPU
+// capture's swap count, state and replayed moves (stream_capture.cpp). The census has no
+// C++ caller left; mw2_cp_restore_for_replay is Rust's own (exports.rs).
+#include "image_move.h"
+
+#if MW2_OWNS_COMMAND_PROCESSOR
+extern "C"
+{
+    bool mw2_cp_display_colour_table(uint32_t* out);
+#if MW2_DIAGNOSTICS
+    uint64_t mw2_cp_swaps_parsed();
+    void mw2_cp_save(uint8_t* (*reserve)(void*, size_t), void* context);
+#endif
+}
+
+bool gpu::DisplayColourTable(uint32_t out[256]) { return mw2_cp_display_colour_table(out); }
+
+#if MW2_DIAGNOSTICS
+uint64_t gpu::detail::SwapsParsed() { return mw2_cp_swaps_parsed(); }
+void gpu::detail::SaveCommandProcessor(std::vector<uint8_t>& out) { mw2_cp_save(Reserve, &out); }
+#endif
+#endif
+
+#if MW2_OWNS_IMAGE_MOVE
+extern "C"
+{
+    void mw2_imagepool_describe_moves_around(uint32_t physical, uint32_t size, uint64_t frames, char* out, size_t bytes);
+#if MW2_DIAGNOSTICS
+    void mw2_imagepool_queue_for_replay(uint32_t destination, uint32_t source, uint32_t size, uint32_t streamConstant,
+                                        uint64_t frame);
+#endif
+}
+
+void imagepool::DescribeMovesAround(uint32_t physicalAddress, uint32_t size, uint64_t frames, char* out, size_t bytes)
+{
+    mw2_imagepool_describe_moves_around(physicalAddress, size, frames, out, bytes);
+}
+
+#if MW2_DIAGNOSTICS
+void imagepool::QueueForReplay(uint32_t destination, uint32_t source, uint32_t size, uint32_t streamConstant,
+                               uint64_t frame)
+{
+    mw2_imagepool_queue_for_replay(destination, source, size, streamConstant, frame);
+}
+#endif
+#endif
+
 #endif  // MW2_RUST_RENDERER

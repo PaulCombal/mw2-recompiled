@@ -206,16 +206,27 @@ pub mod vulkan {
     }
 }
 
-// What gpu/gpu.rs and gpu/arena.rs call of the C++ renderer that is left
-// (runtime/rust_calls.cpp): the command processor, the renderer's start, end, idle and
-// reports, and the GPU capture's batch brackets.
+// What gpu/gpu.rs and gpu/arena.rs call of the command processor, the census, the
+// image pool and the C++ renderer that is left (runtime/rust_calls.cpp): the command
+// processor's own are gpu/command_processor.rs's, census.rs's and image_move.rs's when
+// Rust owns them (build.rs, RUST_OWNS), the renderer's start, end, idle and reports, and
+// the GPU capture's batch brackets.
 #[cfg(feature = "rust-renderer")]
 pub mod gpu {
+    #[cfg(mw2_owns_command_processor)]
+    use crate::runtime::gpu::command_processor as cp;
+
+    #[cfg(not(mw2_owns_command_processor))]
     unsafe extern "C" {
         fn mw2_cp_execute_ring(base: u32, read_index: u32, mask: u32, dwords: u32);
         fn mw2_cp_deliver_occlusion_queries();
         fn mw2_cp_rendering() -> bool;
         fn mw2_cp_write_physical(physical: u32, value: u32);
+        #[cfg(feature = "diagnostics")]
+        fn mw2_cp_report();
+    }
+
+    unsafe extern "C" {
         fn mw2_renderer_initialise() -> bool;
         fn mw2_renderer_shutdown();
         fn mw2_renderer_idle();
@@ -225,12 +236,15 @@ pub mod gpu {
 
     #[cfg(feature = "diagnostics")]
     unsafe extern "C" {
-        fn mw2_cp_report();
+        // tools/hook_diff.py logs the present the D3D hooks report on both sides here.
+        #[cfg(any(not(mw2_owns_census), mw2_hook_rig))]
         fn mw2_census_present();
+        #[cfg(not(mw2_owns_census))]
         fn mw2_census_report();
         fn mw2_renderer_report();
         fn mw2_textures_report();
         fn mw2_watch_report();
+        #[cfg(not(mw2_owns_image_move))]
         fn mw2_imagepool_report();
         fn mw2_stream_batch_begin(base: u32, read_index: u32, mask: u32, dwords: u32);
         fn mw2_stream_batch_end();
@@ -241,22 +255,42 @@ pub mod gpu {
 
     /// Executes `dwords` of the ring starting at `read_index`.
     pub fn execute_ring(base: u32, read_index: u32, mask: u32, dwords: u32) {
-        unsafe { mw2_cp_execute_ring(base, read_index, mask, dwords) }
+        #[cfg(mw2_owns_command_processor)]
+        cp::execute_ring(base, read_index, mask, dwords);
+        #[cfg(not(mw2_owns_command_processor))]
+        unsafe {
+            mw2_cp_execute_ring(base, read_index, mask, dwords)
+        }
     }
 
     /// Writes the records of the occlusion queries the GPU has finished counting.
     pub fn deliver_occlusion_queries() {
-        unsafe { mw2_cp_deliver_occlusion_queries() }
+        #[cfg(mw2_owns_command_processor)]
+        cp::deliver_occlusion_queries();
+        #[cfg(not(mw2_owns_command_processor))]
+        unsafe {
+            mw2_cp_deliver_occlusion_queries()
+        }
     }
 
     /// False under MW2_RENDER=0: the stream is executed and counted, nothing drawn.
     pub fn rendering() -> bool {
-        unsafe { mw2_cp_rendering() }
+        #[cfg(mw2_owns_command_processor)]
+        return cp::rendering();
+        #[cfg(not(mw2_owns_command_processor))]
+        unsafe {
+            mw2_cp_rendering()
+        }
     }
 
     /// The command processor's write of a dword at a physical address.
     pub fn write_physical(physical: u32, value: u32) {
-        unsafe { mw2_cp_write_physical(physical, value) }
+        #[cfg(mw2_owns_command_processor)]
+        cp::write_physical(physical, value);
+        #[cfg(not(mw2_owns_command_processor))]
+        unsafe {
+            mw2_cp_write_physical(physical, value)
+        }
     }
 
     pub fn renderer_initialise() -> bool {
@@ -282,18 +316,33 @@ pub mod gpu {
 
     #[cfg(feature = "diagnostics")]
     pub fn cp_report() {
-        unsafe { mw2_cp_report() }
+        #[cfg(mw2_owns_command_processor)]
+        cp::report();
+        #[cfg(not(mw2_owns_command_processor))]
+        unsafe {
+            mw2_cp_report()
+        }
     }
 
     /// At each present the title makes.
     #[cfg(feature = "diagnostics")]
     pub fn census_present() {
-        unsafe { mw2_census_present() }
+        #[cfg(all(mw2_owns_census, not(mw2_hook_rig)))]
+        crate::runtime::gpu::census::present();
+        #[cfg(any(not(mw2_owns_census), mw2_hook_rig))]
+        unsafe {
+            mw2_census_present()
+        }
     }
 
     #[cfg(feature = "diagnostics")]
     pub fn census_report() {
-        unsafe { mw2_census_report() }
+        #[cfg(mw2_owns_census)]
+        crate::runtime::gpu::census::report();
+        #[cfg(not(mw2_owns_census))]
+        unsafe {
+            mw2_census_report()
+        }
     }
 
     #[cfg(feature = "diagnostics")]
@@ -313,7 +362,12 @@ pub mod gpu {
 
     #[cfg(feature = "diagnostics")]
     pub fn imagepool_report() {
-        unsafe { mw2_imagepool_report() }
+        #[cfg(mw2_owns_image_move)]
+        crate::runtime::gpu::image_move::report();
+        #[cfg(not(mw2_owns_image_move))]
+        unsafe {
+            mw2_imagepool_report()
+        }
     }
 
     /// MW2_CAPTURE_GPU and MW2_REPLAY_GPU around each ring batch (stream_capture.h).
@@ -342,6 +396,256 @@ pub mod gpu {
     #[cfg(feature = "diagnostics")]
     pub fn stream_arena_block_seen(block: u32) {
         unsafe { mw2_stream_arena_block_seen(block) }
+    }
+}
+
+// What the command processor and the image pool (gpu/command_processor.rs,
+// gpu/image_move.rs) call of the C++ renderer, one call a draw (runtime/rust_calls.cpp).
+#[cfg(feature = "rust-renderer")]
+pub mod renderer {
+    use crate::runtime::gpu::registers::RegisterFile;
+
+    /// vk::renderer::DrawCall: what the draw packet carries that the register file does
+    /// not. Its layout is the C++'s, asserted here and in rust_calls.cpp.
+    #[repr(C)]
+    pub struct DrawCall {
+        pub primitive: u32,
+        pub index_count: u32,
+        pub indexed: bool,
+        pub index32: bool,
+        pub index_address: u32, // guest virtual, already resolved
+        // A hash of each, so a shader is translated and compiled once.
+        pub vertex_code: *const u32,
+        pub vertex_words: usize,
+        pub vertex_hash: u64,
+        pub pixel_code: *const u32,
+        pub pixel_words: usize,
+        pub pixel_hash: u64,
+    }
+
+    const _: () = {
+        assert!(std::mem::offset_of!(DrawCall, primitive) == 0);
+        assert!(std::mem::offset_of!(DrawCall, index_count) == 4);
+        assert!(std::mem::offset_of!(DrawCall, indexed) == 8);
+        assert!(std::mem::offset_of!(DrawCall, index32) == 9);
+        assert!(std::mem::offset_of!(DrawCall, index_address) == 12);
+        assert!(std::mem::offset_of!(DrawCall, vertex_code) == 16);
+        assert!(std::mem::offset_of!(DrawCall, vertex_words) == 24);
+        assert!(std::mem::offset_of!(DrawCall, vertex_hash) == 32);
+        assert!(std::mem::offset_of!(DrawCall, pixel_code) == 40);
+        assert!(std::mem::offset_of!(DrawCall, pixel_words) == 48);
+        assert!(std::mem::offset_of!(DrawCall, pixel_hash) == 56);
+        assert!(std::mem::size_of::<DrawCall>() == 64);
+    };
+
+    unsafe extern "C" {
+        fn mw2_renderer_draw(registers: *const RegisterFile, call: *const DrawCall);
+        fn mw2_renderer_resolve(registers: *const RegisterFile);
+        fn mw2_renderer_swap(front_buffer: u32);
+        fn mw2_renderer_before_completion();
+        fn mw2_renderer_begin_occlusion();
+        fn mw2_renderer_end_occlusion(tag: u32, samples: *mut u64) -> bool;
+        fn mw2_renderer_collect_occlusion(deliver: extern "C" fn(tag: u32, samples: u64));
+        fn mw2_renderer_idle();
+        fn mw2_renderer_before_stream_write(physical: u32, size: u32);
+        fn mw2_textures_memory_written(physical: u32, size: u32);
+    }
+
+    #[inline(always)]
+    pub fn draw(registers: &RegisterFile, call: &DrawCall) {
+        unsafe { mw2_renderer_draw(registers, call) }
+    }
+
+    /// A draw issued in copy mode.
+    pub fn resolve(registers: &RegisterFile) {
+        unsafe { mw2_renderer_resolve(registers) }
+    }
+
+    /// The swap packet: the frame is what was resolved to this front buffer.
+    pub fn swap(front_buffer: u32) {
+        unsafe { mw2_renderer_swap(front_buffer) }
+    }
+
+    /// The command processor is about to tell the title the work before this point has
+    /// finished.
+    pub fn before_completion() {
+        unsafe { mw2_renderer_before_completion() }
+    }
+
+    pub fn begin_occlusion_query() {
+        unsafe { mw2_renderer_begin_occlusion() }
+    }
+
+    /// The count now, when there is nothing to count; None when it comes later.
+    pub fn end_occlusion_query(tag: u32) -> Option<u64> {
+        let mut samples = 0u64;
+        unsafe { mw2_renderer_end_occlusion(tag, &mut samples) }.then_some(samples)
+    }
+
+    pub fn collect_occlusion_queries(deliver: extern "C" fn(tag: u32, samples: u64)) {
+        unsafe { mw2_renderer_collect_occlusion(deliver) }
+    }
+
+    /// The ring consumer has nothing to read for now.
+    pub fn idle() {
+        unsafe { mw2_renderer_idle() }
+    }
+
+    /// The command stream is about to write [physical, physical + size).
+    pub fn before_stream_write(physical: u32, size: u32) {
+        unsafe { mw2_renderer_before_stream_write(physical, size) }
+    }
+
+    /// vk::textures::MemoryWritten.
+    pub fn textures_memory_written(physical: u32, size: u32) {
+        unsafe { mw2_textures_memory_written(physical, size) }
+    }
+}
+
+// The memory watch (gpu/memory_watch.cpp, C++ until it moves): what the command
+// processor's shader memo and the image pool ask of it.
+#[cfg(feature = "rust-renderer")]
+pub mod watch {
+    unsafe extern "C" {
+        fn mw2_watch_enabled() -> bool;
+        fn mw2_watch_track(physical: u32, bytes: u32, frame: u64) -> u64;
+        fn mw2_watch_unwritten(physical: u32, bytes: u32, since: u64) -> bool;
+        fn mw2_watch_will_write(address: u32, bytes: u32);
+    }
+
+    pub fn enabled() -> bool {
+        unsafe { mw2_watch_enabled() }
+    }
+
+    /// Before reading the range: a stamp when every page of it is watched from then on.
+    pub fn track(physical: u32, bytes: u32, frame: u64) -> u64 {
+        unsafe { mw2_watch_track(physical, bytes, frame) }
+    }
+
+    pub fn unwritten(physical: u32, bytes: u32, since: u64) -> bool {
+        unsafe { mw2_watch_unwritten(physical, bytes, since) }
+    }
+
+    /// Before this runtime writes a large range of guest memory itself.
+    pub fn will_write(address: u32, bytes: u32) {
+        unsafe { mw2_watch_will_write(address, bytes) }
+    }
+}
+
+// MW2_CAPTURE_GPU and MW2_REPLAY_GPU's hooks in the command processor and the image pool
+// (gpu/stream_capture.h, C++): the three flags read where the C++ reads them inline, and
+// the slow paths called only when they are set.
+#[cfg(all(feature = "rust-renderer", feature = "diagnostics"))]
+pub mod stream {
+    use std::ffi::{CStr, c_char};
+
+    /// gpu::stream::Wait.
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    pub struct Wait {
+        pub memory: bool,
+        pub value: u32,
+        pub polls: u32,
+        pub timed_out: bool,
+    }
+    const _: () = assert!(std::mem::size_of::<Wait>() == 16 && std::mem::offset_of!(Wait, timed_out) == 12);
+
+    unsafe extern "C" {
+        // The addresses of gpu::stream::detail's capturing, replaying and counting.
+        static mw2_stream_capturing: *const bool;
+        static mw2_stream_replaying: *const bool;
+        static mw2_stream_counting: *const bool;
+        fn mw2_stream_packet();
+        fn mw2_stream_read(address: u32, bytes: u64);
+        fn mw2_stream_polled(address: u32);
+        fn mw2_stream_write(address: u32, bytes: u32, done: bool);
+        fn mw2_stream_aperture_read(index: u32, value: u32);
+        fn mw2_stream_wait_done(memory: bool, address: u32, value: u32, polls: u32, timed_out: bool);
+        fn mw2_stream_replay_wait(wait: *mut Wait) -> bool;
+        fn mw2_stream_pool_seen(destination: u32, source: u32, size: u32, stream_constant: u32, frame: u64);
+        fn mw2_stream_diverged(what: *const c_char);
+    }
+
+    #[inline(always)]
+    pub fn capturing() -> bool {
+        // SAFETY: the address of a bool the C++ holds for the run; the consumer sets it.
+        unsafe { *mw2_stream_capturing }
+    }
+
+    #[inline(always)]
+    pub fn replaying() -> bool {
+        // SAFETY: as capturing.
+        unsafe { *mw2_stream_replaying }
+    }
+
+    #[inline(always)]
+    fn counting() -> bool {
+        // SAFETY: as capturing.
+        unsafe { *mw2_stream_counting }
+    }
+
+    /// Before each packet the consumer executes.
+    #[inline(always)]
+    pub fn packet() {
+        if counting() {
+            unsafe { mw2_stream_packet() }
+        }
+    }
+
+    /// A read of guest memory on the GPU side, at a guest address.
+    #[inline(always)]
+    pub fn note_read(address: u32, bytes: u64) {
+        if counting() && bytes != 0 {
+            unsafe { mw2_stream_read(address, bytes) }
+        }
+    }
+
+    /// The dword a memory WAIT_REG_MEM polls, before its first poll.
+    #[inline(always)]
+    pub fn note_polled(address: u32) {
+        if counting() {
+            unsafe { mw2_stream_polled(address) }
+        }
+    }
+
+    /// A write the consumer makes itself, bracketed: note_write before, note_written after.
+    #[inline(always)]
+    pub fn note_write(address: u32, bytes: u32) {
+        if capturing() {
+            unsafe { mw2_stream_write(address, bytes, false) }
+        }
+    }
+
+    #[inline(always)]
+    pub fn note_written(address: u32, bytes: u32) {
+        if capturing() || replaying() {
+            unsafe { mw2_stream_write(address, bytes, true) }
+        }
+    }
+
+    /// A register read from the aperture because the stream never wrote it.
+    pub fn aperture_read(index: u32, value: u32) {
+        unsafe { mw2_stream_aperture_read(index, value) }
+    }
+
+    pub fn wait_done(memory: bool, address: u32, value: u32, polls: u32, timed_out: bool) {
+        unsafe { mw2_stream_wait_done(memory, address, value, polls, timed_out) }
+    }
+
+    /// The replay's journal entry for the WAIT_REG_MEM at this packet.
+    pub fn replay_wait() -> Option<Wait> {
+        let mut wait = Wait::default();
+        unsafe { mw2_stream_replay_wait(&mut wait) }.then_some(wait)
+    }
+
+    /// The image pool's queue, at the moment the consumer looks at it.
+    pub fn pool_seen(destination: u32, source: u32, size: u32, stream_constant: u32, frame: u64) {
+        unsafe { mw2_stream_pool_seen(destination, source, size, stream_constant, frame) }
+    }
+
+    /// The replay found the consumer doing something the capture did not have it do.
+    pub fn diverged(what: &CStr) {
+        unsafe { mw2_stream_diverged(what.as_ptr()) }
     }
 }
 

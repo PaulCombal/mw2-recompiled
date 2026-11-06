@@ -426,6 +426,9 @@ const RUST_OWNS: &[&str] = &[
     "runtime/gpu/gpu.cpp",
     "runtime/gpu/arena.cpp",
     "runtime/gpu/d3d_hooks.cpp",
+    "runtime/gpu/command_processor.cpp",
+    "runtime/gpu/census.cpp",
+    "runtime/image_move.cpp",
 ];
 const RUST_ONLY: &[&str] = &["runtime/rust_renderer.cpp", "runtime/gpu/vulkan/shader_translator_rust.cpp"];
 
@@ -557,6 +560,12 @@ fn main() {
     );
     if rust_renderer {
         runtime.push("-DMW2_RUST_RENDERER=1".into());
+        // And which files Rust owns, for the C++ glue that stands in for them
+        // (rust_calls.cpp, rust_renderer.cpp): MW2_OWNS_<STEM>, as the Rust's cfgs.
+        for owned in RUST_OWNS {
+            let stem = Path::new(owned).file_stem().unwrap().to_str().unwrap().to_uppercase();
+            runtime.push(format!("-DMW2_OWNS_{stem}=1"));
+        }
     }
     for include in [root.join("runtime"), PathBuf::from(&sdl).join("include"), ppc.clone(), simde.clone()] {
         runtime.push(format!("-I{}", include.display()));
