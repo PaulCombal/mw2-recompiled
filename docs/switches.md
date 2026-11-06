@@ -100,7 +100,7 @@ walking to it.
 
 | switch | effect |
 |---|---|
-| `MW2_DUMP_SHADERS=<dir>` | every distinct shader's microcode, for `tools/xenos_shader.py` and `translate-shader` |
+| `MW2_DUMP_SHADERS=<dir>` | every distinct shader's microcode, for `tools/xenos_shader.py` and `translate-shader`; and the window's built-in backdrop shaders as SPIR-V, `builtin_backdrop_vertex.spv` and `builtin_backdrop_pixel.spv`, for `spirv-val` |
 | `MW2_DUMP_TEXTURES=<dir>` | every distinct bound texture, untiled, as PNM with each mip level, its fetch constant logged. `MW2_DUMP_TEXTURES_RAW=1` also writes the guest bytes; `MW2_DUMP_TEXTURES_AFTER=<seconds>` starts later, since a streamed texture is empty at its first bind |
 | end-of-run reports | packets by opcode, frame times, draws and presents per second, arena copies, draws per render target, texture and shader work |
 

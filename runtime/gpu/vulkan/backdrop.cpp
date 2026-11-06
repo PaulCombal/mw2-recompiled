@@ -3,9 +3,11 @@
 #ifdef MW2_HAVE_VULKAN
 #include "spirv.h"
 #include "util.h"
+#include "../../diagnostics.h"
 #include "../../log.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <iterator>
 #include <vector>
@@ -270,8 +272,37 @@ namespace
         return module;
     }
 
+#if MW2_DIAGNOSTICS
+    // MW2_DUMP_SHADERS=<dir>: the two shaders as SPIR-V files, for spirv-val and for
+    // holding against the Rust renderer's. Preprocessed out of a release build, whose
+    // MakePipeline then stays as it was, profile and all.
+    void DumpShaders()
+    {
+        const char* dir = diag::Text("MW2_DUMP_SHADERS");
+        if (!dir) return;
+        const std::pair<const char*, std::vector<uint32_t>> shaders[] = {
+            { "builtin_backdrop_vertex.spv", VertexShader() },
+            { "builtin_backdrop_pixel.spv", FragmentShader() },
+        };
+        for (const auto& [name, words] : shaders)
+        {
+            char path[512];
+            std::snprintf(path, sizeof path, "%s/%s", dir, name);
+            if (std::FILE* f = std::fopen(path, "wb"))
+            {
+                std::fwrite(words.data(), sizeof(uint32_t), words.size(), f);
+                std::fclose(f);
+            }
+        }
+    }
+#endif
+
     bool MakePipeline()
     {
+#if MW2_DIAGNOSTICS
+        DumpShaders();
+#endif
+
         VkDescriptorSetLayoutBinding bindings[2]{};
         for (uint32_t i = 0; i < 2; i++)
         {

@@ -483,6 +483,25 @@ is what four players wait on; the multi-draw keeps all of it on the recorder.
 
 ## Presenting
 
+The window, its device and the frame queue are
+`src/runtime/gpu/vulkan/presenter.rs`, on a thread of its own (`vulkan presenter`,
+with `vulkan present wait` beside it). The system's screens' blur is `backdrop.rs`,
+the GPU's busy time for `MW2_REPORT` is `gpu_time.rs` and RenderDoc's frames are
+`capture.rs`, in the same folder. The C++ renderer reaches them through
+`runtime/rust_renderer.cpp` (`vk::Start`, `vk::ShowImage`, `vk::gpu_time::Submit` and
+the rest of `presenter.h`, `gpu_time.h` and `capture.h`); `runtime/gpu/vulkan/presenter.cpp`,
+`backdrop.cpp`, `gpu_time.cpp` and `capture.cpp` are the `--renderer cpp` build's. The
+presenter makes the instance and the window, and the device through the C++
+`vk::pipeline::CreateDevice`, which the renderer then shares. `tools/gpu_diff.py --rig
+presenter` holds the Rust against the C++ originals: the letterbox, the display's clock,
+the backdrop's shaders and `gpu_time`'s arithmetic as functions of values, and the
+window thread's own code -- making a swapchain, a frame of the loop with its recording
+and the frame queue, the overlay and its fade -- and the backdrop's draws run on the
+same stand-in Vulkan calls on both sides (`tools/gpu_diff/presenter_stubs.cpp`, which
+fill the Rust's ash tables too), every call compared with its arguments. The rig leaves
+out what needs a device or a window: making the instance, device, window and overlay
+image, the present-wait thread and the real 250 ms timed wait.
+
 The swap waits (`vk::WaitUntilTaken`) until the window has copied out
 the present image it is about to reuse. With four present images, the renderer
 can run three frames ahead. The window presents every frame once, in order,

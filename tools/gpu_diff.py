@@ -2,7 +2,10 @@
 # The renderer's moved parts against their C++ (docs/building.md, "The renderer moves
 # to Rust"): the C++ files as they are and the Rust of src/runtime/ in one program,
 # on generated cases, compared byte for byte. Each rig is tools/gpu_diff/<rig>.cpp,
-# which calls the Rust through the C functions the C++ renderer itself calls.
+# which calls the Rust through the C functions the C++ renderer itself calls, or, for
+# the presenter's, backdrop's and gpu_time's decisions, through the rig's own
+# (exports.rs, mod rig) while the C++ runs on stand-in Vulkan and SDL calls
+# (presenter_rig.h): neither side makes a device or a window.
 #
 #   usage: gpu_diff.py <build folder> --rig <name>[,<name>...] [--seeds N] [--cases N]
 #                      [--src folder] [--bench]
@@ -14,12 +17,26 @@
 import argparse, glob, os, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# Each rig: its C++ files under runtime/, and the parts its program runs.
+# Each rig: the C++ files under runtime/ the Rust must own, the parts its program runs,
+# and, for a program that compiles the originals into helpers of its own instead, those
+# helpers and the C++ they need beside them.
+TEXTURE = ["gpu/texture.cpp", "gpu/vulkan/texture_formats.cpp"]
+PRESENTER = ["gpu/vulkan/presenter.cpp", "gpu/vulkan/backdrop.cpp", "gpu/vulkan/gpu_time.cpp", "gpu/vulkan/capture.cpp"]
 RIGS = {
-    "tiling": (["gpu/texture.cpp", "gpu/vulkan/texture_formats.cpp"], "texture", ["tiling"]),
-    "texture": (["gpu/texture.cpp", "gpu/vulkan/texture_formats.cpp"], "texture", ["texture"]),
-    "formats": (["gpu/texture.cpp", "gpu/vulkan/texture_formats.cpp"], "texture", ["formats"]),
-    "texture_bench": (["gpu/texture.cpp", "gpu/vulkan/texture_formats.cpp"], "texture", ["bench"]),
+    "tiling": (TEXTURE, "texture", ["tiling"]),
+    "texture": (TEXTURE, "texture", ["texture"]),
+    "formats": (TEXTURE, "texture", ["formats"]),
+    "texture_bench": (TEXTURE, "texture", ["bench"]),
+    "presenter": (PRESENTER, "presenter", ["letterbox", "swapchain", "follow", "display", "blank", "fade", "push",
+                                           "shaders", "queue", "gpu_time", "abi"]),
+}
+# What each program compiles: the originals as they are, then its helpers.
+PROGRAMS = {
+    "texture": (TEXTURE, ["texture_reach", "texture_forwarders", "rig_bridge"]),
+    # The presenter's C++ is included whole by its helpers, its calls renamed to stand-ins
+    # (presenter_rig.h); the backdrop's shaders need the C++ SPIR-V writer.
+    "presenter": (["gpu/vulkan/spirv.cpp"], ["presenter_stubs", "presenter_cpp", "backdrop_cpp", "gpu_time_cpp",
+                                             "presenter_forwarders", "rig_bridge"]),
 }
 
 def run(*command, **options):
@@ -54,8 +71,11 @@ def main():
     variables.setdefault("MW2_RELEASE_TAG", "")
 
     level = "-O3" if arguments.bench else "-O1"
-    defines = ["-DMW2_DIAGNOSTICS=1", "-DMW2_HAVE_VULKAN=1", "-DMW2_RUST=1"]
-    compiler = ["clang++-18", "-std=gnu++20", level, "-march=x86-64-v2", "-w", *defines, f"-I{ROOT}/runtime"]
+    defines = ["-DMW2_DIAGNOSTICS=1", "-DMW2_HAVE_VULKAN=1", "-DMW2_RUST=1", "-DMW2_USE_SDL=1"]
+    # The SDL cargo built, whose headers the presenter's C++ includes.
+    sdl = sorted(glob.glob(f"{build}/rust/release/build/sdl3-sys-*/out/include"), key=os.path.getmtime)
+    includes = [f"-I{ROOT}/runtime"] + [f"-I{sdl[-1]}"] * bool(sdl)
+    compiler = ["clang++-18", "-std=gnu++20", level, "-march=x86-64-v2", "-w", *defines, *includes]
 
     # The Rust: src/runtime/ through a root of its own, as a static library.
     root = f"{work}/rust_root.rs"
@@ -73,28 +93,29 @@ def main():
         externs += ["--extern", f"ash={rlib('ash')}"]
     run("rustc", "--edition=2024", "--crate-type=staticlib", "--crate-name=gpu", "-Cpanic=abort", "-Ctarget-cpu=x86-64-v2",
         *checks, "--cfg", 'feature="diagnostics"', "--cfg", 'feature="rust-renderer"', "--cfg", "mw2_screens_rig",
-        "--cfg", "mw2_gpu_rig", *sum((["--cfg", cfg] for cfg in cfgs), []), "--cap-lints=warn", *externs,
+        "--cfg", "mw2_gpu_rig", "--cfg", "mw2_no_logging", *sum((["--cfg", cfg] for cfg in cfgs), []), "--cap-lints=warn", *externs,
         "-L", f"dependency={build}/rust/release/deps", "-o", library, root,
         env={**os.environ, "OUT_DIR": out_dir, **variables})
 
     for name in arguments.rig.split(","):
-        sources, program_name, parts = RIGS[name]
-        for source in sources:
+        owned, program_name, parts = RIGS[name]
+        for source in owned:
             stem = os.path.basename(source)[:-4]
             if f"mw2_owns_{stem}" not in owns:
                 sys.exit(f"{build}: Rust does not own {source} (renderer_cfgs.txt)")
+        sources, helpers = PROGRAMS[program_name]
         objects = []
         for source in sources:
             target = f"{work}/{source.replace('/', '_')}.o"
             run(*compiler, "-c", f"{ROOT}/runtime/{source}", "-o", target)
             objects.append(target)
-        # The texture rig measures how far the C++ reader reads (texture_reach.cpp).
-        # and runs the build's C++ forwarders (texture_forwarders.cpp).
-        if program_name == "texture":
-            for helper in ("texture_reach", "texture_forwarders"):
-                target = f"{work}/{helper}.o"
-                run(*compiler, "-c", f"{ROOT}/tools/gpu_diff/{helper}.cpp", "-o", target)
-                objects.append(target)
+        # The texture rig measures how far the C++ reader reads (texture_reach.cpp) and
+        # runs the build's C++ forwarders (texture_forwarders.cpp); the presenter rig's
+        # helpers are the originals on stand-ins, and its forwarders.
+        for helper in helpers:
+            target = f"{work}/{helper}.o"
+            run(*compiler, "-c", f"{ROOT}/tools/gpu_diff/{helper}.cpp", "-o", target)
+            objects.append(target)
         program = f"{work}/{program_name}"
         run(*compiler, f"{ROOT}/tools/gpu_diff/{program_name}.cpp", *objects, library, "-fuse-ld=lld",
             "-Wl,--gc-sections,--unresolved-symbols=ignore-all", "-lvulkan", "-lpthread", "-ldl", "-lm", "-lgcc_s",

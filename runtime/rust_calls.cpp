@@ -53,3 +53,35 @@ extern "C" bool mw2_shaders_compiled(void* why, void* device, mw2_text_sink sink
     sink(device, deviceText.data(), deviceText.size());
     return compiled;
 }
+
+#if MW2_RUST_RENDERER
+// The Rust renderer's calls into the C++ pipeline.cpp, which stays until the launcher
+// moves (src/runtime/bridge.rs, vulkan).
+extern "C" bool mw2_vk_device_has_extension(void* physical, const char* name)
+{
+    return vk::pipeline::DeviceHasExtension(physical, name);
+}
+
+extern "C" bool mw2_vk_create_device(void* physical, uint32_t family, const char* const* extensions, uint32_t count,
+                                     void** device, void** queue, void* features)
+{
+    return vk::pipeline::CreateDevice(physical, family, extensions, count, device, queue, features);
+}
+
+extern "C" bool mw2_vk_pipeline_initialise(void* device, void* physical, void* queue, uint32_t family, void* instance)
+{
+    return vk::pipeline::Initialise(device, physical, queue, family, instance);
+}
+
+extern "C" bool mw2_vk_failed(int result, const char* where) { return vk::pipeline::Failed(result, where); }
+
+extern "C" void mw2_vk_queue_lock() { vk::pipeline::QueueMutex().lock(); }
+
+extern "C" void mw2_vk_queue_unlock() { vk::pipeline::QueueMutex().unlock(); }
+
+extern "C" void* mw2_vk_instance() { return vk::pipeline::Instance(); }
+
+extern "C" void* mw2_vk_queue() { return vk::pipeline::Queue(); }
+
+extern "C" void* mw2_vk_physical() { return vk::pipeline::PhysicalDevice(); }
+#endif

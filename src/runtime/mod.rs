@@ -7,7 +7,8 @@
 // change. exports.rs is what is shared with C++, and it alone turns C's pointers into
 // safe types; what is the system's or a C library's is unsafe by nature, and is kept
 // to itself (guest_memory, platform, windows, install/spawn, cpu_level, crash,
-// fault_text, watchpoint, scan, online/udp, online/steam/client). Text
+// fault_text, watchpoint, scan, online/udp, online/steam/client, and of the renderer
+// gpu/exports, gpu/texture and every gpu/vulkan file that calls Vulkan or SDL). Text
 // goes back through a sink that copies it (runtime/text_sink.h): C++ never frees what
 // Rust made, nor the other way round.
 //

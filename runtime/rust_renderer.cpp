@@ -116,4 +116,67 @@ const char* vk::formats::VulkanFormatName(int format) { return mw2_formats_vulka
 uint32_t vk::formats::HostSwizzleFor(uint32_t format) { return mw2_formats_host_swizzle_for(format); }
 uint32_t vk::formats::ComposeSwizzle(uint32_t guest, uint32_t host) { return mw2_formats_compose_swizzle(guest, host); }
 
+// ---- gpu/vulkan/presenter.cpp, backdrop.cpp, gpu_time.cpp, capture.cpp (gpu/vulkan/presenter.rs,
+// backdrop.rs, gpu_time.rs, capture.rs). The backdrop is the presenter's alone and has no forwarder.
+#include "gpu/vulkan/capture.h"
+#include "gpu/vulkan/gpu_time.h"
+#include "gpu/vulkan/presenter.h"
+
+// Handles cross as their Vulkan types (ash's are the same, transparently); VkSubmitInfo
+// by pointer, its layout asserted here and in exports.rs.
+static_assert(sizeof(VkSubmitInfo) == 72 && offsetof(VkSubmitInfo, commandBufferCount) == 40 &&
+              offsetof(VkSubmitInfo, pCommandBuffers) == 48 && offsetof(VkSubmitInfo, pSignalSemaphores) == 64);
+static_assert(sizeof(VkImage) == 8 && sizeof(VkFence) == 8 && sizeof(VkQueue) == 8);
+
+extern "C"
+{
+    bool mw2_presenter_start();
+    void mw2_presenter_show_window();
+    void mw2_presenter_stop_presenting();
+    void mw2_presenter_stop();
+    void mw2_presenter_show_image(VkImage image, uint32_t width, uint32_t height, uint64_t serial);
+    void mw2_presenter_wait_until_taken(uint64_t serial);
+    uint64_t mw2_presenter_guest_blank_period();
+    bool mw2_presenter_running();
+    uint64_t mw2_presenter_presented_frames();
+    void mw2_gpu_time_start(VkPhysicalDevice physical, VkDevice device, VkQueue queue, uint32_t family);
+    void mw2_gpu_time_stop();
+    VkResult mw2_gpu_time_submit(PFN_vkQueueSubmit queueSubmit, VkQueue queue, const VkSubmitInfo* submit, VkFence fence);
+    void mw2_gpu_time_collect();
+    void mw2_capture_frame_boundary(bool worldDrawn, uint64_t frame);
+    void mw2_capture_request_now(uint32_t frames);
+    void mw2_capture_toggle_stream();
+    void mw2_capture_report();
+}
+
+bool vk::Start() { return mw2_presenter_start(); }
+void vk::ShowWindow() { mw2_presenter_show_window(); }
+void vk::StopPresenting() { mw2_presenter_stop_presenting(); }
+void vk::Stop() { mw2_presenter_stop(); }
+void vk::ShowImage(void* image, uint32_t width, uint32_t height, uint64_t serial)
+{
+    mw2_presenter_show_image(static_cast<VkImage>(image), width, height, serial);
+}
+void vk::WaitUntilTaken(uint64_t serial) { mw2_presenter_wait_until_taken(serial); }
+uint64_t vk::GuestBlankPeriod() { return mw2_presenter_guest_blank_period(); }
+bool vk::Running() { return mw2_presenter_running(); }
+uint64_t vk::PresentedFrames() { return mw2_presenter_presented_frames(); }
+
+void vk::gpu_time::Start(VkPhysicalDevice physical, VkDevice device, VkQueue queue, uint32_t family)
+{
+    mw2_gpu_time_start(physical, device, queue, family);
+}
+void vk::gpu_time::Stop() { mw2_gpu_time_stop(); }
+// The renderer's submissions go through the loader's vkQueueSubmit, as they did.
+VkResult vk::gpu_time::Submit(VkQueue queue, const VkSubmitInfo& submit, VkFence fence)
+{
+    return mw2_gpu_time_submit(vkQueueSubmit, queue, &submit, fence);
+}
+void vk::gpu_time::Collect() { mw2_gpu_time_collect(); }
+
+void vk::capture::FrameBoundary(bool worldDrawn, uint64_t frame) { mw2_capture_frame_boundary(worldDrawn, frame); }
+void vk::capture::RequestNow(unsigned frames) { mw2_capture_request_now(frames); }
+void vk::capture::ToggleStream() { mw2_capture_toggle_stream(); }
+void vk::capture::Report() { mw2_capture_report(); }
+
 #endif  // MW2_RUST_RENDERER

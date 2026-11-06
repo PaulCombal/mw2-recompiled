@@ -752,7 +752,7 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `apu/` | the XAudio render driver and the XMA decoder (the C++ build's), and `xma_codec.cpp`, FFmpeg's decoder behind C calls for `tools/xma_diff.py` |
 | `online/` | the online services (`lan`, `server`, `steam`), chosen as the game starts |
 | `gpu/` | the command processor: ring and PM4 packets, interrupts, D3D9's command-buffer arena, texture fetch and tiling, the D3D9 hooks, the write watch (`memory_watch.*`) |
-| `gpu/vulkan/` | the Vulkan renderer: draws, targets, resolves, frames, pipelines and pipeline libraries, the shader translator, the texture cache, the recorder thread, the display table, the presenter window, RenderDoc capture |
+| `gpu/vulkan/` | the Vulkan renderer: draws, targets, resolves, frames, pipelines and pipeline libraries, the shader translator, the texture cache, the recorder thread, the display table; the presenter window, its backdrop, the GPU's busy time and RenderDoc capture are `src/runtime/gpu/vulkan/`'s, and their C++ the `--renderer cpp` build's |
 | `image_move.cpp` | the image pool's block copy, which the console makes with a memory-export draw |
 | `shader_preload.cpp` | hands shaders loaded with a level to the renderer to compile |
 | `engine.h`, `engine_log.cpp`, `predicate_waits.cpp`, `console.cpp` | hooks into the engine: print and error paths, spin waits, the console command buffer |
@@ -763,7 +763,7 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `render_size.cpp`, `render_size.h` | `MW2_RENDER`: the title's frame and scene sizes, the picture's shape, and 16:9 pictures covering another shape |
 | `unsigned_fastfiles.cpp`, `custom_map_list.cpp` | lets the multiplayer load a fastfile nobody signed, a converted map, and lists the map from its `.arena` |
 | `stutters.cpp`, `pacing_trace.cpp` | the stutter detector and the frame pacing timeline |
-| `report.cpp` | `MW2_REPORT=1`: the driver's name and a run's performance summary, for a bug report; the GPU's own busy time comes from `gpu/vulkan/gpu_time.cpp` |
+| `report.cpp` | `MW2_REPORT=1`: the driver's name and a run's performance summary, for a bug report; the GPU's own busy time comes from `src/runtime/gpu/vulkan/gpu_time.rs` (`gpu/vulkan/gpu_time.cpp` in the `--renderer cpp` build) |
 | `crash.cpp`, `watchpoint.cpp`, `mmio_hook.h` | the fault handler, the write watchpoint, the hardware-register store hook |
 
 ### Tools

@@ -79,6 +79,99 @@ pub fn flash_seen(how: &CStr) {
     unsafe { mw2_renderer_flash_seen(how.as_ptr()) }
 }
 
+// What the Rust renderer asks of the C++ pipeline.cpp (runtime/rust_calls.cpp), which
+// stays C++ until the launcher moves: the device it makes, the queue's lock, the
+// instance, and its verdict on a Vulkan result.
+#[cfg(feature = "rust-renderer")]
+pub mod vulkan {
+    use std::ffi::{CStr, c_char, c_void};
+
+    unsafe extern "C" {
+        fn mw2_vk_device_has_extension(physical: *mut c_void, name: *const c_char) -> bool;
+        fn mw2_vk_create_device(
+            physical: *mut c_void,
+            family: u32,
+            extensions: *const *const c_char,
+            count: u32,
+            device: *mut *mut c_void,
+            queue: *mut *mut c_void,
+            features: *mut c_void,
+        ) -> bool;
+        fn mw2_vk_pipeline_initialise(
+            device: *mut c_void,
+            physical: *mut c_void,
+            queue: *mut c_void,
+            family: u32,
+            instance: *mut c_void,
+        ) -> bool;
+        fn mw2_vk_failed(result: i32, at: *const c_char) -> bool;
+        fn mw2_vk_queue_lock();
+        fn mw2_vk_queue_unlock();
+        fn mw2_vk_instance() -> *mut c_void;
+    }
+
+    /// vk::pipeline::DeviceHasExtension.
+    pub fn device_has_extension(physical: *mut c_void, name: &CStr) -> bool {
+        unsafe { mw2_vk_device_has_extension(physical, name.as_ptr()) }
+    }
+
+    /// vk::pipeline::CreateDevice, its feature chain and all: the device and its queue.
+    ///
+    /// # Safety
+    /// `physical` is a physical device of the live instance, every extension name a
+    /// C string, and `features` null or a feature chain that lives through the call.
+    pub unsafe fn create_device(
+        physical: *mut c_void,
+        family: u32,
+        extensions: &[*const c_char],
+        features: *mut c_void,
+    ) -> Option<(*mut c_void, *mut c_void)> {
+        let (mut device, mut queue) = (std::ptr::null_mut(), std::ptr::null_mut());
+        let made = unsafe {
+            mw2_vk_create_device(
+                physical,
+                family,
+                extensions.as_ptr(),
+                extensions.len() as u32,
+                &mut device,
+                &mut queue,
+                features,
+            )
+        };
+        made.then_some((device, queue))
+    }
+
+    /// vk::pipeline::Initialise on a device made elsewhere, which it borrows.
+    pub fn pipeline_initialise(
+        device: *mut c_void,
+        physical: *mut c_void,
+        queue: *mut c_void,
+        family: u32,
+        instance: *mut c_void,
+    ) -> bool {
+        unsafe { mw2_vk_pipeline_initialise(device, physical, queue, family, instance) }
+    }
+
+    /// vk::pipeline::Failed.
+    pub fn failed(result: i32, at: &CStr) -> bool {
+        unsafe { mw2_vk_failed(result, at.as_ptr()) }
+    }
+
+    /// vk::pipeline::QueueMutex().lock(), and unlock().
+    pub fn queue_lock() {
+        unsafe { mw2_vk_queue_lock() }
+    }
+
+    pub fn queue_unlock() {
+        unsafe { mw2_vk_queue_unlock() }
+    }
+
+    /// vk::pipeline::Instance(): null before the device is up.
+    pub fn instance() -> *mut c_void {
+        unsafe { mw2_vk_instance() }
+    }
+}
+
 // The renderer's part of a run's start and end (runtime/rust_calls.cpp), which only
 // run.rs asks for: the rigs, which have no renderer, leave it out.
 #[cfg(not(any(mw2_rig, mw2_screens_rig, mw2_hook_rig)))]
@@ -92,6 +185,7 @@ pub mod run {
         fn mw2_gpu_shutdown();
         #[cfg(feature = "diagnostics")]
         fn mw2_gpu_report();
+        #[cfg(not(all(feature = "rust-renderer", mw2_owns_presenter)))]
         fn mw2_window_show();
         fn mw2_shaders_use_compiled(game_folder: *const c_char);
         fn mw2_shaders_compiled(why: *mut c_void, device: *mut c_void, sink: TextSink) -> bool;
@@ -117,7 +211,12 @@ pub mod run {
     }
 
     pub fn show_window() {
-        unsafe { mw2_window_show() }
+        #[cfg(all(feature = "rust-renderer", mw2_owns_presenter))]
+        crate::runtime::gpu::vulkan::presenter::show_window();
+        #[cfg(not(all(feature = "rust-renderer", mw2_owns_presenter)))]
+        unsafe {
+            mw2_window_show()
+        }
     }
 
     /// A player's start: the pipeline cache the launcher compiled into, and what it

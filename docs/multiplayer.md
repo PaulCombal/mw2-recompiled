@@ -279,7 +279,7 @@ controller from a game Steam did not start.
   lock, so threads ending one session and creating another cannot reorder it.
 - F6, or the Xbox LIVE lobby's "Invite friends", opens the friends screen
   (`friends.h`), drawn over the frame as the sign-in screen is, over a blurred
-  and darkened copy of the game (`gpu/vulkan/backdrop.h`): the friends
+  and darkened copy of the game (`src/runtime/gpu/vulkan/backdrop.rs`): the friends
   running this game, with their avatars, then how many others are online and
   offline. A friend counts as running it when Steam says they play app 480 and
   their rich presence has `mw2recomp`, which every copy sets to its executable

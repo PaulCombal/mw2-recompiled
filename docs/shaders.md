@@ -57,7 +57,9 @@ thousands of loads of a few hundred shaders read and hash each one once. With di
 (the default; `-DMW2_DIAGNOSTICS=OFF` removes them, see
 [building.md](building.md)), `MW2_DUMP_SHADERS=<dir>` writes each distinct
 program as
-`vertex_<hash>.ucode` / `pixel_<hash>.ucode`, big-endian as the guest holds it
+`vertex_<hash>.ucode` / `pixel_<hash>.ucode`, big-endian as the guest holds it,
+and the window's backdrop shaders as `builtin_backdrop_vertex.spv` and
+`builtin_backdrop_pixel.spv`, the same words from either renderer
 (see [switches.md](switches.md)).
 
 ## Shaders in the fastfiles

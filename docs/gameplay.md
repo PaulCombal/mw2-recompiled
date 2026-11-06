@@ -158,7 +158,7 @@ as the console's guide showed it ("Playing Team Deathmatch in Afghan"): the
 title sets contexts with `XUserSetContext`, and the strings for each are in its
 XLAST, gzipped in the SPA resource of its image (`presence.h`). The system's
 screens are drawn over a blurred and darkened copy of the game
-(`gpu/vulkan/backdrop.h`).
+(`src/runtime/gpu/vulkan/backdrop.rs`).
 
 The console's screen also signs a guest in beside a player on Live. This one
 does not: the title's split screen is offline only, and its system link takes

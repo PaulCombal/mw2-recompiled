@@ -25,7 +25,7 @@ const RECORDER_WAIT: usize = 1;
 const GPU_WAIT: usize = 2;
 const TEXTURES: usize = 3;
 const COMPILING: usize = 4;
-const GPU_BUSY: usize = 5;
+pub const GPU_BUSY: usize = 5;
 const TIMES: usize = 6;
 
 /// The machine, as a report reads it.
