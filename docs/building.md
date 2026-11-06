@@ -194,6 +194,12 @@ guest_hook!(T_DB_StartStream, |ctx, memory| {
   seed, a bonus menu of map buttons, and Com_LoadUiFastFile's zone list; both sides
   allocate from the kernel's heap emptied before each (`--cfg mw2_hook_rig`), so
   they are given the same addresses. `HOOK_DIFF_SHOW_LOG=1` prints each case's log.
+  A renderer hook (a file of `runtime/gpu/`, `image_move.cpp`, `shader_preload.cpp`)
+  is paired only where the build's `renderer_cfgs.txt` says Rust owns its file, so a
+  `--renderer cpp` build leaves it out on both sides; the Rust side is then built with
+  the `rust-renderer` feature and ash, and what such a hook calls of the renderer is a
+  logger on both sides (`tools/hook_diff.cpp`), while the D3D hooks' arena block is
+  `arena.cpp` against `arena.rs`. Anything else left unresolved is never called.
 - `hooks/com_error.rs` raises the title's error. It takes only the levels that
   cannot return, and returns `!`, so nothing after it runs: the console has no
   instruction there. A `longjmp` then skips the hook's frame, which is why a hook

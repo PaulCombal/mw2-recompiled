@@ -35,6 +35,8 @@ use std::time::Instant;
 pub use files::game_root;
 pub use memory::allocate_guest;
 pub use threads::new_thread_id;
+#[cfg(feature = "rust-renderer")]
+pub use video::{from_physical, to_physical};
 
 // The Xbox NTSTATUS values these need.
 pub const STATUS_SUCCESS: u32 = 0x0000_0000;

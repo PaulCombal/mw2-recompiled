@@ -24,6 +24,9 @@ example, are built in the title's own memory (`tools/resource_audit.py`).
 Resource creation must therefore keep running the title's code. A host backend
 can adopt the guest structs but cannot replace them.
 
+The D3D hooks below are `src/hooks/d3d_hooks.rs` (`runtime/gpu/d3d_hooks.cpp` in the
+`--renderer cpp` build), and the shader hooks `runtime/shader_preload.cpp`.
+
 | Hook (`title.h`) | Campaign | MP | Purpose |
 |---|---|---|---|
 | `T_D3D_Present` | `820C3390` | `820DFD10` | notes the present for pacing and stutter tracking; under `MW2_FPS_LIMIT`, sets the present interval |
@@ -35,7 +38,7 @@ can adopt the guest structs but cannot replace them.
 
 - `VdInitializeRingBuffer(physical, log2(bytes) - 3)`,
   `VdEnableRingBufferRPtrWriteBack` and `VdSetGraphicsInterruptCallback`
-  configure `gpu.cpp`.
+  configure the ring consumer (`src/runtime/gpu/gpu.rs`).
 - `VdQueryVideoMode`, `XGetVideoMode` and `VdGetCurrentDisplayInformation`
   report 1280x720 progressive, widescreen, HiDef, 60 Hz.
   `VdGetCurrentDisplayGamma` reports type 2 with gamma 2.2222.
@@ -43,9 +46,27 @@ can adopt the guest structs but cannot replace them.
 - `VdSwap` fills the reserved present dwords (below).
 - `MmGetPhysicalAddress` must match the masking the title also inlines.
 
-Every address handed to the GPU is physical. `kernel::FromPhysical` maps it back.
+Every address handed to the GPU is physical. `kernel::from_physical` maps it back
+(`kernel::FromPhysical` in the C++).
 
-## The ring consumer (`runtime/gpu/gpu.cpp`)
+## The ring consumer (`src/runtime/gpu/gpu.rs`)
+
+The ring consumer, the vblank and the interrupts they raise are
+`src/runtime/gpu/gpu.rs`, and the arena's progress `src/runtime/gpu/arena.rs`;
+`runtime/gpu/gpu.cpp` and `arena.cpp` are the `--renderer cpp` build's. The C++
+command processor, census, image pool and capture reach them through
+`runtime/rust_renderer.cpp` (`gpu::FrameCount`, `gpu::Consuming`,
+`RaiseCommandProcessorInterrupt`, `ArenaProgress` and the rest of `internal.h`'s), and
+they call the command processor, the renderer's start, end and reports and the
+capture's batch brackets through `runtime/rust_calls.cpp`. The ring's place, size and
+read index, the read-pointer write-back and the interrupt callback with its context
+(one word) are atomics, as other threads write them. A second `shutdown` (the exit
+thread's while the run thread shuts down) waits for the first to finish, then returns.
+`tools/gpu_diff.py --rig arena_progress,interrupts` holds them against the C++
+originals, the lines each side prints included: the interrupts rig also runs both
+sides' consumer and vblank loops on a clock of its own, recording every sleep, blank,
+batch and idle call. `tools/hook_diff.py` holds the hooks, their pacing notes and
+stutter calls included.
 
 The ring consumer thread has its own KPCR, as a hardware thread does. It polls
 `CP_RB_WPTR` in the register aperture (`0x7FC80000 + 0x714`), executes up to
@@ -155,13 +176,14 @@ because the renderer would take it for a texture binding.
 The title's callback runs with `r3` = source and `r4` = context, on a 64 KB
 guest stack, with `r13` set to the raising thread's KPCR. The console
 delivers graphics interrupts on one hardware thread, so the two raising threads
-take turns under a mutex.
+take turns: a lock held across the call into the guest, which a thread waits for by
+spinning a little and then parking.
 
 - **Source 1, command processor.** `INTERRUPT` raises it once per processor bit
   (0-5) in its mask, with `KPCR.CurrentProcessorNumber` (+268) set to that
   processor, because the handler uses it to clear that processor's pending bit.
 - **Source 0, vblank.** The vblank thread (with its own KPCR) runs at
-  `vk::GuestBlankPeriod()`, which follows the display
+  the presenter's `guest_blank_period()`, which follows the display
   ([rendering.md](rendering.md#presenting)), or at 60 Hz. It writes 1 to the
   display status word at aperture `+0x6544` first: D3D's handler retires queued
   flips only when bit 0 is set. The blank must not depend on frame time,
@@ -194,7 +216,7 @@ frames or call the block callback itself. A second path makes the retired count
 overtake the submitted count, and D3D's present then waits on a meaningless
 difference.
 
-## The command-buffer arena (`runtime/gpu/arena.cpp`)
+## The command-buffer arena (`src/runtime/gpu/arena.rs`)
 
 D3D9's command segments come from an arena that is a ring of its own. Before
 overwriting any of it, the title polls the progress block at `[device+10896]`
@@ -204,7 +226,7 @@ until the command processor has read past:
     +4  read position, a two-bit lap counter in its low bits
 
 Each segment ends with a trailer of two `EVENT_WRITE_SHD` packets: the position,
-then the sequence. `ArenaProgress` holds the position until its sequence
+then the sequence. `arena_progress` holds the position until its sequence
 arrives. It applies both only when the sequence is 1 to 1024 ahead of the last
 one, and drops them otherwise.
 

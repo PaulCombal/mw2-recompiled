@@ -430,6 +430,10 @@ namespace
             if (pointer >= kArena && pointer < kArena + kArenaSize - 64)
                 call.text = Hash(base + pointer, 48, call.text);
         g_calls.push_back(call);
+        // With the pacing notes logged (MW2_TRACE_PACING, src/runtime/pacing_trace.rs), the
+        // calls are too, so that a note's place before or after a call is compared.
+        static const bool pacing = std::getenv("MW2_TRACE_PACING") != nullptr;
+        if (pacing) std::fprintf(stderr, "[call] %s\n", kStubs[id].name);
 
         Random random{ call.context ^ call.stack ^ call.text };
         if (sp >= 0x100 && sp < 0xFFFF0000)   // a callee's frame
@@ -1024,6 +1028,45 @@ namespace
             Set32(Named("T_DATA_BaselineEntityCount"), entities);
             Set32(msg, random.Below(2));
         }
+        if (name == "T_D3D_Present" || name == "T_D3D_ArenaWait")
+        {
+            // A device in the arena, now and then with what is left of a 64-bit value.
+            const uint32_t device = ArenaWord(random) & 0xFFFF0u;
+            ctx.r3.u64 = kArena + device;
+            if (random.Below(8) == 0) ctx.r3.u64 |= random.Next() << 32;
+            if (name == "T_D3D_ArenaWait")
+            {
+                // The progress block's pointer: none, one of a few (so that the block is
+                // seen again as often as it changes), or anything.
+                constexpr uint32_t kBlocks[] = { 0, 0xA0001000u, 0xA0001000u, 0xBFFFFFF0u, 0xC0002000u, 0x82000004u, 0x40000000u };
+                Set32(kArena + device + 10896, random.Below(8) ? kBlocks[random.Below(std::size(kBlocks))] : uint32_t(random.Next()));
+            }
+        }
+        if (name == "T_D3D_ReplayRecording")
+        {
+            // A recording's chunk list: next at +0, a count at +4. Mostly a list that ends,
+            // now and then with a count of 0 or past 2^20 or a cycle. D3D9 warns of 8 at
+            // most, and nothing after them is seen, so they are rare enough here that the
+            // lists at the chunk bound come before them.
+            const uint32_t object = ArenaWord(random);
+            ctx.r4.u64 = random.Below(16) ? object : 0;
+            // The hare reaches the end in half the chunks, so the 4096 the tortoise may
+            // walk is a list of about 8192: 8193 and 8195 are either side of the bound.
+            constexpr uint32_t kLengths[] = { 0, 1, 2, 3, 5, 17, 100, 4096, 4097, 8192, 8193, 8194, 8195, 8196 };
+            const uint32_t length = kLengths[random.Below(std::size(kLengths))];
+            const uint32_t nodes = kArena + 0x8000, stride = length > 4100 ? 8 : 8 + 4 * random.Below(3);
+            for (uint32_t i = 0; i < length; i++)
+            {
+                const uint32_t node = nodes + i * stride;
+                Set32(node, i + 1 < length ? node + stride : 0);
+                Set32(node + 4, random.Below(16) ? 1 + random.Below(64) : (1u << 20) - random.Below(2));
+            }
+            if (length && random.Below(64) == 0)
+                Set32(nodes + random.Below(length) * stride + 4, random.Below(2) ? 0 : (1u << 20) + 1);
+            if (length && random.Below(64) == 0)
+                Set32(nodes + (length - 1) * stride, nodes + random.Below(length) * stride);   // a cycle
+            Set32(object + 116, length ? nodes : 0);
+        }
         if (name == "T_CG_SetClientDvarFromServer" && random.Below(8) == 0)
         {
             // Address 0 is memory here, and only the null check keeps it from a name.
@@ -1135,6 +1178,7 @@ namespace
 }
 
 // guest::Base() is guest_memory.h's, through kernel.h: mw2_guest_base, which main sets.
+extern "C" bool mw2_stutters_on();
 
 // hook_diff <seed> <cases> [hook[,hook...]]
 extern "C" uint8_t* mw2_guest_base;
@@ -1153,6 +1197,51 @@ extern "C" void mw2_gpu_set_interrupt_callback(uint32_t, uint32_t) { std::abort(
 extern "C" void mw2_gpu_swap() { std::abort(); }
 extern "C" void mw2_renderer_flash_seen(const char*) { std::abort(); }
 
+// What the renderer's hooks call of the renderer: loggers, the same text whichever side
+// called, as the calls are part of what a hook does. The C++ hooks call the C++
+// renderer's functions; the Rust ones what src/runtime/bridge.rs declares of
+// runtime/rust_calls.cpp.
+namespace
+{
+    void Logged(const char* what, uint64_t a = 0, uint64_t b = 0)
+    {
+        std::fprintf(stderr, "[renderer] %s %llx %llx\n", what, (unsigned long long)a, (unsigned long long)b);
+        std::fflush(stderr);
+    }
+}
+
+namespace gpu
+{
+    void Presented() { Logged("present"); }
+    // Values, which gpu.rs gives its Rust callers too (gpu::rig).
+    uint64_t FrameCount() { return 0; }
+    bool Consuming() { return false; }
+}
+namespace vk::renderer
+{
+    void BeforeStreamWrite(uint32_t physical, uint32_t size) { Logged("before stream write", physical, size); }
+    void PrepareShader(bool pixel, const uint32_t* code, size_t words)
+    {
+        Logged("prepare shader", pixel, words ? code[0] ^ code[words - 1] ^ words : 0);
+    }
+}
+namespace vk::textures
+{
+    void MemoryWritten(uint32_t physical, uint32_t size) { Logged("memory written", physical, size); }
+}
+// The GPU capture's state, which arena.cpp reads (never capturing here).
+namespace gpu::stream::detail
+{
+    bool capturing = false, replaying = false, counting = false;
+}
+extern "C" void mw2_census_present() { Logged("present"); }
+extern "C" void mw2_renderer_before_stream_write(uint32_t physical, uint32_t size) { Logged("before stream write", physical, size); }
+extern "C" void mw2_renderer_prepare_shader(bool pixel, const uint32_t* code, size_t words)
+{
+    Logged("prepare shader", pixel, words ? code[0] ^ code[words - 1] ^ words : 0);
+}
+extern "C" void mw2_textures_memory_written(uint32_t physical, uint32_t size) { Logged("memory written", physical, size); }
+
 int main(int argc, char** argv)
 {
     const uint64_t seed = std::strtoull(argv[1], nullptr, 10);
@@ -1162,6 +1251,10 @@ int main(int argc, char** argv)
     g_report = fdopen(dup(2), "w");
     g_log = memfd_create("log", 0);
     dup2(g_log, 2);
+    // MW2_STUTTERS is read once, with a warning off the console's 60: before the cases,
+    // not in whichever side asks first.
+    mw2_stutters_on();
+    TakeLog();
 
     g_base = static_cast<uint8_t*>(mmap(nullptr, kMapped + 0x20000, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0));
     g_base = reinterpret_cast<uint8_t*>((reinterpret_cast<uintptr_t>(g_base) + 0xFFFF) & ~uintptr_t(0xFFFF));

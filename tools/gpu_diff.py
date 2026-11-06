@@ -5,7 +5,12 @@
 # which calls the Rust through the C functions the C++ renderer itself calls, or, for
 # the presenter's, backdrop's and gpu_time's decisions, through the rig's own
 # (exports.rs, mod rig) while the C++ runs on stand-in Vulkan and SDL calls
-# (presenter_rig.h): neither side makes a device or a window.
+# (presenter_rig.h): neither side makes a device or a window. The arena's progress and
+# the interrupts (gpu.cpp, arena.cpp) are held against the Rust through the functions
+# the C++ command processor calls, the interrupts on a guest memory of the rig's own
+# with a stub of the title's handler (interrupts.cpp), the consumer's and the vblank's
+# loops on a clock of the rig's (gpu_cpp.cpp, gpu.rs's rig_loop_*); these two compare
+# what each side printed too (rig_log.h), so their Rust is built with its log on.
 #
 #   usage: gpu_diff.py <build folder> --rig <name>[,<name>...] [--seeds N] [--cases N]
 #                      [--src folder] [--bench]
@@ -22,6 +27,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # helpers and the C++ they need beside them.
 TEXTURE = ["gpu/texture.cpp", "gpu/vulkan/texture_formats.cpp"]
 PRESENTER = ["gpu/vulkan/presenter.cpp", "gpu/vulkan/backdrop.cpp", "gpu/vulkan/gpu_time.cpp", "gpu/vulkan/capture.cpp"]
+THREADS = ["gpu/gpu.cpp", "gpu/arena.cpp", "gpu/d3d_hooks.cpp"]
 RIGS = {
     "tiling": (TEXTURE, "texture", ["tiling"]),
     "texture": (TEXTURE, "texture", ["texture"]),
@@ -29,6 +35,8 @@ RIGS = {
     "texture_bench": (TEXTURE, "texture", ["bench"]),
     "presenter": (PRESENTER, "presenter", ["letterbox", "swapchain", "follow", "display", "blank", "fade", "push",
                                            "shaders", "queue", "gpu_time", "abi"]),
+    "arena_progress": (THREADS, "arena", ["arena"]),
+    "interrupts": (THREADS, "interrupts", ["interrupts", "vblank", "worker"]),
 }
 # What each program compiles: the originals as they are, then its helpers.
 PROGRAMS = {
@@ -37,7 +45,14 @@ PROGRAMS = {
     # (presenter_rig.h); the backdrop's shaders need the C++ SPIR-V writer.
     "presenter": (["gpu/vulkan/spirv.cpp"], ["presenter_stubs", "presenter_cpp", "backdrop_cpp", "gpu_time_cpp",
                                              "presenter_forwarders", "rig_bridge"]),
+    # arena.cpp as it is; gpu.cpp included whole by gpu_cpp.cpp, for its file statics.
+    "arena": (["gpu/arena.cpp"], ["rig_bridge"]),
+    "interrupts": ([], ["gpu_cpp", "rig_bridge"]),
 }
+# What a program's C++ needs beyond the others': gpu.cpp includes the title's table and
+# the recompiled code's header. These programs compare the lines each side prints, so
+# their C++ and their Rust log, into memory (rig_log.h); the others' do not.
+TITLED = {"arena", "interrupts"}
 
 def run(*command, **options):
     return subprocess.run(command, check=True, text=True, **options)
@@ -76,6 +91,10 @@ def main():
     sdl = sorted(glob.glob(f"{build}/rust/release/build/sdl3-sys-*/out/include"), key=os.path.getmtime)
     includes = [f"-I{ROOT}/runtime"] + [f"-I{sdl[-1]}"] * bool(sdl)
     compiler = ["clang++-18", "-std=gnu++20", level, "-march=x86-64-v2", "-w", *defines, *includes]
+    title_mp, tu0 = "mw2_title_mp" in cfgs, "mw2_version_tu0" in cfgs
+    ppc = f"{ROOT}/ppc{'_mp' if title_mp else ''}{'_tu0' if tu0 else ''}"
+    titled = ["-DMW2_TRACE_INDIRECT=1", *["-DMW2_TITLE_MP=1"] * title_mp,
+              *["-DMW2_VERSION_TU0=1"] * tu0, f"-I{ppc}", f"-I{ROOT}/XenonRecomp-rs/thirdparty/simde"]
 
     # The Rust: src/runtime/ through a root of its own, as a static library.
     root = f"{work}/rust_root.rs"
@@ -87,15 +106,20 @@ def main():
     def rlib(name):
         return sorted(glob.glob(f"{build}/rust/release/deps/lib{name}-*.rlib"), key=os.path.getmtime)[-1]
     checks = ["-Copt-level=3"] if arguments.bench else ["-Copt-level=1", "-Cdebug-assertions=on", "-Coverflow-checks=on"]
-    library = f"{work}/libgpu.a"
     externs = ["--extern", f"ppc_rt={rlib('ppc_rt')}", "--extern", f"sdl3_sys={rlib('sdl3_sys')}"]
     if glob.glob(f"{build}/rust/release/deps/libash-*.rlib"):
         externs += ["--extern", f"ash={rlib('ash')}"]
-    run("rustc", "--edition=2024", "--crate-type=staticlib", "--crate-name=gpu", "-Cpanic=abort", "-Ctarget-cpu=x86-64-v2",
-        *checks, "--cfg", 'feature="diagnostics"', "--cfg", 'feature="rust-renderer"', "--cfg", "mw2_screens_rig",
-        "--cfg", "mw2_gpu_rig", "--cfg", "mw2_no_logging", *sum((["--cfg", cfg] for cfg in cfgs), []), "--cap-lints=warn", *externs,
-        "-L", f"dependency={build}/rust/release/deps", "-o", library, root,
-        env={**os.environ, "OUT_DIR": out_dir, **variables})
+    libraries = {}
+    def library_for(logged):
+        if logged not in libraries:
+            library = f"{work}/libgpu{'_logged' * logged}.a"
+            run("rustc", "--edition=2024", "--crate-type=staticlib", "--crate-name=gpu", "-Cpanic=abort", "-Ctarget-cpu=x86-64-v2",
+                *checks, "--cfg", 'feature="diagnostics"', "--cfg", 'feature="rust-renderer"', "--cfg", "mw2_screens_rig",
+                "--cfg", "mw2_gpu_rig", *(["--cfg", "mw2_no_logging"] * (not logged)), *sum((["--cfg", cfg] for cfg in cfgs), []),
+                "--cap-lints=warn", *externs, "-L", f"dependency={build}/rust/release/deps", "-o", library, root,
+                env={**os.environ, "OUT_DIR": out_dir, **variables})
+            libraries[logged] = library
+        return libraries[logged]
 
     for name in arguments.rig.split(","):
         owned, program_name, parts = RIGS[name]
@@ -104,20 +128,22 @@ def main():
             if f"mw2_owns_{stem}" not in owns:
                 sys.exit(f"{build}: Rust does not own {source} (renderer_cfgs.txt)")
         sources, helpers = PROGRAMS[program_name]
+        flags = compiler + (titled if program_name in TITLED else [])
         objects = []
         for source in sources:
             target = f"{work}/{source.replace('/', '_')}.o"
-            run(*compiler, "-c", f"{ROOT}/runtime/{source}", "-o", target)
+            run(*flags, "-c", f"{ROOT}/runtime/{source}", "-o", target)
             objects.append(target)
         # The texture rig measures how far the C++ reader reads (texture_reach.cpp) and
         # runs the build's C++ forwarders (texture_forwarders.cpp); the presenter rig's
         # helpers are the originals on stand-ins, and its forwarders.
         for helper in helpers:
             target = f"{work}/{helper}.o"
-            run(*compiler, "-c", f"{ROOT}/tools/gpu_diff/{helper}.cpp", "-o", target)
+            run(*flags, "-c", f"{ROOT}/tools/gpu_diff/{helper}.cpp", "-o", target)
             objects.append(target)
         program = f"{work}/{program_name}"
-        run(*compiler, f"{ROOT}/tools/gpu_diff/{program_name}.cpp", *objects, library, "-fuse-ld=lld",
+        library = library_for(program_name in TITLED)
+        run(*flags, f"{ROOT}/tools/gpu_diff/{program_name}.cpp", *objects, library, "-fuse-ld=lld",
             "-Wl,--gc-sections,--unresolved-symbols=ignore-all", "-lvulkan", "-lpthread", "-ldl", "-lm", "-lgcc_s",
             "-o", program)
         seeds = 1 if arguments.bench else arguments.seeds

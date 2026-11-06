@@ -4,6 +4,8 @@
 
 use super::allocate_physical;
 use crate::guest::{Memory, Register, kernel_import};
+#[cfg(feature = "rust-renderer")]
+use crate::runtime::guest_memory::{HEAP_END, PHYSICAL_BASE, mw2_kernel_physical_top};
 use crate::runtime::{bridge, render_size};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -14,6 +16,21 @@ const DISPLAY_HEIGHT: u32 = 720;
 /// calls (runtime/kernel/physical.h): MmGetPhysicalAddress has to agree with it.
 pub fn to_physical(virtual_address: u32) -> u32 {
     (virtual_address & 0x1FFF_FFFF).wrapping_add((virtual_address >> 20).wrapping_add(0x200) & 0x1000)
+}
+
+/// The inverse, for the GPU side, which is handed physical addresses (kernel/physical.h's
+/// FromPhysical): ambiguous in principle -- on hardware 0x8xxxxxxx and 0xAxxxxxxx are two
+/// views of the same RAM, while here they are separate arenas. Everything the GPU is
+/// handed comes from the physical arena, so that is tried first. 0 when it is neither.
+#[cfg(feature = "rust-renderer")]
+#[inline]
+pub fn from_physical(physical: u32) -> u32 {
+    let top = mw2_kernel_physical_top.load(Ordering::Acquire);
+    if physical < top.wrapping_sub(PHYSICAL_BASE) {
+        return PHYSICAL_BASE.wrapping_add(physical);
+    }
+    let cached = 0x8000_0000u32.wrapping_add(physical);
+    if (0x8200_0000..HEAP_END).contains(&cached) { cached } else { 0 }
 }
 
 fn widescreen() -> bool {

@@ -423,6 +423,9 @@ const RUST_OWNS: &[&str] = &[
     "runtime/gpu/vulkan/backdrop.cpp",
     "runtime/gpu/vulkan/gpu_time.cpp",
     "runtime/gpu/vulkan/capture.cpp",
+    "runtime/gpu/gpu.cpp",
+    "runtime/gpu/arena.cpp",
+    "runtime/gpu/d3d_hooks.cpp",
 ];
 const RUST_ONLY: &[&str] = &["runtime/rust_renderer.cpp", "runtime/gpu/vulkan/shader_translator_rust.cpp"];
 

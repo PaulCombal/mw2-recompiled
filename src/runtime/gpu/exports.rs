@@ -129,6 +129,190 @@ mod formats {
     }
 }
 
+// What the C++ command processor, census, image pool and capture call of gpu.cpp and
+// arena.cpp (gpu/gpu.rs, gpu/arena.rs). Out-pointers are the forwarders' references.
+#[cfg(mw2_owns_gpu)]
+mod gpu {
+    use crate::runtime::gpu::gpu as g;
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_gpu_frames() -> u64 {
+        g::frame_count()
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_gpu_consuming() -> bool {
+        g::consuming()
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_gpu_running() -> bool {
+        g::running()
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_gpu_seconds() -> f64 {
+        g::seconds()
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_gpu_raise_cp_interrupt(cpu_mask: u32) {
+        g::raise_command_processor_interrupt(cpu_mask);
+    }
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn mw2_gpu_ring_position(read: *mut u32, written: *mut u32, write_back: *mut u32) {
+        let position = g::ring_position();
+        // SAFETY: the forwarder's three references.
+        unsafe {
+            read.write(position.0);
+            written.write(position.1);
+            write_back.write(position.2);
+        }
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn mw2_gpu_ring_layout(base: *mut u32, dwords: *mut u32, write_back: *mut u32) {
+        let layout = g::ring_layout();
+        // SAFETY: the forwarder's three references.
+        unsafe {
+            base.write(layout.0);
+            dwords.write(layout.1);
+            write_back.write(layout.2);
+        }
+    }
+}
+
+#[cfg(mw2_owns_arena)]
+mod arena {
+    use crate::runtime::gpu::arena as a;
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_arena_progress(address: u32, value: u32) -> bool {
+        a::arena_progress(address, value)
+    }
+
+    // gpu::detail::ArenaState, the same four words (asserted in the forwarders).
+    #[cfg(feature = "diagnostics")]
+    const _: () = assert!(size_of::<a::ArenaState>() == 16);
+
+    #[cfg(feature = "diagnostics")]
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn mw2_arena_save(out: *mut a::ArenaState) {
+        // SAFETY: the forwarder's ArenaState.
+        unsafe { out.write(a::save()) }
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn mw2_arena_restore(state: *const a::ArenaState) {
+        // SAFETY: the forwarder's ArenaState, read for the call.
+        a::restore(unsafe { &*state });
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_arena_set_block(physical: u32) {
+        a::set_block(physical);
+    }
+}
+
+// tools/gpu_diff.py --rig arena_progress and --rig interrupts: what the rig drives of
+// arena.rs and gpu.rs beyond the C interface above. The interrupts run on a thread made
+// as the consumer's is, with the rig's guest memory and its stub of a handler.
+#[cfg(all(mw2_gpu_rig, mw2_owns_gpu, mw2_owns_arena))]
+mod gpu_rig {
+    use crate::runtime::gpu::{arena, gpu};
+    use std::ffi::c_void;
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_set_arena_progress_block(address: u32) {
+        arena::set_arena_progress_block(address);
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_arena_report() {
+        arena::report();
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_set_interrupt_callback(callback: u32, context: u32) {
+        gpu::set_interrupt_callback(callback, context);
+    }
+
+    // The consumer's and the vblank's loops, on the thread the rig calls them on, with
+    // the rig's clock (gpu.rs's rig_loop_*), until mw2_rig_stop_loop.
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_worker(pcr: u32) {
+        gpu::gpu_rig::worker(pcr);
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_vblank_worker(pcr: u32) {
+        gpu::gpu_rig::vblank_worker(pcr);
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_stop_loop() {
+        gpu::gpu_rig::stop();
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_forget_ring() {
+        gpu::gpu_rig::forget_ring();
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_set_ring_buffer(base_physical: u32, size_log2: u32) {
+        gpu::set_ring_buffer(base_physical, size_log2);
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_set_read_pointer_write_back(address_physical: u32, block_size_log2: u32) {
+        gpu::set_read_pointer_write_back(address_physical, block_size_log2);
+    }
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn mw2_rig_loop_counts(vblanks: *mut u64, busy_nanoseconds: *mut u64) {
+        let (blanks, busy) = gpu::gpu_rig::counts();
+        // SAFETY: the rig's two words.
+        unsafe {
+            vblanks.write(blanks);
+            busy_nanoseconds.write(busy);
+        }
+    }
+
+    // `body(context, raise)` on a consumer-made thread, given a function that sets the
+    // thread's PCR and raises: a CPU mask, or with `blank` the vblank's interrupt.
+    type Raise = unsafe extern "C" fn(pcr: u32, mask: u32, blank: bool);
+    type Body = unsafe extern "C" fn(context: *mut c_void, raise: Raise);
+
+    unsafe extern "C" fn raise(pcr: u32, mask: u32, blank: bool) {
+        gpu::gpu_rig::set_thread_pcr(pcr);
+        if blank {
+            gpu::gpu_rig::blank();
+        } else {
+            gpu::raise_command_processor_interrupt(mask);
+        }
+    }
+
+    struct Context(*mut c_void);
+    // SAFETY: the rig's context, which it keeps alive and does not touch until the
+    // thread is joined.
+    unsafe impl Send for Context {}
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn mw2_rig_on_consumer_thread(body: Body, context: *mut c_void) {
+        let context = Context(context);
+        gpu::gpu_rig::on_consumer_thread(move || {
+            let context = context;
+            // SAFETY: the rig's function and context, valid until the join.
+            unsafe { body(context.0, raise) }
+        });
+    }
+}
+
 // vk::Start and the rest of presenter.h (gpu/vulkan/presenter.rs). Handles cross as
 // their Vulkan types: a dispatchable one a pointer, a non-dispatchable one 64 bits,
 // which ash's handle types are, transparently.

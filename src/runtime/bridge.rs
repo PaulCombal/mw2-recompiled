@@ -14,15 +14,24 @@ pub struct WatchCosts {
 unsafe extern "C" {
     fn mw2_watch_costs(costs: *mut WatchCosts);
     fn mw2_watch_handle_fault(address: *const c_void) -> bool;
-    #[cfg(all(feature = "diagnostics", not(windows)))]
+    #[cfg(all(feature = "diagnostics", not(windows), not(all(feature = "rust-renderer", mw2_owns_gpu))))]
     fn mw2_gpu_frame_count() -> u64;
     // src/runtime/run.rs's, by these names so that a rig can give its own (exports.rs).
     fn mw2_crash_on_fault();
     fn mw2_crash_request_exit(why: *const c_char);
+}
+
+// The GPU's side of the kernel's Vd* calls: gpu.cpp's, or with the renderer's threads in
+// Rust (build.rs, RUST_OWNS), gpu/gpu.rs's.
+#[cfg(not(all(feature = "rust-renderer", mw2_owns_gpu)))]
+unsafe extern "C" {
     fn mw2_gpu_set_ring_buffer(base_physical: u32, size_log2: u32);
     fn mw2_gpu_set_read_pointer_write_back(address_physical: u32, block_size_log2: u32);
     fn mw2_gpu_set_interrupt_callback(callback: u32, context: u32);
     fn mw2_gpu_swap();
+}
+
+unsafe extern "C" {
     #[cfg(feature = "diagnostics")]
     fn mw2_renderer_flash_seen(how: *const c_char);
 }
@@ -40,7 +49,12 @@ pub fn watch_handle_fault(address: *const c_void) -> bool {
 
 #[cfg(all(feature = "diagnostics", not(windows)))]
 pub fn gpu_frame_count() -> u64 {
-    unsafe { mw2_gpu_frame_count() }
+    #[cfg(all(feature = "rust-renderer", mw2_owns_gpu))]
+    return crate::runtime::gpu::gpu::frame_count();
+    #[cfg(not(all(feature = "rust-renderer", mw2_owns_gpu)))]
+    unsafe {
+        mw2_gpu_frame_count()
+    }
 }
 
 /// The end-of-run reports, for a run ending on a fault (run.rs).
@@ -55,22 +69,42 @@ pub fn request_exit(why: &CStr) {
 
 /// The command ring the title writes, from VdInitializeRingBuffer.
 pub fn gpu_set_ring_buffer(base_physical: u32, size_log2: u32) {
-    unsafe { mw2_gpu_set_ring_buffer(base_physical, size_log2) }
+    #[cfg(all(feature = "rust-renderer", mw2_owns_gpu))]
+    crate::runtime::gpu::gpu::set_ring_buffer(base_physical, size_log2);
+    #[cfg(not(all(feature = "rust-renderer", mw2_owns_gpu)))]
+    unsafe {
+        mw2_gpu_set_ring_buffer(base_physical, size_log2)
+    }
 }
 
 /// Where the GPU reports how far it has read.
 pub fn gpu_set_read_pointer_write_back(address_physical: u32, block_size_log2: u32) {
-    unsafe { mw2_gpu_set_read_pointer_write_back(address_physical, block_size_log2) }
+    #[cfg(all(feature = "rust-renderer", mw2_owns_gpu))]
+    crate::runtime::gpu::gpu::set_read_pointer_write_back(address_physical, block_size_log2);
+    #[cfg(not(all(feature = "rust-renderer", mw2_owns_gpu)))]
+    unsafe {
+        mw2_gpu_set_read_pointer_write_back(address_physical, block_size_log2)
+    }
 }
 
 /// The title's routine for the GPU's interrupts.
 pub fn gpu_set_interrupt_callback(callback: u32, context: u32) {
-    unsafe { mw2_gpu_set_interrupt_callback(callback, context) }
+    #[cfg(all(feature = "rust-renderer", mw2_owns_gpu))]
+    crate::runtime::gpu::gpu::set_interrupt_callback(callback, context);
+    #[cfg(not(all(feature = "rust-renderer", mw2_owns_gpu)))]
+    unsafe {
+        mw2_gpu_set_interrupt_callback(callback, context)
+    }
 }
 
 /// VdSwap: the frame is handed over.
 pub fn gpu_swap() {
-    unsafe { mw2_gpu_swap() }
+    #[cfg(all(feature = "rust-renderer", mw2_owns_gpu))]
+    crate::runtime::gpu::gpu::swap();
+    #[cfg(not(all(feature = "rust-renderer", mw2_owns_gpu)))]
+    unsafe {
+        mw2_gpu_swap()
+    }
 }
 
 /// Somebody saw a flash; `how` names the key.
@@ -172,6 +206,145 @@ pub mod vulkan {
     }
 }
 
+// What gpu/gpu.rs and gpu/arena.rs call of the C++ renderer that is left
+// (runtime/rust_calls.cpp): the command processor, the renderer's start, end, idle and
+// reports, and the GPU capture's batch brackets.
+#[cfg(feature = "rust-renderer")]
+pub mod gpu {
+    unsafe extern "C" {
+        fn mw2_cp_execute_ring(base: u32, read_index: u32, mask: u32, dwords: u32);
+        fn mw2_cp_deliver_occlusion_queries();
+        fn mw2_cp_rendering() -> bool;
+        fn mw2_cp_write_physical(physical: u32, value: u32);
+        fn mw2_renderer_initialise() -> bool;
+        fn mw2_renderer_shutdown();
+        fn mw2_renderer_idle();
+        fn mw2_textures_shutdown();
+        fn mw2_pipeline_shutdown();
+    }
+
+    #[cfg(feature = "diagnostics")]
+    unsafe extern "C" {
+        fn mw2_cp_report();
+        fn mw2_census_present();
+        fn mw2_census_report();
+        fn mw2_renderer_report();
+        fn mw2_textures_report();
+        fn mw2_watch_report();
+        fn mw2_imagepool_report();
+        fn mw2_stream_batch_begin(base: u32, read_index: u32, mask: u32, dwords: u32);
+        fn mw2_stream_batch_end();
+        fn mw2_stream_shutdown();
+        fn mw2_stream_report();
+        fn mw2_stream_arena_block_seen(block: u32);
+    }
+
+    /// Executes `dwords` of the ring starting at `read_index`.
+    pub fn execute_ring(base: u32, read_index: u32, mask: u32, dwords: u32) {
+        unsafe { mw2_cp_execute_ring(base, read_index, mask, dwords) }
+    }
+
+    /// Writes the records of the occlusion queries the GPU has finished counting.
+    pub fn deliver_occlusion_queries() {
+        unsafe { mw2_cp_deliver_occlusion_queries() }
+    }
+
+    /// False under MW2_RENDER=0: the stream is executed and counted, nothing drawn.
+    pub fn rendering() -> bool {
+        unsafe { mw2_cp_rendering() }
+    }
+
+    /// The command processor's write of a dword at a physical address.
+    pub fn write_physical(physical: u32, value: u32) {
+        unsafe { mw2_cp_write_physical(physical, value) }
+    }
+
+    pub fn renderer_initialise() -> bool {
+        unsafe { mw2_renderer_initialise() }
+    }
+
+    pub fn renderer_shutdown() {
+        unsafe { mw2_renderer_shutdown() }
+    }
+
+    /// The consumer has run dry for a while: the recorder may sleep.
+    pub fn renderer_idle() {
+        unsafe { mw2_renderer_idle() }
+    }
+
+    pub fn textures_shutdown() {
+        unsafe { mw2_textures_shutdown() }
+    }
+
+    pub fn pipeline_shutdown() {
+        unsafe { mw2_pipeline_shutdown() }
+    }
+
+    #[cfg(feature = "diagnostics")]
+    pub fn cp_report() {
+        unsafe { mw2_cp_report() }
+    }
+
+    /// At each present the title makes.
+    #[cfg(feature = "diagnostics")]
+    pub fn census_present() {
+        unsafe { mw2_census_present() }
+    }
+
+    #[cfg(feature = "diagnostics")]
+    pub fn census_report() {
+        unsafe { mw2_census_report() }
+    }
+
+    #[cfg(feature = "diagnostics")]
+    pub fn renderer_report() {
+        unsafe { mw2_renderer_report() }
+    }
+
+    #[cfg(feature = "diagnostics")]
+    pub fn textures_report() {
+        unsafe { mw2_textures_report() }
+    }
+
+    #[cfg(feature = "diagnostics")]
+    pub fn watch_report() {
+        unsafe { mw2_watch_report() }
+    }
+
+    #[cfg(feature = "diagnostics")]
+    pub fn imagepool_report() {
+        unsafe { mw2_imagepool_report() }
+    }
+
+    /// MW2_CAPTURE_GPU and MW2_REPLAY_GPU around each ring batch (stream_capture.h).
+    #[cfg(feature = "diagnostics")]
+    pub fn stream_batch_begin(base: u32, read_index: u32, mask: u32, dwords: u32) {
+        unsafe { mw2_stream_batch_begin(base, read_index, mask, dwords) }
+    }
+
+    #[cfg(feature = "diagnostics")]
+    pub fn stream_batch_end() {
+        unsafe { mw2_stream_batch_end() }
+    }
+
+    /// The run ends: a capture still going is closed where it is.
+    #[cfg(feature = "diagnostics")]
+    pub fn stream_shutdown() {
+        unsafe { mw2_stream_shutdown() }
+    }
+
+    #[cfg(feature = "diagnostics")]
+    pub fn stream_report() {
+        unsafe { mw2_stream_report() }
+    }
+
+    /// The arena's progress block as the command processor finds it, for a capture.
+    #[cfg(feature = "diagnostics")]
+    pub fn stream_arena_block_seen(block: u32) {
+        unsafe { mw2_stream_arena_block_seen(block) }
+    }
+}
+
 // The renderer's part of a run's start and end (runtime/rust_calls.cpp), which only
 // run.rs asks for: the rigs, which have no renderer, leave it out.
 #[cfg(not(any(mw2_rig, mw2_screens_rig, mw2_hook_rig)))]
@@ -180,11 +353,15 @@ pub mod run {
 
     type TextSink = unsafe extern "C" fn(to: *mut c_void, text: *const c_char, size: usize);
 
+    #[cfg(not(all(feature = "rust-renderer", mw2_owns_gpu)))]
     unsafe extern "C" {
         fn mw2_gpu_initialise();
         fn mw2_gpu_shutdown();
         #[cfg(feature = "diagnostics")]
         fn mw2_gpu_report();
+    }
+
+    unsafe extern "C" {
         #[cfg(not(all(feature = "rust-renderer", mw2_owns_presenter)))]
         fn mw2_window_show();
         fn mw2_shaders_use_compiled(game_folder: *const c_char);
@@ -198,16 +375,33 @@ pub mod run {
 
     /// The device, the window (hidden until show_window) and the renderer's threads.
     pub fn gpu_initialise() {
-        unsafe { mw2_gpu_initialise() }
+        #[cfg(all(feature = "rust-renderer", mw2_owns_gpu))]
+        crate::runtime::gpu::gpu::initialise();
+        #[cfg(not(all(feature = "rust-renderer", mw2_owns_gpu)))]
+        unsafe {
+            mw2_gpu_initialise()
+        }
     }
 
+    /// Once, whoever asks first; a second ask returns, with the Rust renderer once the
+    /// first has finished.
     pub fn gpu_shutdown() {
-        unsafe { mw2_gpu_shutdown() }
+        #[cfg(all(feature = "rust-renderer", mw2_owns_gpu))]
+        crate::runtime::gpu::gpu::shutdown();
+        #[cfg(not(all(feature = "rust-renderer", mw2_owns_gpu)))]
+        unsafe {
+            mw2_gpu_shutdown()
+        }
     }
 
     #[cfg(feature = "diagnostics")]
     pub fn gpu_report() {
-        unsafe { mw2_gpu_report() }
+        #[cfg(all(feature = "rust-renderer", mw2_owns_gpu))]
+        crate::runtime::gpu::gpu::report();
+        #[cfg(not(all(feature = "rust-renderer", mw2_owns_gpu)))]
+        unsafe {
+            mw2_gpu_report()
+        }
     }
 
     pub fn show_window() {

@@ -17,7 +17,7 @@ const PLAY_STREAK: u32 = 30; // as the in-play frame rate counts it
 const LINES_SHOWN: u32 = 200;
 
 const COSTS: usize = 7;
-const RING_BATCHES: usize = 6;
+pub const RING_BATCHES: usize = 6;
 const COST_NAMES: [&CStr; COSTS] = [
     c"translating shaders",
     c"building pipelines",
@@ -134,6 +134,9 @@ pub fn add(cost: usize, nanoseconds: u64) {
 }
 
 pub fn title_presented(now_us: i64) {
+    // tools/hook_diff.py: that a hook told it, whichever side's it was.
+    #[cfg(mw2_hook_rig)]
+    log_info!("[stutters] title presented");
     let last = LAST_PRESENT_US.swap(now_us, Ordering::Relaxed);
     if last >= 0 && now_us - last > LONGEST_PRESENT_GAP_US.load(Ordering::Relaxed) {
         LONGEST_PRESENT_GAP_US.store(now_us - last, Ordering::Relaxed);

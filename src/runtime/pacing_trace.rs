@@ -55,6 +55,11 @@ mod trace {
     }
 
     pub fn note(now: u64, event: u8, value: u32, thread: u32) {
+        // tools/hook_diff.py: which notes a hook made, and in what order with its other
+        // calls, whichever side's they were; a thread's CPU time ('C') is the clock's, so
+        // its value is not.
+        #[cfg(mw2_hook_rig)]
+        log_info!("[pacing] %u %u", u32::from(event), if event == b'C' { 0 } else { value });
         let entries = &**TABLE;
         let at = NEXT.fetch_add(1, Ordering::Relaxed);
         let Some(entry) = entries.get(at) else { return };

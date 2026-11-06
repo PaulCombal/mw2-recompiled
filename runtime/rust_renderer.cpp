@@ -179,4 +179,56 @@ void vk::capture::RequestNow(unsigned frames) { mw2_capture_request_now(frames);
 void vk::capture::ToggleStream() { mw2_capture_toggle_stream(); }
 void vk::capture::Report() { mw2_capture_report(); }
 
+// ---- gpu/gpu.cpp, gpu/arena.cpp (gpu/gpu.rs, gpu/arena.rs). What the command processor,
+// the census, the image pool and the GPU capture call; the rest of gpu.h, and
+// d3d_hooks.cpp (src/hooks/d3d_hooks.rs), only Rust calls.
+#include "gpu/gpu.h"
+#include "gpu/internal.h"
+
+extern "C"
+{
+    uint64_t mw2_gpu_frames();
+    bool mw2_gpu_consuming();
+    bool mw2_gpu_running();
+    double mw2_gpu_seconds();
+    void mw2_gpu_raise_cp_interrupt(uint32_t cpuMask);
+    void mw2_gpu_ring_position(uint32_t* read, uint32_t* written, uint32_t* writeBack);
+    bool mw2_arena_progress(uint32_t address, uint32_t value);
+#if MW2_DIAGNOSTICS
+    void mw2_gpu_ring_layout(uint32_t* base, uint32_t* dwords, uint32_t* writeBack);
+    void mw2_arena_save(gpu::detail::ArenaState* out);
+    void mw2_arena_restore(const gpu::detail::ArenaState* state);
+    void mw2_arena_set_block(uint32_t physical);
+#endif
+}
+
+uint64_t gpu::FrameCount() { return mw2_gpu_frames(); }
+bool gpu::Consuming() { return mw2_gpu_consuming(); }
+bool gpu::detail::Running() { return mw2_gpu_running(); }
+double gpu::detail::Seconds() { return mw2_gpu_seconds(); }
+void gpu::detail::RaiseCommandProcessorInterrupt(uint32_t cpuMask) { mw2_gpu_raise_cp_interrupt(cpuMask); }
+void gpu::detail::RingPosition(uint32_t& read, uint32_t& written, uint32_t& writeBack)
+{
+    mw2_gpu_ring_position(&read, &written, &writeBack);
+}
+bool gpu::detail::ArenaProgress(uint32_t address, uint32_t value) { return mw2_arena_progress(address, value); }
+
+#if MW2_DIAGNOSTICS
+// The four words gpu/arena.rs's ArenaState has.
+static_assert(sizeof(gpu::detail::ArenaState) == 16 && offsetof(gpu::detail::ArenaState, havePosition) == 12);
+
+void gpu::detail::RingLayout(uint32_t& base, uint32_t& dwords, uint32_t& writeBack)
+{
+    mw2_gpu_ring_layout(&base, &dwords, &writeBack);
+}
+gpu::detail::ArenaState gpu::detail::SaveArena()
+{
+    ArenaState state;
+    mw2_arena_save(&state);
+    return state;
+}
+void gpu::detail::RestoreArena(const ArenaState& state) { mw2_arena_restore(&state); }
+void gpu::detail::SetArenaBlock(uint32_t physical) { mw2_arena_set_block(physical); }
+#endif
+
 #endif  // MW2_RUST_RENDERER

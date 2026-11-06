@@ -11,12 +11,25 @@
 # --src takes the Rust from another folder, to try a deliberate mistake: a run that
 # does not fail on one has not tested that line. --coverage lists the lines of the
 # C++ hooks no case reached. Exits nonzero at the first difference.
+#
+# The renderer's hooks (runtime/gpu/<n>.cpp, runtime/image_move.cpp and
+# runtime/shader_preload.cpp) are paired only where the build has them in Rust:
+# <build>/renderer_cfgs.txt names a cfg mw2_owns_<n> for each C++ file Rust owns. A
+# C++-renderer build (renderer cpp) leaves them out on both sides. Their calls into the
+# renderer are loggers on both sides (hook_diff.cpp).
 import argparse, glob, os, re, resource, shutil, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# The renderer's C++ files outside runtime/gpu/, which RUST_OWNS may list (build.rs).
+RENDERER_FILES = {"image_move", "shader_preload"}
+# What a renderer hook's C++ calls of its own renderer, compiled beside it as it is: the
+# D3D hooks set the arena's progress block (arena.cpp, whose Rust is arena.rs).
+COMPANIONS = {"d3d_hooks": ["gpu/arena.cpp"]}
 GUEST = re.compile(r"^(__imp__)?sub_[0-9A-F]{8}$")
 # The switches the C++ and the Rust each read once. Each set is a process of its own.
-ENVIRONMENTS = [{}, {"MW2_FOV": "90", "MW2_CUSTOM_MAPS": "1"}, {"MW2_FOV": "130", "MW2_ANISOTROPY": "8x"}, {"MW2_FOV": "nan"}, {"MW2_ANISOTROPY": "3", "MW2_CUSTOM_MAPS": "1"},
+# With MW2_TRACE_PACING and MW2_STUTTERS, the pacing notes and the stutter detector's
+# calls log here (src/runtime/pacing_trace.rs, stutters.rs), so their order is compared.
+ENVIRONMENTS = [{}, {"MW2_FOV": "90", "MW2_CUSTOM_MAPS": "1"}, {"MW2_FOV": "130", "MW2_ANISOTROPY": "8x"}, {"MW2_FOV": "nan", "MW2_TRACE_PACING": "/dev/null", "MW2_STUTTERS": "1"}, {"MW2_ANISOTROPY": "3", "MW2_CUSTOM_MAPS": "1"},
                 {"MW2_ENGINE_LOG": "1", "MW2_TRACE_CBUF": "1"}, {"MW2_ENGINE_LOG": "1"}, {"MW2_RENDER": "960x600", "MW2_CUSTOM_MAPS": "1"}, {"MW2_RENDER": "1280x800"}, {"MW2_RENDER": "640x480", "MW2_CUSTOM_MAPS": "1"}, {"MW2_RENDER": "1600x900"}, {"MW2_RENDER": " 1024x+640"}]
 
 # The custom maps' hooks list .arena files in the game folder: each seed gets a folder
@@ -112,9 +125,25 @@ def main():
     tu0 = "mw2_version_tu0" in cfgs
     ppc = f"{ROOT}/ppc{'_mp' if title_mp else ''}{'_tu0' if tu0 else ''}"
 
-    # Every hook of src/hooks/ that has a C++ one of the same name in runtime/.
-    ported = sorted(name for name in (os.path.basename(path)[:-3] for path in glob.glob(f"{ROOT}/src/hooks/*.rs"))
-                    if os.path.exists(f"{ROOT}/runtime/{name}.cpp"))
+    # Which renderer this build has, and which of its C++ files Rust owns.
+    if not os.path.exists(f"{build}/renderer_cfgs.txt"):
+        sys.exit(f"{build} has no renderer_cfgs.txt: build it again")
+    renderer = open(f"{build}/renderer_cfgs.txt").read().split()
+    rust_renderer = "rust" in renderer
+    owned = {kind[len("mw2_owns_"):] for kind in renderer if kind.startswith("mw2_owns_")}
+
+    # Every hook of src/hooks/ that has a C++ one of the same name in runtime/ or
+    # runtime/gpu/; a renderer file's only where Rust owns it in this build.
+    def cpp_of(name):
+        if name in RENDERER_FILES:
+            return f"{name}.cpp" if name in owned and os.path.exists(f"{ROOT}/runtime/{name}.cpp") else None
+        if os.path.exists(f"{ROOT}/runtime/{name}.cpp"):
+            return f"{name}.cpp"
+        if os.path.exists(f"{ROOT}/runtime/gpu/{name}.cpp"):
+            return f"gpu/{name}.cpp" if name in owned else None
+        return None
+    sources = {name: cpp_of(name) for name in (os.path.basename(path)[:-3] for path in glob.glob(f"{ROOT}/src/hooks/*.rs"))}
+    ported = sorted(name for name, source in sources.items() if source)
     names = {address: name for name, address in re.findall(r'\((T_\w+)\) => \{ "sub_([0-9A-F]{8})" \}', table)}
     data = sorted({int(value, 16) for value in re.findall(r"pub const T_DATA_\w+: u32 = (0x[0-9A-Fa-f]+)", table)} - {0})
 
@@ -128,8 +157,10 @@ def main():
     objects = []
     # A header the C++ includes changes it as much as its own file does.
     headers = max(os.path.getmtime(path) for path in glob.glob(f"{ROOT}/runtime/**/*.h", recursive=True))
-    for source in ported:
-        path, object_path = f"{ROOT}/runtime/{source}.cpp", f"{work}/{source}.{tag}.o"
+    files = [sources[name] for name in ported]
+    files += [companion for name in ported for companion in COMPANIONS.get(name, [])]
+    for source in files:
+        path, object_path = f"{ROOT}/runtime/{source}", f"{work}/{source[:-4].replace('/', '_')}.{tag}.o"
         if not os.path.exists(object_path) or os.path.getmtime(object_path) < max(os.path.getmtime(path), headers):
             run(*compiler, *coverage, "-c", path, "-o", object_path)
         objects.append(object_path)
@@ -164,9 +195,17 @@ def main():
     variables = dict(line.split("=", 2)[1:] for line in open(output).read().splitlines() if line.startswith("cargo:rustc-env="))
     library = f"{work}/libhooks.a"
     checks = ["-Copt-level=1"] if arguments.release else ["-Copt-level=1", "-Cdebug-assertions=on", "-Coverflow-checks=on"]
+    # The Rust renderer's build: its feature, its cfgs (which the build script's output
+    # also holds) and ash.
+    features = ["--cfg", 'feature="diagnostics"']
+    externs = ["--extern", f"ppc_rt={rlib('ppc_rt')}", "--extern", f"sdl3_sys={rlib('sdl3_sys')}"]
+    if rust_renderer:
+        features += ["--cfg", 'feature="rust-renderer"']
+        cfgs += [f"mw2_owns_{name}" for name in sorted(owned) if f"mw2_owns_{name}" not in cfgs]
+        externs += ["--extern", f"ash={rlib('ash')}"]
     run("rustc", "--edition=2024", "--crate-type=staticlib", "--crate-name=hooks", "-Cpanic=abort", "-Ctarget-cpu=x86-64-v2",
-        *checks, "--cfg", 'feature="diagnostics"', "--cfg", "mw2_hook_rig", *sum((["--cfg", cfg] for cfg in cfgs), []), "--cap-lints=warn", "--extern", f"ppc_rt={rlib('ppc_rt')}",
-        "--extern", f"sdl3_sys={rlib('sdl3_sys')}", "-L", f"dependency={build}/rust/release/deps", "-o", library, root,
+        *checks, *features, "--cfg", "mw2_hook_rig", *sum((["--cfg", cfg] for cfg in cfgs), []), "--cap-lints=warn", *externs,
+        "-L", f"dependency={build}/rust/release/deps", "-o", library, root,
         env={**os.environ, **variables, "OUT_DIR": out_dir, "MW2_RELEASE_TAG": os.environ.get("MW2_RELEASE_TAG", "")})
 
     rust_defined = {symbol for symbol in symbols(library, ["--defined-only", "--extern-only"]) if GUEST.match(symbol)}
@@ -212,8 +251,11 @@ def main():
     program = f"{work}/hook_diff.{tag}"
     # SDL comes with sdl3-sys, in the library rustc made.
     libraries = glob.glob(f"{build}/_deps/zlib-build/libz*.a")
+    # What neither side's hooks reach -- the rest of the renderer each links in -- is
+    # left unresolved, and never called.
+    vulkan = ["-lvulkan"] if rust_renderer else []
     run(*compiler, f"-I{work}", "-Wno-everything", *coverage, f"{ROOT}/tools/hook_diff.cpp", *renamed, library, *libraries,
-        "-fuse-ld=lld", "-lpthread", "-ldl", "-lm", "-lgcc_s", "-o", program)
+        "-fuse-ld=lld", "-Wl,--gc-sections,--unresolved-symbols=ignore-all", *vulkan, "-lpthread", "-ldl", "-lm", "-lgcc_s", "-o", program)
 
     hook = [arguments.hook] if arguments.hook else []
     profiles = []
@@ -237,7 +279,7 @@ def main():
         merged = f"{work}/merged.profdata"
         run("llvm-profdata-18", "merge", "-o", merged, *profiles)
         for name in ported:
-            shown = subprocess.run(["llvm-cov-18", "show", program, f"-instr-profile={merged}", f"{ROOT}/runtime/{name}.cpp"],
+            shown = subprocess.run(["llvm-cov-18", "show", program, f"-instr-profile={merged}", f"{ROOT}/runtime/{sources[name]}"],
                                    check=True, text=True, capture_output=True).stdout
             missed = [line for line in shown.splitlines() if re.match(r"\s*\d+\|\s*0\|", line)]
             print(f"--- {name}: {len(missed)} lines never run")

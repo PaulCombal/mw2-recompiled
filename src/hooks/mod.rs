@@ -42,6 +42,8 @@ mod coop_slot_index;
     T_DATA_DB_ZoneCount
 ))]
 mod custom_map_list;
+#[cfg(all(mw2_owns_d3d_hooks, T_D3D_Present, T_D3D_ArenaWait))]
+mod d3d_hooks;
 #[cfg(T_CL_DisconnectReason)]
 mod disconnect_reason_format;
 mod engine_log;
@@ -118,6 +120,14 @@ mod texture_filtering;
 mod ui_directive_overflow;
 #[cfg(T_DB_StartStream)]
 mod unsigned_fastfiles;
+
+/// Recordings D3D9 could not have walked to the end of, in the GPU's end-of-run report
+/// (runtime/gpu/gpu.rs).
+#[cfg(all(feature = "diagnostics", feature = "rust-renderer"))]
+pub fn report_d3d_hooks() {
+    #[cfg(all(mw2_owns_d3d_hooks, T_D3D_Present, T_D3D_ArenaWait))]
+    d3d_hooks::report();
+}
 
 /// The predicate waits' end-of-run report (runtime/run.rs).
 #[cfg(feature = "diagnostics")]
