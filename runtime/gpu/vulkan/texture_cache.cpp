@@ -15,6 +15,9 @@
 #include "../../log.h"
 #include "../../stutters.h"
 #include "../../words_hash.h"
+#if MW2_DIAGNOSTICS
+#include "../stream_capture.h"
+#endif
 
 #ifndef MW2_HAVE_VULKAN
 // No loader, so nothing here can be built. Every caller tolerates a cache that
@@ -67,6 +70,9 @@ void vk::textures::BeginUploads(uint32_t) {}
 #include <vulkan/vulkan.h>
 #include "util.h"
 #include "image_memory.h"
+#if MW2_DIAGNOSTICS
+#include "trace.h"   // last: the command trace's wrappers
+#endif
 
 namespace
 {
@@ -180,7 +186,15 @@ namespace
         VkDeviceSize used = 0, wanted = 0;
         std::vector<StagingBuffer> overflow;
     };
+#if MW2_TRACE
+    // MW2_STAGING_LEAST_KB lowers the least (Initialise).
+    VkDeviceSize kStagingLeast = 8ull << 20;
+    constexpr VkDeviceSize kStagingMost = 256ull << 20;
+    // Where each upload slot's staging was filled up to at its last segment's end.
+    VkDeviceSize g_stagingHashed[vk::textures::kUploadSlots]{};
+#else
     constexpr VkDeviceSize kStagingLeast = 8ull << 20, kStagingMost = 256ull << 20;
+#endif
 
     struct State
     {
@@ -565,7 +579,13 @@ namespace
     bool StageInto(Image& image, const uint8_t* bytes, size_t size, const char** error)
     {
         image.staged++;
+#if MW2_TRACE
+        // MW2_FORCE_LONE_UPLOADS: each submitted on its own, as before the frame's uploads.
+        if (g.open && !vk::trace::Forcing().loneUploads) return RecordUpload(*g.open, image, bytes, size, error);
+        if (g.open) vk::trace::Counts().loneUploads++;
+#else
         if (g.open) return RecordUpload(*g.open, image, bytes, size, error);
+#endif
 
         StagingBuffer staging;
         if (!MakeStaging(staging, size)) return Fail("no staging buffer", error);
@@ -980,6 +1000,10 @@ bool vk::textures::Initialise()
         if (g.memory.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
             deviceLocal = std::max(deviceLocal, g.memory.memoryHeaps[i].size);
     g.budget = env::Number("MW2_TEXTURE_BUDGET_MB") << 20;
+#if MW2_TRACE
+    if (vk::trace::Forcing().stagingLeastKb)
+        kStagingLeast = std::min<VkDeviceSize>(VkDeviceSize(vk::trace::Forcing().stagingLeastKb) << 10, kStagingMost);
+#endif
     if (!g.budget) g.budget = std::clamp<uint64_t>(deviceLocal / 2, 256ull << 20, 2048ull << 20);
 
     VkCommandPoolCreateInfo pool{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
@@ -1075,6 +1099,9 @@ void vk::textures::Shutdown()
     g.commands = VK_NULL_HANDLE;
     g.command = VK_NULL_HANDLE;
     g.device = VK_NULL_HANDLE;
+#if MW2_TRACE
+    vk::trace::Finish();   // the last traced call of the run was above
+#endif
 }
 
 bool vk::textures::Ready() { return g.device != VK_NULL_HANDLE; }
@@ -1089,6 +1116,21 @@ namespace
         const uint32_t va = kernel::FromPhysical(physicalAddress);
         return va ? guest::Base() + va : nullptr;
     }
+
+    // MW2_CAPTURE_GPU: the ranges a texture is about to be read from, each with the
+    // page after it, which the reader can reach past ExtentsOf (docs/textures.md).
+#if MW2_DIAGNOSTICS
+    void NoteSource(uint32_t base, size_t baseBytes, uint32_t mips, size_t mipBytes)
+    {
+        if (baseBytes) gpu::stream::NoteReadPhysical(base, baseBytes + gpu::watch::kPageBytes);
+        if (mipBytes) gpu::stream::NoteReadPhysical(mips, mipBytes + gpu::watch::kPageBytes);
+    }
+
+    void NoteImage(const Image& image)
+    {
+        NoteSource(image.address, image.sourceBytes, image.mipAddress, image.mipBytes);
+    }
+#endif
 
     // Both ranges a texture was read from, as one signature: a rewrite of the
     // chain changes what is sampled as surely as one of the base.
@@ -1228,6 +1270,9 @@ namespace
         stutters::Timed timed(stutters::kRefreshedTextures);
         report::Timed spent(report::kTextures);
 
+#if MW2_DIAGNOSTICS
+        NoteImage(*image);
+#endif
         image->watchStamp = TrackImage(*image);
         const uint64_t now = SignImage(*image, true);
         if (now == image->signature)
@@ -1321,6 +1366,9 @@ namespace
         {
             DestroyImage(g.doomed.front());
             g.doomed.pop_front();
+#if MW2_TRACE
+            if (vk::trace::Deterministic()) continue;   // every one due, whatever the time
+#endif
             if (std::chrono::steady_clock::now() - from >= kLongest) break;
         }
     }
@@ -1345,6 +1393,9 @@ namespace
             if (!Idle(image) || !image.watchStamp || Unchanged(image)) continue;
             // The watch answers for whole pages, and a neighbour's write is
             // not this texture's: the bytes decide.
+#if MW2_DIAGNOSTICS
+            NoteImage(image);
+#endif
             const uint64_t stamp = TrackImage(image);
             if (SignImage(image) == image.signature)
             {
@@ -1453,6 +1504,9 @@ void vk::textures::BeginUploads(uint32_t index)
     slot.recording = false;
     slot.segment = 0;
     slot.used = slot.wanted = 0;
+#if MW2_TRACE
+    g_stagingHashed[index] = 0;
+#endif
     g.open = &slot;
 }
 
@@ -1550,6 +1604,10 @@ uint64_t vk::textures::Upload(const gpu::TextureFetch& fetch, const char** error
     const uint8_t* base = HostAddress(extents.baseAddress);
     const uint8_t* mips = HostAddress(extents.mipAddress);
     // Watched before it is read, so a write after the read shows.
+#if MW2_DIAGNOSTICS
+    NoteSource(extents.baseAddress, base ? extents.baseBytes : 0, extents.mipAddress,
+               mips ? extents.mipBytes : 0);
+#endif
     const uint64_t watchStamp = TrackSource(extents.baseAddress, base ? extents.baseBytes : 0,
                                             extents.mipAddress, mips ? extents.mipBytes : 0);
     gpu::TextureData data = gpu::ReadTexture(fetch, base, mips);
@@ -1604,6 +1662,9 @@ namespace
                 continue;
             if (Unchanged(*image)) { g.unchangedByWatch++; continue; }
             g.rereadRewritten++;
+#if MW2_DIAGNOSTICS
+            NoteImage(*image);
+#endif
             image->watchStamp = TrackImage(*image);
             const uint64_t now = SignImage(*image, true);
             if (now == image->signature) continue;
@@ -1623,6 +1684,9 @@ namespace
         {
             Image* image = Find(id);
             if (!image || !image->image || image->borrowed || !image->fromAnEmptyBlock) continue;
+#if MW2_DIAGNOSTICS
+            NoteImage(*image);
+#endif
             image->watchStamp = TrackImage(*image);
             const gpu::TextureData data = ReadAgain(*image);
             if (data.ok && EmptyPercent(data.bytes.data(), data.bytes.size()) <= 25)
@@ -1695,6 +1759,28 @@ void* vk::textures::EndSegment()
     // A segment that uploaded nothing leaves its buffer to the next.
     if (!slot || !slot->recording) return nullptr;
     slot->recording = false;
+#if MW2_TRACE
+    // The staging this segment's uploads read, which is S1's untiling on the game's data.
+    {
+        const size_t index = size_t(slot - g.uploadSlots);
+        const VkDeviceSize from = g_stagingHashed[index], to = std::max(from, slot->used);
+        g_stagingHashed[index] = to;
+        if (vk::trace::Wanted())
+        {
+            uint64_t overflow = vk::trace::Fnv64(nullptr, 0);
+            // Folded in order, FNV-style, so that two equal buffers do not cancel out.
+            for (const StagingBuffer& extra : slot->overflow)
+                overflow = (overflow ^ (vk::trace::FnvWriteCombined(extra.mapped, size_t(extra.size)) + extra.size)) *
+                           0x100000001b3ull;
+            const uint64_t staged =
+                slot->staging.mapped ? vk::trace::FnvWriteCombined(slot->staging.mapped + from, size_t(to - from)) : 0;
+            vk::trace::Note("UploadSlot slot=%zu segment=%zu from=%llu to=%llu fnv=%016llx overflow=%zu"
+                            " overflowfnv=%016llx", index, slot->segment, (unsigned long long)from,
+                            (unsigned long long)to, (unsigned long long)staged, slot->overflow.size(),
+                            (unsigned long long)overflow);
+        }
+    }
+#endif
     const VkCommandBuffer uploads = slot->commands[slot->segment++];
     g.segmentsWithUploads++;
     if (vkEndCommandBuffer(uploads) != VK_SUCCESS) return nullptr;

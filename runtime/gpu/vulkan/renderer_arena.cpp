@@ -4,6 +4,9 @@
 #include "../memory_watch.h"
 #include "../../guest.h"
 #include "../../kernel/physical.h"
+#if MW2_DIAGNOSTICS
+#include "../stream_capture.h"
+#endif
 
 #include <algorithm>
 #include <bit>
@@ -254,6 +257,9 @@ namespace vk::renderer::detail
                     corners.assign(size_t(total) * stride, 0);
                     uint32_t* vertices = corners.data();
                     const uint32_t have = std::min(given * stride, declared);
+#if MW2_DIAGNOSTICS
+                    gpu::stream::NoteRead(va, uint64_t(have) * 4);
+#endif
                     std::memcpy(vertices, guest::Base() + va, have * 4);
                     for (uint32_t rect = 0; rect < rectangles; rect++)
                         BuildFourthCorner(vertices, stride, rect, given + rect);
@@ -273,6 +279,9 @@ namespace vk::renderer::detail
                 const uint32_t last = uint32_t(std::min<uint64_t>(to, declared));
                 if (last <= first) { entry[0] = 0; continue; }
                 const uint32_t words = last - first;
+#if MW2_DIAGNOSTICS
+                gpu::stream::NoteRead(va + first * 4, uint64_t(words) * 4);
+#endif
                 if (g.drawRecord) NoteVertexWindow(guest::Base() + va + first * 4, words * 4);
 
                 // Pages the title has not written since the shadow copied them
@@ -418,6 +427,9 @@ namespace vk::renderer::detail
         const uint32_t at = Allocate(bytes, kArenaIndices);
         if (at == UINT32_MAX) return at;
         const uint8_t* source = guest::Base() + address;
+#if MW2_DIAGNOSTICS
+        gpu::stream::NoteRead(address, bytes);
+#endif
         if (g.drawRecord) NoteIndices(source, bytes);
         if (wide)
         {

@@ -40,6 +40,9 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#if MW2_DIAGNOSTICS
+#include "trace.h"   // last: the command trace's wrappers
+#endif
 
 #ifdef MW2_HAVE_VULKAN
 
@@ -61,9 +64,18 @@ namespace
         info.pVertexInputState = &state.input;
         info.pInputAssemblyState = &state.assembly;
         info.pDynamicState = &state.dynamic;
+#if MW2_TRACE
+        // Made by the launcher's shared code: named by its role (trace.h).
+        const VkPipeline made = g.inputLibraries[topology] =
+            vk::shaders::MakeLibrary(VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, nullptr, info);
+        vk::trace::Register(vk::trace::kPipeline, vk::trace::Raw(made), "LInput%u", topology);
+        vk::trace::StateLibrary(made, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, info, nullptr);
+        return made;
+#else
         return g.inputLibraries[topology] =
                    vk::shaders::MakeLibrary(VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT,
                                             nullptr, info);
+#endif
     }
 
     VkPipeline OutputLibrary(const PipelineKey& key)
@@ -77,9 +89,20 @@ namespace
         info.pColorBlendState = &state.blending;
         info.pMultisampleState = &state.multisample;
         info.pDynamicState = &state.dynamic;
+#if MW2_TRACE
+        const VkPipeline made = g.outputLibraries[output] =
+            vk::shaders::MakeLibrary(VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, nullptr, info,
+                                     &state.rendering);
+        vk::trace::Register(vk::trace::kPipeline, vk::trace::Raw(made), "LOutput_%x_%x_%u_%u_%u", output.blendControl,
+                            output.colourMask, output.colourFormat, output.depthFormat, output.samples);
+        vk::trace::StateLibrary(made, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, info,
+                                &state.rendering);
+        return made;
+#else
         return g.outputLibraries[output] =
                    vk::shaders::MakeLibrary(VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT,
                                             nullptr, info, &state.rendering);
+#endif
     }
 
     VkPipeline Link(const VkPipeline (&libraries)[4], bool optimise)
@@ -239,6 +262,17 @@ namespace vk::renderer::detail
             g_fromCache[built.fromCache + 1].fetch_add(1, std::memory_order_relaxed);
             report::ShaderBuilt(built.fromCache);
         }
+#if MW2_TRACE
+        // Made by the launcher's shared Build: named by the shader's hash (trace.h).
+        if (vk::trace::On())
+        {
+            const uint64_t hash = ShaderHash(code, words);
+            vk::trace::Register(vk::trace::kPipeline, vk::trace::Raw(built.library), "L%016llx",
+                                (unsigned long long)hash);
+            vk::trace::Register(vk::trace::kModule, vk::trace::Raw(built.module), "M%016llx",
+                                (unsigned long long)hash);
+        }
+#endif
         Shader entry;
         entry.type = type;
         entry.code.assign(code, code + words);
@@ -335,6 +369,18 @@ namespace vk::renderer::detail
 
     void StartPreparing()
     {
+#if MW2_TRACE
+        // MW2_DETERMINISTIC: every shader built at its first draw, no optimised links.
+        if (vk::trace::Deterministic() && vk::pipeline::PipelineLibraries())
+        {
+            std::lock_guard lock(p.lock);
+            p.stopped = true;
+            p.jobs.clear();
+            LOGI("renderer: MW2_DETERMINISTIC: no shader workers, no optimiser; shaders are compiled at their"
+                 " first draw");
+            return;
+        }
+#endif
         if (!vk::pipeline::PipelineLibraries())
         {
             std::lock_guard lock(p.lock);

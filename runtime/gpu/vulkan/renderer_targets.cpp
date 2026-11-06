@@ -9,6 +9,9 @@
 #include <bit>
 #include <map>
 #include <vector>
+#if MW2_DIAGNOSTICS
+#include "trace.h"   // last: the command trace's wrappers
+#endif
 
 #ifdef MW2_HAVE_VULKAN
 
@@ -450,7 +453,15 @@ namespace vk::renderer::detail
             layoutInfo.pSetLayouts = &drawn.setLayout;
             if (vkCreatePipelineLayout(g.device, &layoutInfo, nullptr, &drawn.layout) != VK_SUCCESS) return false;
             // A set per multisampled depth target: a handful.
+#if MW2_TRACE
+            // MW2_DRAWN_RESOLVE_SETS=<n>: fewer, to run the pool dry.
+            const uint32_t kSets = vk::trace::Forcing().drawnResolveSets ? vk::trace::Forcing().drawnResolveSets : 64;
+            // MW2_DUMP_SHADERS: the draw's two shaders.
+            vk::trace::DumpBuiltin("drawn_resolve_cover_vertex", CoverVertexShader());
+            vk::trace::DumpBuiltin("drawn_resolve_fetch_depth", FetchDepthShader());
+#else
             constexpr uint32_t kSets = 64;
+#endif
             VkDescriptorPoolSize size{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kSets };
             VkDescriptorPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
             poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;

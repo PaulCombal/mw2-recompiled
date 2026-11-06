@@ -586,6 +586,14 @@ fn main() {
     for file in ["runtime/image_move.cpp", "runtime/shader_preload.cpp", "runtime/rust_calls.cpp"] {
         files.push(root.join(file));
     }
+    // The renderer's reference instruments (the command trace, the GPU's capture) are
+    // diagnostics alone: a release links no trace of them, not even the empty object's
+    // file symbol.
+    if !diagnostics {
+        files.retain(|file| {
+            !file.ends_with("runtime/gpu/vulkan/trace.cpp") && !file.ends_with("runtime/gpu/stream_capture.cpp")
+        });
+    }
     // Every file of the two lists must exist: a misspelt one would leave a file in or
     // out without a word.
     for listed in RUST_OWNS.iter().chain(RUST_ONLY) {

@@ -196,6 +196,12 @@ pub fn run(arguments: &[&CStr]) -> i32 {
         log_info!("settings: %s", crate::log::c_string(kept).as_c_str());
     }
 
+    // MW2_REPLAY_GPU: a capture of the GPU's input instead of the title (gpu_replay.rs).
+    #[cfg(feature = "diagnostics")]
+    if let Some(dir) = env::text(c"MW2_REPLAY_GPU") {
+        return crate::runtime::gpu_replay::run(dir);
+    }
+
     // Before any thread exists: a Flatpak's Steam is reached from its own process
     // namespace, which a process of more than one thread cannot join. The parent that
     // waited for the game ends as it did, and runs nothing of the game's on the way out.

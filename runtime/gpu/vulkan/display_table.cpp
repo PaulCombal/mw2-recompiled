@@ -19,6 +19,9 @@ void vk::display::Report() {}
 #include <vulkan/vulkan.h>
 #include "recorder.h"
 #include "util.h"
+#if MW2_DIAGNOSTICS
+#include "trace.h"   // last: the command trace's wrappers
+#endif
 
 namespace
 {
@@ -237,6 +240,9 @@ bool vk::display::Initialise()
     { g.failed = true; return false; }
 
     const std::vector<uint32_t> words = BuildShader();
+#if MW2_TRACE
+    vk::trace::DumpBuiltin("display_table", words);   // MW2_DUMP_SHADERS
+#endif
     VkShaderModuleCreateInfo moduleInfo{ VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
     moduleInfo.codeSize = words.size() * 4;
     moduleInfo.pCode = words.data();

@@ -8,6 +8,11 @@
 #include <chrono>
 #include <cstring>
 
+#if MW2_DIAGNOSTICS
+#include "stream_capture.h"
+#include "vulkan/trace.h"   // the shadow's pages in the command trace
+#endif
+
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -48,6 +53,11 @@ namespace
 
     std::atomic<uint64_t> g_faults{ 0 }, g_bulkWrites{ 0 };
     std::atomic<uint64_t> g_protects{ 0 }, g_protectNanoseconds{ 0 };
+#if MW2_DIAGNOSTICS
+    // How often each page went from watched to written: MW2_CAPTURE_GPU stores a page
+    // the title wrote with the bytes it held, so that the replay's write is seen too.
+    std::atomic<uint32_t> g_loosened[kPages];
+#endif
     uint64_t g_arms = 0, g_pagesArmed = 0, g_armedWrittenDuring = 0, g_armFailures = 0;
     uint64_t g_served = 0, g_servedBytes = 0, g_tracked = 0;
     uint64_t g_refusedInFlight = 0, g_refusedBackingOff = 0, g_refusedOutside = 0;
@@ -91,7 +101,12 @@ namespace
             if (state == kNever || state == kLoose) return;
             Protect(page, 1, true);
             if (g_state[page].compare_exchange_weak(state, kLoose, std::memory_order_acq_rel))
+            {
+#if MW2_DIAGNOSTICS
+                g_loosened[page].fetch_add(1, std::memory_order_relaxed);
+#endif
                 return;
+            }
         }
     }
 
@@ -108,6 +123,10 @@ namespace
     // one came out Watched: a write during the copy leaves its page Loose.
     bool Arm(uint32_t first, uint32_t count, uint64_t frame)
     {
+#if MW2_DIAGNOSTICS
+        gpu::stream::NoteRead(guest::kPhysicalBase + first * gpu::watch::kPageBytes,
+                              uint64_t(count) * gpu::watch::kPageBytes);
+#endif
         for (uint32_t p = first; p < first + count; p++)
         {
             const uint8_t was = g_state[p].load(std::memory_order_relaxed);
@@ -138,6 +157,13 @@ namespace
         std::memcpy(g_shadow + size_t(first) * gpu::watch::kPageBytes,
                     guest::Base() + guest::kPhysicalBase + size_t(first) * gpu::watch::kPageBytes,
                     size_t(count) * gpu::watch::kPageBytes);
+#if MW2_TRACE
+        if (vk::trace::Wanted())
+            for (uint32_t p = first; p < first + count; p++)
+                vk::trace::Note("ShadowArm page=%u fnv=%016llx", p,
+                                (unsigned long long)vk::trace::FnvWriteCombined(g_shadow + size_t(p) * gpu::watch::kPageBytes,
+                                                                     gpu::watch::kPageBytes));
+#endif
         bool all = true;
         for (uint32_t p = first; p < first + count; p++)
         {
@@ -261,6 +287,9 @@ void gpu::watch::WillWrite(uint32_t guestAddress, uint32_t bytes)
         uint8_t state = g_state[p].load(std::memory_order_acquire);
         while (state >= kArming &&
                !g_state[p].compare_exchange_weak(state, kLoose, std::memory_order_acq_rel)) {}
+#if MW2_DIAGNOSTICS
+        if (state >= kArming) g_loosened[p].fetch_add(1, std::memory_order_relaxed);
+#endif
     }
     g_bulkWrites.fetch_add(1, std::memory_order_relaxed);
 }
@@ -295,6 +324,13 @@ bool gpu::watch::Unwritten(uint32_t physical, uint32_t bytes, uint64_t since)
             return false;
     return true;
 }
+
+#if MW2_DIAGNOSTICS
+uint32_t gpu::watch::Loosened(uint32_t page)
+{
+    return page < kPages ? g_loosened[page].load(std::memory_order_relaxed) : 0;
+}
+#endif
 
 void gpu::watch::Report()
 {

@@ -15,6 +15,9 @@
 #include <cstring>
 #include <filesystem>
 #include <thread>
+#if MW2_DIAGNOSTICS
+#include "trace.h"   // last: the command trace's wrappers
+#endif
 
 #ifdef MW2_HAVE_VULKAN
 
@@ -602,6 +605,10 @@ namespace vk::renderer::detail
         plan.dump = FrameDumpDirectory() && ((g.frames + 1) % FrameDumpEvery()) == 0 &&
                     FrameDumpDue();
         plan.keep = FlashFramesKept() > 0;
+#if MW2_DIAGNOSTICS
+        static const bool hash = diag::Flag("MW2_HASH_FRAMES");
+        plan.hash = hash;
+#endif
         return plan;
     }
 
@@ -633,6 +640,12 @@ namespace vk::renderer::detail
         if (plan.Any() && g.readBackMapped)
             frame.assign(g.readBackMapped,
                          g.readBackMapped + size_t(g.presentWidth) * g.presentHeight * 4);
+#if MW2_TRACE
+        // MW2_HASH_FRAMES=1: the present image, as the window is handed it.
+        if (plan.hash && !frame.empty())
+            LOGI("renderer: frame %llu hash %016llx", (unsigned long long)g.frames,
+                 (unsigned long long)vk::trace::Fnv64(frame.data(), frame.size()));
+#endif
 
         static const bool onlyWorld = diag::Flag("MW2_DUMP_WORLD_FRAMES");
         static const bool targetsToo = diag::Flag("MW2_DUMP_TARGETS");
@@ -762,6 +775,14 @@ void vk::renderer::FlashSeen(const char* how)
 void vk::renderer::Report()
 {
     if constexpr (!diag::kOn) return;
+#if MW2_TRACE
+    if (const vk::trace::ForcedCounts& forced = vk::trace::Counts();
+        forced.twinResolves || forced.remadeResolves || forced.loneUploads || forced.lostSubmissions)
+        LOGI("renderer: forced paths taken: %llu resolves through the twin, %llu resolve images made again,"
+             " %llu uploads submitted alone, %llu submissions failed as lost",
+             (unsigned long long)forced.twinResolves, (unsigned long long)forced.remadeResolves,
+             (unsigned long long)forced.loneUploads, (unsigned long long)forced.lostSubmissions);
+#endif
     vk::capture::Report();
     vk::display::Report();
     if (!g.draws && !g.frames) return;

@@ -676,6 +676,153 @@ only in a previous run. The file is written back as a union, so it never
 shrinks. `MW2_PIPELINE_CACHE=<file>` persists the driver's `VkPipelineCache`
 in place of `shaders/pipelines.bin`.
 
+## Checking
+
+Diagnostics switches make the renderer a reference that another build of it
+can be held against ([switches.md](switches.md#checking-the-renderer)): the
+command trace, frame hashes and determinism say what a renderer did, and a
+capture of the GPU's input lets two builds do it on the same input.
+
+**The command trace.** `MW2_TRACE_COMMANDS=<file>[:<first frame>:<frames>]`
+writes every Vulkan call the renderer makes that creates, destroys, allocates,
+frees, records, begins, ends, resets or submits, one line each:
+`<seq> <command> key=value ...`. `runtime/gpu/vulkan/trace.h`, included last
+by each renderer file that makes such calls, turns those calls into wrappers
+that also write the line; the extension commands go through wrapped
+`dispatch` pointers. Off, a wrapper is the call and one test of a flag.
+
+- A handle is written as its kind and the ordinal of its creation within the
+  kind: `Image12`, `View3`, `Cmd40`. A handle traced code did not make is named
+  by its role: `Device`, `Physical`, `Queue`, `Cache`, `Layout` (the shaders'
+  pipeline layout), `SetLayout0` to `SetLayout2`, `Present0` to `Present3`
+  (the images handed to the window), `L<shader hash>` and `M<shader hash>`
+  (a shader's library and module, made by the launcher's shared `Build`),
+  `LInput<topology>` and `LOutput_...` (the state libraries). Anything else
+  is written `?` and counted.
+- Floats are written as their bits, `%08x`; arrays whole; a create info's
+  `pNext` chain as its `sType`s, with the structures the renderer chains
+  decoded. A graphics pipeline is written field by field: flags, stages,
+  topology, rasteriser, samples, depth and stencil, blend and colour masks,
+  dynamic states, layout, and the rendering formats and libraries in its chain.
+  A state library, which the launcher's shared code makes, gets a
+  `CreateStateLibrary out=<name> part=<flag>` line with the create info and
+  chain it was made from, field by field.
+- Never written: fence status, query results, waits, time.
+- The submission of a frame is written where it is made (`gpu_time` submits it,
+  and is not traced). The presenter, the backdrop, `gpu_time`, the capture and
+  the launcher's shared code are not traced: in the Rust renderer the first four
+  are Rust.
+- Hash lines: `ArenaHash slot= used= fnv=` over a submission's arena share, at
+  each submission; `UploadSlot slot= segment= from= to= fnv=` over the staging a
+  segment's uploads read, at each segment's end; `ShadowArm page= fnv=` for each
+  page copied into the shadow of guest memory.
+- `frame n=<n>` after each finished frame (the window counts in these),
+  `Present image=Present<i> frame=<n>` as the window is handed it, and
+  `shutdown` when the renderer's shutdown begins. The destroys after that line
+  come in hash-map order.
+- The run ends with `renderer: command trace <file>: <n> lines of <m>, <k>
+  unregistered handles` in the log.
+
+The recorder thread makes the frame's commands later than the ring consumer
+queues them, so the two threads' lines are put in one order: a line the
+consumer writes goes after the commands it queued before it and before those it
+queued after. The order is then the program's, not the threads' timing.
+
+**Frame hashes.** `MW2_HASH_FRAMES=1` reads every present image back, as the
+window is handed it, and logs `renderer: frame <n> hash <fnv64>`.
+
+**Deterministic.** `MW2_DETERMINISTIC=1` takes the clock out of the renderer's
+decisions: the completed submission is the last one submitted (each is waited
+for), an occlusion query's count is waited for, the shaders are built at their
+first draw with no workers and no optimised links, every doomed texture is
+destroyed at once, and neither `gpu_time` nor the pass timing runs.
+
+**Forced fallbacks**, read once when the renderer starts: the depth resolve by
+a rendering instance, every multisampled resolve through the surface's twin, a
+small pool for the drawn resolve's sets, every resolve image made again every
+n frames, one call a draw, every texture upload submitted alone, a small least
+staging buffer, and a device lost after n seconds. The report's `renderer:
+forced paths taken:` line counts the ones that count.
+
+**The capture.** `MW2_CAPTURE_GPU=<dir>:<after presents>:<presents>`
+(`runtime/gpu/stream_capture.h`) records what the command processor reads,
+from the batch in which it has met `<after presents>` swap packets to the
+batch in which it has met `<presents>` more. `MW2_REPLAY_GPU=<dir>`
+(`src/runtime/gpu_replay.rs`) feeds it back with no title running, and
+`tools/replay_diff.py <capture> <exe A> <exe B>` replays it on two
+executables and compares their traces, frame hashes, built-in shaders and
+report counters.
+
+- *Positions.* A position is `(batch, packet)`: the ring batch the consumer
+  took, counted from the capture's start, and the packet within it, counted
+  from 1 over every packet it executes, those of its indirect buffers
+  included. Packet 0 is before the batch's first packet; what happens between
+  two batches belongs to the next one's packet 0. The replay makes the same
+  batches, so a position means the same point in both.
+- *The snapshot*, taken on the consumer between two batches: every non-zero
+  page of physical memory up to the physical heap's top and of the register
+  aperture, and the command processor's state: the register file with its
+  stamps, the bin mask and select, each stage's shader (its words, hash, and
+  the `IM_LOAD` it came from or that it was immediate), the display's colour
+  table, the swap packets met, a pending wait for idle, and the arena's
+  progress (its block, the last sequence, the pending position).
+- *Page versions.* Every guest read on the GPU side notes its range: the
+  indirect buffers, `IM_LOAD` microcode, `LOAD_ALU_CONSTANT` sources and
+  `WAIT_REG_MEM` dwords in `command_processor.cpp`, vertex windows, rectangle
+  corners and indices in `renderer_arena.cpp`, every texture range the cache
+  reads or signs (with the page after it, which the reader can reach), the
+  pages the memory watch copies into its shadow, and the source of an
+  image-pool move. A page is hashed at its first read in a batch, and again at
+  its next read after the consumer wrote it or the memory watch saw the title
+  write it; the page a memory `WAIT_REG_MEM` polls is hashed again before its
+  first poll in any case (the title may have written it, on a page the watch
+  does not guard). It
+  is stored, with its position, when it differs from what the
+  replay will hold there, and when the title wrote it with the bytes it held
+  (the replay's write then takes the fault the title's did). A page the
+  consumer itself wrote (`MEM_WRITE`, `REG_TO_MEM`, the scratch write-back,
+  `EVENT_WRITE*`, occlusion records, image-pool moves) that holds just what
+  the replay's own write will leave is stored as `own`, and the replay only
+  checks it. The ring's pages are left out: the ring is kept as dwords.
+- *Events,* with their positions: each image-pool move the consumer finds
+  queued, at the packet where it first looks at the queue; each
+  `WAIT_REG_MEM`, with the dword its last poll read, how many polls it took
+  and whether it gave up; each register read from the aperture whose value
+  changed; each new arena progress block.
+- *Files* in `<dir>`: `capture.idx`, text: `mw2 gpu capture 2`, then `after`,
+  `ring <physical base> <dwords>`, `writeback <physical>`, `top <physical heap
+  top>`, `snapshot <n>` and n lines `<page> <blob>`, then per batch `batch <n>
+  ring <dwords> pages <k> events <e>` followed by its page lines `<packet>
+  <page> <blob> [own]` and event lines (`pool <packet> <destination> <source>
+  <size> <stream constant> <frame>`, `wait <packet> <memory> <address>
+  <value> <polls> <timed out>`, `aperture <packet> <register> <value>`,
+  `arena <packet> <block>`), in position order, and `end <batches>`;
+  `ring.bin`, every batch's ring dwords as the guest held them; `pages.blob`,
+  4 KB pages addressed by content, blob n at n x 4096, with `pages.idx`, each
+  blob's hash; `state.bin`, the command processor's state. Pages are guest
+  addresses shifted right 12, in hexadecimal. A thread of the capture's own
+  writes the files.
+- *The replay* skips the title: guest memory, the physical heap's top, the
+  renderer and its window, the snapshot and the command processor's state
+  (`mw2_cp_restore_for_replay`), the ring from its first dword. Then each
+  batch, once the consumer has caught up: its journal handed to the command
+  processor's hook, its packet-0 pages written through their plain addresses
+  (so that the memory watch takes real faults), its ring dwords, the write
+  pointer; the consumer is waited for, 30 s at most. Before each packet the
+  hook writes that packet's pages, queues its image-pool moves, sets the
+  aperture registers and the arena block, and makes a journalled
+  `WAIT_REG_MEM` poll as often as it did: one the first poll met reads its
+  dword as the capture's page left it (an `own` page there is checked), one met later
+  has its dword written before the last poll, as the title's write during the
+  wait. The capture writes an `own` page at the first read of it after the
+  consumer wrote it, and the replay checks it at the same read: the first
+  read of that page in that packet since the replay's own write to it (an
+  image-pool move whose source and destination share a page reads it before
+  writing it), or once the packet is done. After the last batch, two blanks, then
+  the reports: `replay: <n> divergences, <m> wait timeouts`, and a line of
+  counts that ends `; the replay did not finish` when the replay was cut short. The interrupts
+  the stream raises go nowhere: no title set a callback.
+
 ## Not implemented
 
 - Resolve write-back: the CPU cannot read resolved pixels from guest memory.

@@ -14,6 +14,9 @@
 #include "../log.h"
 #include "../kernel/kernel.h"
 #include "vulkan/renderer.h"
+#if MW2_DIAGNOSTICS
+#include "stream_capture.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -365,11 +368,17 @@ namespace
         const uint32_t va = record ? kernel::FromPhysical(record) : 0;
         if (!va) return;
         // Little-endian, so the host's own word order is what the title wants.
+#if MW2_DIAGNOSTICS
+        gpu::stream::NoteWrite(va, kRecordBytes);
+#endif
         auto* w = GuestPtr<uint32_t>(va);
         w[0] = count; w[1] = 0;     // total, lanes A and B
         w[2] = 0;     w[3] = 0;     // z-fail
         w[4] = count; w[5] = 0;     // z-pass, which is the one the title reads
         w[6] = 0;     w[7] = 0;     // stencil-fail
+#if MW2_DIAGNOSTICS
+        gpu::stream::NoteWritten(va, kRecordBytes);
+#endif
     }
 
     // The title reads the count as a signed difference; saturate rather than
@@ -525,6 +534,9 @@ namespace
         }
         const uint32_t va = kernel::FromPhysical(physicalAddress);
         if (!va) return;
+#if MW2_DIAGNOSTICS
+        gpu::stream::NoteRead(va, uint64_t(sizeDwords) * 4);
+#endif
 
         Source ib{ va, 0, 0, sizeDwords };
         Execute(ib, depth + 1);
@@ -583,8 +595,56 @@ namespace
             default: return false;
             }
         };
+#if MW2_DIAGNOSTICS
+        // MW2_REPLAY_GPU: polled as often as the capture says it was, a timeout taken
+        // as one. A wait the first poll met was met by what memory held, which the
+        // capture looked at just before (NotePolled): the replay holds it, and an `own`
+        // page, the consumer's own write, is checked. One met later was met by the
+        // title's write during the wait, which the replay makes before the last poll.
+        if (gpu::stream::Replaying())
+        {
+            if (memory) gpu::stream::NotePolled(kernel::FromPhysical(address & ~3u));
+            gpu::stream::Wait wait;
+            if (!gpu::stream::ReplayWait(wait)) gpu::stream::Diverged("a WAIT_REG_MEM the capture does not have");
+            else
+            {
+                g.regMemWaits++;
+                for (uint32_t poll = 1; poll <= wait.polls; poll++)
+                {
+                    if (poll > 1)
+                    {
+                        DeliverOcclusionQueries();
+                        vk::renderer::Idle();
+                        std::this_thread::sleep_for(std::chrono::microseconds(50));
+                    }
+                    const bool last = poll == wait.polls;
+                    if (last && poll > 1 && !wait.timedOut && memory)
+                        *const_cast<volatile uint32_t*>(word) = wait.value;
+                    const bool matched = matches(current());
+                    if (poll == 1 && !matched) g.regMemStalls++;
+                    if (matched != (last && !wait.timedOut))
+                        gpu::stream::Diverged(matched ? "a WAIT_REG_MEM satisfied sooner than captured"
+                                                      : "a WAIT_REG_MEM not satisfied where captured");
+                }
+                if (wait.timedOut) g.regMemTimeouts++;
+                return;
+            }
+        }
+        if (memory) gpu::stream::NotePolled(kernel::FromPhysical(address & ~3u));
+        uint32_t polls = 1;
+        const auto capturedWait = [&](bool timedOut) {
+            if (gpu::stream::Capturing())
+                gpu::stream::WaitDone(memory, address, memory ? uint32_t(*word) : current(), polls, timedOut);
+        };
+#endif
         g.regMemWaits++;
-        if (matches(current())) return;
+        if (matches(current()))
+        {
+#if MW2_DIAGNOSTICS
+            capturedWait(false);
+#endif
+            return;
+        }
         g.regMemStalls++;
 
         const auto began = std::chrono::steady_clock::now();
@@ -595,11 +655,17 @@ namespace
             DeliverOcclusionQueries();
             vk::renderer::Idle();
             std::this_thread::sleep_for(std::chrono::microseconds(50));
+#if MW2_DIAGNOSTICS
+            polls++;
+#endif
             if (matches(current())) { matched = true; break; }
             if (waited() > std::chrono::milliseconds(500)) break;
         }
         const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(waited()).count();
         g.regMemWaitMicros += uint64_t(micros);
+#if MW2_DIAGNOSTICS
+        capturedWait(!matched);
+#endif
         if (matched) return;
         g.regMemTimeouts++;
         static uint32_t told = 0;
@@ -773,6 +839,9 @@ namespace
             const uint32_t sizeDwords = startSize & 0xFFFF;
             if (!va || !sizeDwords || sizeDwords > (64u << 10)) break;
             const uint32_t physical = addressType & ~3u;
+#if MW2_DIAGNOSTICS
+            gpu::stream::NoteRead(va, uint64_t(sizeDwords) * 4);
+#endif
             State::Loaded& loaded = g.loads[uint64_t(physical) << 17 | uint64_t(sizeDwords) << 1 | (addressType & 1)];
             const bool watched = va == guest::kPhysicalBase + physical && gpu::watch::Enabled();
             if (!(loaded.stamp && gpu::watch::Unwritten(physical, sizeDwords * 4, loaded.stamp)))
@@ -829,6 +898,9 @@ namespace
             const uint32_t kind  = (offsetType >> 16) & 0xFF;
             const uint32_t va = kernel::FromPhysical(address);
             if (kind >= 5 || !va || !sizeDwords) break;
+#if MW2_DIAGNOSTICS
+            gpu::stream::NoteRead(va, uint64_t(sizeDwords) * 4);
+#endif
             const uint32_t first = kConstantWindows[kind] + index;
             if (first + sizeDwords > gpu::kRegisterCount)
             {
@@ -933,6 +1005,9 @@ namespace
             }
             g.typeCount[type]++;
             g.packets++;
+#if MW2_DIAGNOSTICS
+            gpu::stream::Packet();
+#endif
 
             switch (type)
             {
@@ -967,6 +1042,119 @@ namespace
     }
 }
 
+#if MW2_DIAGNOSTICS
+uint64_t gpu::detail::SwapsParsed() { return g.swapsParsed; }
+
+namespace
+{
+    // The command processor's part of a capture's state.bin. Fixed layout: a
+    // replay reads it back field for field (mw2_cp_restore_for_replay).
+    struct SavedState
+    {
+        uint32_t magic = 0x4332574Du;   // "MW2C"
+        uint32_t version = 1;
+        uint32_t values[gpu::kRegisterCount];
+        uint32_t lutReady;
+        uint64_t stamps[gpu::kStampBlocks];
+        uint64_t writes;
+        uint64_t binMask, binSelect;
+        // Each stage's shader: its hash, the IM_LOAD it came from (0: immediate),
+        // and its length; the words follow the structure, vertex then pixel.
+        uint64_t shaderHash[2], shaderLoad[2];
+        uint32_t shaderWords[2], shaderImmediate[2];
+        uint32_t displayLut[256], displayLutPending[256];
+        uint64_t swapsParsed;
+        uint32_t idleSinceDraw;
+        uint32_t arenaBlock, arenaSequence, arenaPending, arenaHavePosition;
+        uint32_t reserved;
+    };
+}
+
+void gpu::detail::SaveCommandProcessor(std::vector<uint8_t>& out)
+{
+    SavedState saved{};
+    saved.magic = SavedState{}.magic;
+    saved.version = SavedState{}.version;
+    std::memcpy(saved.values, g.registers.values, sizeof saved.values);
+    std::memcpy(saved.stamps, g.registers.stamps, sizeof saved.stamps);
+    saved.writes = g.registers.writes;
+    saved.binMask = g.binMask;
+    saved.binSelect = g.binSelect;
+    for (uint32_t t = 0; t < 2; t++)
+    {
+        saved.shaderHash[t] = g.shaderHash[t];
+        saved.shaderWords[t] = g.shader[t] ? uint32_t(g.shader[t]->size()) : 0;
+        saved.shaderImmediate[t] = g.shader[t] == &g.immediate[t];
+        for (const auto& [key, loaded] : g.loads)
+            if (g.shader[t] == &loaded.code) saved.shaderLoad[t] = key;
+    }
+    {
+        std::lock_guard<std::mutex> guard(g.displayLutLock);
+        std::memcpy(saved.displayLut, g.displayLut, sizeof saved.displayLut);
+    }
+    std::memcpy(saved.displayLutPending, g.displayLutPending, sizeof saved.displayLutPending);
+    saved.lutReady = g.displayLutReady.load(std::memory_order_acquire);
+    saved.swapsParsed = g.swapsParsed;
+    saved.idleSinceDraw = g.idleSinceDraw;
+    const ArenaState arena = SaveArena();
+    saved.arenaBlock = arena.block;
+    saved.arenaSequence = arena.sequence;
+    saved.arenaPending = arena.pending;
+    saved.arenaHavePosition = arena.havePosition;
+    out.resize(sizeof saved);
+    std::memcpy(out.data(), &saved, sizeof saved);
+    for (uint32_t t = 0; t < 2; t++)
+        if (g.shader[t])
+        {
+            const size_t at = out.size();
+            out.resize(at + g.shader[t]->size() * 4);
+            std::memcpy(out.data() + at, g.shader[t]->data(), g.shader[t]->size() * 4);
+        }
+}
+
+// The replay's step 4 (src/runtime/gpu_replay.rs): the command processor and the
+// arena's progress as the capture found them. False when `bytes` is not a state.bin
+// this build wrote.
+extern "C" bool mw2_cp_restore_for_replay(const uint8_t* bytes, uint64_t size)
+{
+    SavedState saved;
+    if (!bytes || size < sizeof saved) return false;
+    std::memcpy(&saved, bytes, sizeof saved);
+    if (saved.magic != SavedState{}.magic || saved.version != SavedState{}.version) return false;
+    if (size != sizeof saved + (uint64_t(saved.shaderWords[0]) + saved.shaderWords[1]) * 4) return false;
+    std::memcpy(g.registers.values, saved.values, sizeof saved.values);
+    std::memcpy(g.registers.stamps, saved.stamps, sizeof saved.stamps);
+    g.registers.writes = saved.writes;
+    g.binMask = saved.binMask;
+    g.binSelect = saved.binSelect;
+    const uint8_t* words = bytes + sizeof saved;
+    for (uint32_t t = 0; t < 2; t++)
+    {
+        g.shader[t] = nullptr;
+        g.shaderHash[t] = saved.shaderHash[t];
+        if (!saved.shaderWords[t]) continue;
+        // An IM_LOAD's microcode goes back where that load keeps it, unstamped, so the
+        // next load of it reads memory as one the watch knows nothing of would.
+        std::vector<uint32_t>& code = saved.shaderImmediate[t] ? g.immediate[t] : g.loads[saved.shaderLoad[t]].code;
+        code.resize(saved.shaderWords[t]);
+        std::memcpy(code.data(), words, code.size() * 4);
+        words += code.size() * 4;
+        g.shader[t] = &code;
+        if (!saved.shaderImmediate[t]) g.loads[saved.shaderLoad[t]].hash = saved.shaderHash[t];
+    }
+    {
+        std::lock_guard<std::mutex> guard(g.displayLutLock);
+        std::memcpy(g.displayLut, saved.displayLut, sizeof g.displayLut);
+    }
+    std::memcpy(g.displayLutPending, saved.displayLutPending, sizeof g.displayLutPending);
+    g.displayLutReady.store(saved.lutReady != 0, std::memory_order_release);
+    g.swapsParsed = saved.swapsParsed;
+    g.idleSinceDraw = saved.idleSinceDraw != 0;
+    RestoreArena({ saved.arenaBlock, saved.arenaSequence, saved.arenaPending, saved.arenaHavePosition });
+    return true;
+}
+#endif
+
 void gpu::detail::DeliverOcclusionQueries()
 {
     vk::renderer::CollectOcclusionQueries(WriteEndRecord);
@@ -982,7 +1170,13 @@ void gpu::detail::ExecuteRing(uint32_t base, uint32_t readIndex, uint32_t mask, 
 uint32_t gpu::detail::RegisterOrAperture(uint32_t index)
 {
     if (const uint32_t v = g.registers[index]) return v;
+#if MW2_DIAGNOSTICS
+    const uint32_t held = *GuestPtr<be32>(kRegisterAperture + index * 4);
+    if (gpu::stream::Capturing()) gpu::stream::ApertureRead(index, held);
+    return held;
+#else
     return *GuestPtr<be32>(kRegisterAperture + index * 4);
+#endif
 }
 
 bool gpu::detail::Rendering()
@@ -1003,7 +1197,13 @@ void gpu::detail::WritePhysical(uint32_t physicalAddress, uint32_t value)
         if (const Watch& w = Watched(); va >= w.lo && va < w.hi)
             LOGK("watch: command processor writes %08X = %08X (physical %08X, was %08X)",
              va, value, physicalAddress, uint32_t(*GuestPtr<be32>(va)));
+#if MW2_DIAGNOSTICS
+    gpu::stream::NoteWrite(va, 4);
     *GuestPtr<be32>(va) = value;
+    gpu::stream::NoteWritten(va, 4);
+#else
+    *GuestPtr<be32>(va) = value;
+#endif
 }
 
 bool gpu::DisplayColourTable(uint32_t out[256])

@@ -146,6 +146,13 @@ list(REMOVE_ITEM RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/rust_calls.cpp")
 # What the Rust renderer alone has: the C++ renderer's calls into it.
 list(REMOVE_ITEM RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/rust_renderer.cpp"
                                  "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_translator_rust.cpp")
+# The renderer's reference instruments, diagnostics alone (runtime/gpu/vulkan/trace.h,
+# runtime/gpu/stream_capture.h):
+# a release links not even the empty object.
+if(NOT MW2_DIAGNOSTICS)
+    list(REMOVE_ITEM RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/trace.cpp"
+                                     "${CMAKE_SOURCE_DIR}/runtime/gpu/stream_capture.cpp")
+endif()
 # FFmpeg's decoder behind C calls, which only tools/xma_diff.py builds.
 list(REMOVE_ITEM RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/apu/xma_codec.cpp")
 
@@ -372,6 +379,7 @@ add_executable(upload-texture
     "${CMAKE_SOURCE_DIR}/runtime/gpu/texture.cpp"
     "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/texture_cache.cpp"
     "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/image_memory.cpp"
+    "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/trace.cpp"
     "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/texture_formats.cpp"
     "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/pipeline.cpp"
     "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_translator.cpp"

@@ -27,6 +27,9 @@
 #include <thread>
 
 #include <immintrin.h>
+#if MW2_DIAGNOSTICS
+#include "trace.h"   // last: the command trace's wrappers
+#endif
 
 namespace vk::record::detail
 {
@@ -76,6 +79,9 @@ namespace
     void Run()
     {
         crash::RegisterThread("recorder");
+#if MW2_TRACE
+        vk::trace::RecorderThread();
+#endif
         uint8_t* const ring = q.ring;
         uint64_t at = q.made.load(std::memory_order_relaxed);
         uint64_t calls = 0;
@@ -114,6 +120,10 @@ namespace
                 }
                 at += header->bytes;
                 calls++;
+#if MW2_TRACE
+                // The consumer's trace lines that come after this call (trace.h).
+                if (vk::trace::On()) vk::trace::RecorderMade(at);
+#endif
                 q.made.store(at, std::memory_order_seq_cst);
                 if (q.waiters.load(std::memory_order_seq_cst)) q.made.notify_all();
             }
@@ -228,6 +238,9 @@ void vk::record::Start(void (*settle)())
     q.wokenFrom = ~0ull;
     q.stopping = false;
     detail::threaded = true;
+#if MW2_TRACE
+    vk::trace::RecorderStarted();
+#endif
     q.thread = std::thread(Run);
 }
 
@@ -236,6 +249,9 @@ void vk::record::Stop()
     if (!detail::threaded) return;
     Host([] { q.stopping = true; });
     q.thread.join();
+#if MW2_TRACE
+    vk::trace::RecorderStopped();
+#endif
     detail::threaded = false;
     ::operator delete(q.ring, std::align_val_t(64));
     q.ring = nullptr;

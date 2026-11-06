@@ -10,6 +10,9 @@
 #include "../../report.h"
 
 #include <cstring>
+#if MW2_DIAGNOSTICS
+#include "trace.h"   // last: the command trace's wrappers
+#endif
 
 #ifdef MW2_HAVE_VULKAN
 
@@ -208,6 +211,12 @@ namespace vk::renderer::detail
         const VkDevice device = g.device;
         const VkQueue queue = g.queue;
         const VkFence fence = slot.fence;
+#if MW2_TRACE
+        // What the submission's draws read out of the arena (slow: write-combined memory).
+        if (vk::trace::Wanted())
+            vk::trace::Note("ArenaHash slot=%u used=%u fnv=%016llx", g.slot, g.arenaUsed,
+                            (unsigned long long)vk::trace::FnvWriteCombined(g.arenaMapped + g.arenaBase, g.arenaUsed));
+#endif
         Record([=, buffers = std::move(buffers)](VkCommandBuffer command) {
             const bool ended = vkEndCommandBuffer(command) == VK_SUCCESS;
             if (!ended) LOGW("renderer: a frame's command buffer would not end");
@@ -218,9 +227,22 @@ namespace vk::renderer::detail
             vkResetFences(device, 1, &fence);
             // Whatever happens the fence is signalled, or whoever waits for
             // this slot waits for ever.
+#if MW2_TRACE
+            // gpu_time submits it, untraced; MW2_FAKE_DEVICE_LOST fails it instead.
+            VkResult submitted = VK_ERROR_DEVICE_LOST;
+            if (ended && vk::trace::DeviceLostFaked()) vk::trace::Counts().lostSubmissions++;
+            else if (ended)
+            {
+                vk::trace::Submission(queue, submit, fence);
+                submitted = vk::gpu_time::Submit(queue, submit, fence);
+            }
+            if (!ended || vk::pipeline::Failed(submitted, "a frame's submission"))
+                vkQueueSubmit(queue, 0, nullptr, fence);
+#else
             if (!ended || vk::pipeline::Failed(vk::gpu_time::Submit(queue, submit, fence),
                                                "a frame's submission"))
                 vkQueueSubmit(queue, 0, nullptr, fence);
+#endif
         });
         // The GPU gets it now, not when more calls have gathered behind it.
         vk::record::Flush();
@@ -256,6 +278,15 @@ namespace vk::renderer::detail
     // value from a little earlier only makes the answer more cautious.
     void NoteCompleted()
     {
+#if MW2_TRACE
+        // MW2_DETERMINISTIC: what the GPU has finished is what was submitted.
+        if (vk::trace::Deterministic())
+        {
+            for (State::Slot& slot : g.slots) WaitForSlot(slot, "a frame slot's fence");
+            g.completedSerial = g.submissionSerial;
+            return;
+        }
+#endif
         uint64_t oldestRunning = UINT64_MAX;
         for (State::Slot& slot : g.slots)
             if (slot.inFlight && slot.serial < oldestRunning &&
@@ -278,6 +309,9 @@ namespace vk::renderer::detail
         if (plan.Any()) RecordReadBack(present);
         if (!Submit(plan.Any())) { Skip("frame submission failed"); return; }
         g.frames++;
+#if MW2_TRACE
+        vk::trace::Frame(g.frames);
+#endif
         vk::textures::NewFrame();
 
         // The title does not redraw the world every time it presents -- better than
@@ -328,7 +362,14 @@ namespace vk::renderer::detail
         g.presentIndex = (g.presentIndex + 1) % kPresentImages;
         ExamineFrame(worldDrawn, plan);
         const uint32_t width = g.presentWidth, height = g.presentHeight;
+#if MW2_TRACE
+        vk::record::Host([=] {
+            vk::trace::Present(present, frame);
+            vk::ShowImage(present, width, height, frame);
+        });
+#else
         vk::record::Host([=] { vk::ShowImage(present, width, height, frame); });
+#endif
     }
 }
 
@@ -345,6 +386,14 @@ namespace
         if (query.serial > g.submissionSerial) return false;
         const State::Slot& slot = g.slots[query.slot];
         if (slot.serial != query.serial || !slot.inFlight) return true;
+#if MW2_TRACE
+        // MW2_DETERMINISTIC: a submitted bracket's count is waited for, not asked after.
+        if (vk::trace::Deterministic())
+        {
+            WaitForSlot(g.slots[query.slot], "an occlusion query's submission");
+            return true;
+        }
+#endif
         // Queued, and not yet handed to the GPU by the recorder thread.
         return vk::record::Done(slot.queuedAt) &&
                vkGetFenceStatus(g.device, slot.fence) == VK_SUCCESS;

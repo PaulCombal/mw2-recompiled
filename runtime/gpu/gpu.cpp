@@ -18,6 +18,9 @@
 #include "vulkan/presenter.h"
 #include "vulkan/renderer.h"
 #include "vulkan/texture_cache.h"
+#if MW2_DIAGNOSTICS
+#include "stream_capture.h"
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -129,7 +132,13 @@ namespace
                 {
                     stutters::Timed timed(stutters::kRingBatches);
                     report::Timed spent(report::kExecuting);
+#if MW2_DIAGNOSTICS
+                    gpu::stream::BatchBegin(g.ring.base, g.ring.readIndex, g.ring.mask, available);
+#endif
                     ExecuteRing(g.ring.base, g.ring.readIndex, g.ring.mask, available);
+#if MW2_DIAGNOSTICS
+                    gpu::stream::BatchEnd();
+#endif
                 }
                 pacing::Note(pacing::kBatchEnd);
                 if constexpr (diag::kOn)
@@ -239,6 +248,15 @@ void gpu::detail::RingPosition(uint32_t& read, uint32_t& written, uint32_t& writ
     writeBack = g.rptrWriteBack ? uint32_t(*GuestPtr<be32>(g.rptrWriteBack)) : 0;
 }
 
+#if MW2_DIAGNOSTICS
+void gpu::detail::RingLayout(uint32_t& base, uint32_t& dwords, uint32_t& writeBack)
+{
+    base = g.ring.base;
+    dwords = g.ring.dwords;
+    writeBack = g.rptrWriteBack;
+}
+#endif
+
 void gpu::Initialise()
 {
     if (g.running.exchange(true)) return;
@@ -258,6 +276,9 @@ void gpu::Shutdown()
     if (!g.running.exchange(false)) return;
     if (g.vblank.joinable()) g.vblank.join();
     if (g.worker.joinable()) g.worker.join();
+#if MW2_DIAGNOSTICS
+    gpu::stream::Shutdown();
+#endif
     // The window thread first, because it shows an image the renderer owns.
     vk::StopPresenting();
     vk::renderer::Shutdown();
@@ -327,4 +348,8 @@ void gpu::Report()
              " %.0f ms with nothing to read", life, busy, 100.0 * busy / life, life - busy);
     }
     ReportCommandProcessor();
+#if MW2_DIAGNOSTICS
+    ReportArena();
+    gpu::stream::Report();
+#endif
 }

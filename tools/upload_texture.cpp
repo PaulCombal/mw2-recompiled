@@ -57,6 +57,14 @@ namespace gpu::watch
     bool Unwritten(uint32_t, uint32_t, uint64_t) { return false; }
 }
 namespace vk::renderer { uint64_t CompletedSubmission() { return 0; } }
+#if MW2_DIAGNOSTICS
+// Nor a capture of the GPU's input to note its reads.
+namespace gpu::stream
+{
+    namespace detail { bool counting = false; }
+    void ReadPhysicalSlow(uint32_t, uint64_t) {}
+}
+#endif
 // Nor a recorder thread with commands queued ahead of an upload.
 namespace vk::record { void Drain() {} }
 // Nor frames for the stutter detector to time, nor a bug report to time the uploads

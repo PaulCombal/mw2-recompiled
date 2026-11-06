@@ -232,3 +232,83 @@ pub mod run {
         (compiled, why, device)
     }
 }
+
+// The command processor's side of MW2_REPLAY_GPU (runtime/gpu/stream_capture.cpp and
+// command_processor.cpp), which only gpu_replay.rs asks for.
+#[cfg(all(feature = "diagnostics", not(any(mw2_rig, mw2_screens_rig, mw2_hook_rig))))]
+pub mod replay {
+    /// Mw2ReplayPage: a page to write before the packet, or with `own`, one the
+    /// consumer writes itself, to be found as captured at its next read.
+    #[repr(C)]
+    pub struct Page {
+        pub packet: u32,
+        pub page: u32,
+        pub own: u32,
+        pub reserved: u32,
+        pub bytes: *const u8,
+    }
+
+    /// Mw2ReplayEvent, its fields by kind (stream_capture.h).
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    pub struct Event {
+        pub kind: u32,
+        pub packet: u32,
+        pub a: u32,
+        pub b: u32,
+        pub c: u32,
+        pub d: u32,
+        pub e: u64,
+    }
+
+    pub const POOL: u32 = 1;
+    pub const WAIT: u32 = 2;
+    pub const APERTURE: u32 = 3;
+    pub const ARENA: u32 = 4;
+
+    /// Mw2ReplayBatch.
+    #[repr(C)]
+    pub struct Batch {
+        pub pages: *const Page,
+        pub page_count: u64,
+        pub events: *const Event,
+        pub event_count: u64,
+    }
+
+    unsafe extern "C" {
+        fn mw2_replay_begin();
+        fn mw2_replay_batch(batch: *const Batch);
+        fn mw2_replay_consumer_read() -> u32;
+        fn mw2_replay_finished(wait_timeouts: u64);
+        fn mw2_cp_restore_for_replay(bytes: *const u8, size: u64) -> bool;
+    }
+
+    /// From here on the command processor counts positions and takes the journal.
+    pub fn begin() {
+        unsafe { mw2_replay_begin() }
+    }
+
+    /// The command processor and the arena's progress, from the capture's state.bin.
+    pub fn restore(state: &[u8]) -> bool {
+        unsafe { mw2_cp_restore_for_replay(state.as_ptr(), state.len() as u64) }
+    }
+
+    /// The batch's journal, for the consumer to take at the batch's start.
+    ///
+    /// # Safety
+    /// `batch` and everything it points at live until the consumer has executed the
+    /// batch (its read index has reached the write index stored after this call).
+    pub unsafe fn hand(batch: *const Batch) {
+        unsafe { mw2_replay_batch(batch) }
+    }
+
+    /// How far the consumer has read the ring.
+    pub fn consumer_read() -> u32 {
+        unsafe { mw2_replay_consumer_read() }
+    }
+
+    /// The last batch is done: the driver's timeouts, for the report.
+    pub fn finished(wait_timeouts: u64) {
+        unsafe { mw2_replay_finished(wait_timeouts) }
+    }
+}

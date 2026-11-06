@@ -3,6 +3,20 @@
 // display table all need.
 #include <cstdint>
 #include <vulkan/vulkan.h>
+#include "../../diagnostics.h"
+
+#if MW2_DIAGNOSTICS && defined(MW2_HAVE_VULKAN)
+namespace vk::trace
+{
+    // trace.cpp: vkCmdPipelineBarrier, traced when it goes into the renderer's
+    // command buffers.
+    void UtilBarrier(VkCommandBuffer command, VkPipelineStageFlags srcStageMask,
+                     VkPipelineStageFlags dstStageMask, VkDependencyFlags dependencyFlags,
+                     uint32_t memoryBarrierCount, const VkMemoryBarrier* pMemoryBarriers,
+                     uint32_t bufferMemoryBarrierCount, const VkBufferMemoryBarrier* pBufferMemoryBarriers,
+                     uint32_t imageMemoryBarrierCount, const VkImageMemoryBarrier* pImageMemoryBarriers);
+}
+#endif
 
 namespace vk::util
 {
@@ -31,7 +45,11 @@ namespace vk::util
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.image = image;
         barrier.subresourceRange = { aspect, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS };
+#if MW2_DIAGNOSTICS && defined(MW2_HAVE_VULKAN)
+        vk::trace::UtilBarrier(cmd, sourceStage, destinationStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+#else
         vkCmdPipelineBarrier(cmd, sourceStage, destinationStage, 0, 0, nullptr, 0, nullptr,
                              1, &barrier);
+#endif
     }
 }

@@ -27,6 +27,9 @@
 #include "gpu/vulkan/texture_cache.h"
 #include "gpu/vulkan/renderer.h"
 #include "kernel/kernel.h"
+#if MW2_DIAGNOSTICS
+#include "gpu/stream_capture.h"
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -42,6 +45,9 @@ namespace
         uint32_t destination = 0, source = 0, size = 0;   // guest virtual
         uint32_t streamConstant = 0;                       // c0.x of the copy draw
         uint64_t frame = 0;                                // the guest frame asked in
+#if MW2_DIAGNOSTICS
+        bool journalled = false;   // MW2_CAPTURE_GPU has it, at the draw the consumer first saw it
+#endif
     };
     std::mutex g_pendingLock;
     std::vector<PendingCopy> g_pending;
@@ -70,11 +76,21 @@ namespace
     void Copy(uint32_t destination, uint32_t source, uint32_t size, bool inStream)
     {
         if (inStream) vk::renderer::BeforeStreamWrite(kernel::ToPhysical(destination), size);
+#if MW2_DIAGNOSTICS
+        if (inStream)
+        {
+            gpu::stream::NoteRead(source, size);
+            gpu::stream::NoteWrite(destination, size);
+        }
+#endif
         // The pool never asks for a move that overlaps; memmove says so for free.
         watchpoint::Suspend();
         gpu::watch::WillWrite(destination, size);
         std::memmove(guest::Base() + destination, guest::Base() + source, size);
         watchpoint::Resume();
+#if MW2_DIAGNOSTICS
+        if (inStream) gpu::stream::NoteWritten(destination, size);
+#endif
         if constexpr (diag::kOn)
         {
             std::lock_guard held(g_moveLock);
@@ -111,6 +127,35 @@ GUEST_HOOK(T_Image_FlushMove)
     Copy(destination, source, size, false);
 }
 
+#if MW2_DIAGNOSTICS
+namespace
+{
+    // MW2_CAPTURE_GPU: what the consumer finds in the queue that it has not seen
+    // before, at the packet it looks. Under g_pendingLock.
+    void JournalPending()
+    {
+        if (!gpu::stream::Capturing()) return;
+        for (PendingCopy& c : g_pending)
+            if (!c.journalled)
+            {
+                c.journalled = true;
+                gpu::stream::PoolSeen(c.destination, c.source, c.size, c.streamConstant, c.frame);
+            }
+    }
+}
+
+// MW2_REPLAY_GPU: a move the capture saw the title queue, queued as its hook would.
+void imagepool::QueueForReplay(uint32_t destination, uint32_t source, uint32_t size,
+                               uint32_t streamConstant, uint64_t frame)
+{
+    g_asked.fetch_add(1, std::memory_order_relaxed);
+    g_bytes.fetch_add(size, std::memory_order_relaxed);
+    std::lock_guard held(g_pendingLock);
+    g_pending.push_back({ destination, source, size, streamConstant, frame });
+    g_pendingCount.store(uint32_t(g_pending.size()), std::memory_order_relaxed);
+}
+#endif
+
 bool imagepool::CopiesWaiting() { return g_pendingCount.load(std::memory_order_relaxed) != 0; }
 
 void imagepool::AtDraw(uint32_t streamConstant, uint64_t vertexShader)
@@ -119,6 +164,9 @@ void imagepool::AtDraw(uint32_t streamConstant, uint64_t vertexShader)
     PendingCopy copy;
     {
         std::lock_guard held(g_pendingLock);
+#if MW2_DIAGNOSTICS
+        JournalPending();
+#endif
         auto it = std::find_if(g_pending.begin(), g_pending.end(), [&](const PendingCopy& c) {
             return c.streamConstant == streamConstant;
         });
@@ -140,6 +188,9 @@ void imagepool::AtFrameEnd(uint64_t parsedFrames)
     std::vector<PendingCopy> overdue;
     {
         std::lock_guard held(g_pendingLock);
+#if MW2_DIAGNOSTICS
+        JournalPending();
+#endif
         auto late = std::stable_partition(g_pending.begin(), g_pending.end(),
                                           [&](const PendingCopy& c) {
                                               return parsedFrames <= c.frame + 1;

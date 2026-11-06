@@ -6,6 +6,9 @@
 #include <iterator>
 #include <map>
 #include <vector>
+#if MW2_DIAGNOSTICS
+#include "trace.h"   // last: the command trace's wrappers
+#endif
 
 namespace
 {

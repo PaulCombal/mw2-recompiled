@@ -39,6 +39,9 @@ void vk::renderer::Idle() {}
 #include "../../render_size.h"
 
 #include <algorithm>
+#if MW2_DIAGNOSTICS
+#include "trace.h"   // last: the command trace's wrappers
+#endif
 
 namespace vk::renderer::detail
 {
@@ -78,6 +81,15 @@ bool vk::renderer::Initialise()
     g.physical = static_cast<VkPhysicalDevice>(vk::pipeline::PhysicalDevice());
     g.queue = static_cast<VkQueue>(vk::pipeline::Queue());
     if (!g.device || !g.queue) { g.device = VK_NULL_HANDLE; return false; }
+#if MW2_TRACE
+    // Before anything traced is made, the texture cache's start included.
+    {
+        VkDescriptorSetLayout sets[3];
+        for (uint32_t i = 0; i < 3; i++) sets[i] = static_cast<VkDescriptorSetLayout>(vk::pipeline::SetLayout(i));
+        vk::trace::Start(g.device, g.physical, g.queue, static_cast<VkPipelineCache>(vk::pipeline::Cache()),
+                         static_cast<VkPipelineLayout>(vk::pipeline::Layout()), sets, 3, &vk::record::Position);
+    }
+#endif
     if (!vk::textures::Initialise()) { g.device = VK_NULL_HANDLE; return false; }
 
     vkGetPhysicalDeviceMemoryProperties(g.physical, &g.memory);
@@ -127,6 +139,9 @@ bool vk::renderer::Initialise()
             (properties.limits.sampledImageDepthSampleCounts & used) == used &&
             (depth.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) &&
             (floatDepth.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
+#if MW2_TRACE
+        if (vk::trace::Forcing().instanceDepthResolve) g.drawnDepthResolve = false;
+#endif
         if (g.msaa)
             LOGI("renderer: multisampling on: the device draws at%s%s%s%s, the title's 2x and 4x"
                  " surfaces are drawn at %ux and %ux%s, depth resolved by %s",
@@ -233,8 +248,17 @@ bool vk::renderer::Initialise()
     queries.queryCount = kGuestQueryRing;
     if (vkCreateQueryPool(g.device, &queries, nullptr, &g.guestQueries) != VK_SUCCESS)
         g.guestQueries = VK_NULL_HANDLE;
+#if MW2_TRACE
+    // MW2_DETERMINISTIC: nothing the GPU's clock says.
+    if (!vk::trace::Deterministic())
+    {
+        vk::gpu_time::Start(g.physical, g.device, g.queue, vk::pipeline::QueueFamily());
+        StartPassTimes();
+    }
+#else
     vk::gpu_time::Start(g.physical, g.device, g.queue, vk::pipeline::QueueFamily());
     StartPassTimes();
+#endif
 
     VkFenceCreateInfo fence{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
     for (State::Slot& slot : g.slots)
@@ -319,6 +343,13 @@ bool vk::renderer::Initialise()
         dispatch.drawMultiIndexed = PFN_vkCmdDrawMultiIndexedEXT(command("vkCmdDrawMultiIndexedEXT"));
         if (!dispatch.drawMulti || !dispatch.drawMultiIndexed) dispatch.multiDraw = 0;
     }
+#if MW2_TRACE
+    if (vk::trace::Forcing().noMultiDraw) dispatch.multiDraw = 0;
+    vk::trace::WrapDispatch(dispatch.beginRendering, dispatch.endRendering, dispatch.setCullMode,
+                            dispatch.setFrontFace, dispatch.setDepthTestEnable, dispatch.setDepthWriteEnable,
+                            dispatch.setDepthCompareOp, dispatch.setStencilTestEnable, dispatch.setStencilOp,
+                            dispatch.drawMulti, dispatch.drawMultiIndexed);
+#endif
     if (!dispatch.beginRendering || !dispatch.endRendering || !dispatch.setCullMode ||
         !dispatch.setStencilOp)
     {
@@ -363,6 +394,11 @@ bool vk::renderer::Initialise()
         image.width = g.presentWidth / g.scale;     // MakeImage scales
         image.height = g.presentHeight / g.scale;
         image.scale = g.scale;
+#if MW2_TRACE
+        // The images handed to the window, by role (trace.h).
+        const char* role[kPresentImages] = { "Present0", "Present1", "Present2", "Present3" };
+        vk::trace::NameNext(vk::trace::kImage, role[i]);
+#endif
         // STORAGE so the display's colour table can be applied to it in place.
         if (!MakeImage(image, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                               VK_IMAGE_USAGE_STORAGE_BIT, 0))
@@ -386,6 +422,9 @@ bool vk::renderer::Initialise()
 void vk::renderer::Shutdown()
 {
     if (!g.device) return;
+#if MW2_TRACE
+    vk::trace::ShutdownBegins();
+#endif
     // Before anything is destroyed, the display table's pipeline included: the
     // last frames are still on the GPU, and they use it -- and the last
     // commands may still be with the recorder thread.

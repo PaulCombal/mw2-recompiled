@@ -100,7 +100,7 @@ walking to it.
 
 | switch | effect |
 |---|---|
-| `MW2_DUMP_SHADERS=<dir>` | every distinct shader's microcode, for `tools/xenos_shader.py` and `translate-shader`; and the window's built-in backdrop shaders as SPIR-V, `builtin_backdrop_vertex.spv` and `builtin_backdrop_pixel.spv`, for `spirv-val` |
+| `MW2_DUMP_SHADERS=<dir>` | every distinct shader's microcode, for `tools/xenos_shader.py` and `translate-shader`; and the built-in shaders as SPIR-V, for `spirv-val`: the window's backdrop (`builtin_backdrop_vertex.spv`, `builtin_backdrop_pixel.spv`), the display's colour table (`builtin_display_table.spv`) and the drawn depth resolve's (`builtin_drawn_resolve_cover_vertex.spv`, `builtin_drawn_resolve_fetch_depth.spv`), each when it is first made |
 | `MW2_DUMP_TEXTURES=<dir>` | every distinct bound texture, untiled, as PNM with each mip level, its fetch constant logged. `MW2_DUMP_TEXTURES_RAW=1` also writes the guest bytes; `MW2_DUMP_TEXTURES_AFTER=<seconds>` starts later, since a streamed texture is empty at its first bind |
 | end-of-run reports | packets by opcode, frame times, draws and presents per second, arena copies, draws per render target, texture and shader work |
 
@@ -137,6 +137,26 @@ walking to it.
 | `MW2_TIME_PASSES=<seconds>` | | from that far into the run, the GPU's time a frame by rendering instance (by target size, samples and format), resolve and the work between them, from a timestamp at each; a table at exit |
 | `MW2_TRACE_PACING=<file>` | | a timeline written at exit: the consumer's batches and swaps, the title's presents, and every guest thread's engine waits, kernel waits and sleeps with their callers ([multiplayer.md](multiplayer.md)) |
 | `MW2_STUTTERS=1` | | (at the console's pacing only, not under `MW2_FPS_LIMIT`) from the first 30 consecutive world frames on, logs `STUTTER` for every world frame 25 ms or more after the previous one, with what the renderer spent the gap on, and `DISPLAY` when a frame is held or dropped by the window; totals at exit. When play stops for a second it logs `STALL` with what every guest thread waits on and every thread's stack (Linux), once a stall. The pad's Y and `F7` log a `STUTTER MARK` |
+
+## Checking the renderer
+
+What makes one build's renderer a reference for another's ([rendering.md](rendering.md#checking)).
+
+| switch | effect |
+|---|---|
+| `MW2_TRACE_COMMANDS=<file>[:<first frame>:<frames>]` | every Vulkan call the renderer makes that creates, destroys, records or submits, one normalised line each, from that frame for that many (all of them unset) |
+| `MW2_HASH_FRAMES=1` | reads every present image back and logs `renderer: frame <n> hash <fnv64>` |
+| `MW2_DETERMINISTIC=1` | none of the renderer's decisions taken by the clock: every submission waited for before it counts as done, no shader workers or optimised links, every doomed texture destroyed at once, no GPU timing |
+| `MW2_FORCE_INSTANCE_DEPTH_RESOLVE=1` | resolves a multisampled depth surface by a rendering instance where a draw would |
+| `MW2_FORCE_RESOLVE_TWIN=1` | resolves every multisampled surface into its single-sampled twin and copies from there |
+| `MW2_DRAWN_RESOLVE_SETS=<n>` | n descriptor sets for the drawn depth resolve (64), so the pool runs dry |
+| `MW2_FORCE_RESOLVE_REMAKE=<frames>` | makes every resolve image again at its first resolve after every nth frame |
+| `MW2_NO_MULTI_DRAW=1` | one call a draw, without `VK_EXT_multi_draw` |
+| `MW2_FORCE_LONE_UPLOADS=1` | submits every texture upload on its own, waited for |
+| `MW2_STAGING_LEAST_KB=<kb>` | the least an upload slot's staging buffer is (8 MB), so uploads overflow it |
+| `MW2_FAKE_DEVICE_LOST=<seconds>` | fails every submission from then on as a lost device, which ends the run |
+| `MW2_CAPTURE_GPU=<dir>:<after presents>:<presents>` | records the GPU's input into `<dir>`, from the batch where the command processor has met that many swap packets for that many more: a snapshot of memory and of the command processor, the ring, every page the GPU side read as the title had written it, image-pool moves and waits, each at its position (batch, packet) |
+| `MW2_REPLAY_GPU=<dir>` | runs that capture with no title: the command processor and renderer take it as the title gave it, the window shows, and the run ends with the reports and `replay: <n> divergences, <m> wait timeouts`. `tools/replay_diff.py <dir> <exe A> <exe B>` replays one capture on two executables and compares what they did |
 
 ## Frames and captures
 

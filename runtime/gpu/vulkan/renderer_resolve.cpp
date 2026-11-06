@@ -10,11 +10,31 @@
 
 #include <algorithm>
 #include <cstdio>
+#if MW2_DIAGNOSTICS
+#include "trace.h"   // last: the command trace's wrappers
+#endif
 
 #ifdef MW2_HAVE_VULKAN
 
 namespace vk::renderer::detail
 {
+#if MW2_TRACE
+    // MW2_FORCE_RESOLVE_REMAKE=<frames>: the resolve images there were at every nth
+    // frame's end, each made again at its next resolve as one that has to grow is.
+    std::unordered_set<VkImage> g_remake;
+    uint64_t g_remakeMarked = 0;
+
+    void MarkResolvesForRemake()
+    {
+        const uint32_t every = vk::trace::Forcing().resolveRemake;
+        if (!every || !g.frames || g.frames % every || g.frames == g_remakeMarked) return;
+        g_remakeMarked = g.frames;
+        for (auto& [address, ring] : g.resolvedTo)
+            for (Resolved& copy : ring.copies)
+                if (copy.image) g_remake.insert(copy.image);
+    }
+#endif
+
     // A resolve is a copy in the command stream and nothing more, so it does
     // not end the submission: a frame is submitted once, when it is presented.
     // Ending one at every resolve spent a frame slot on each -- six a frame --
@@ -58,6 +78,10 @@ namespace vk::renderer::detail
                                 : into.width >= width && into.height >= height;
         const bool same = into.image && into.format == format && into.depth == depth && into.scale == scale &&
                           (into.attachmentView || !attachment);
+#if MW2_TRACE
+        if (same && fits && g_remake.erase(into.image)) vk::trace::Counts().remadeResolves++;
+        else
+#endif
         if (same && fits) return true;
         if (!exact && same)
         {
@@ -73,6 +97,9 @@ namespace vk::renderer::detail
         // back, and an entry on the freed image is a texture read of unbacked
         // memory: the TCP page faults that hung the GPU in play and under capture.
         if (into.image) vk::textures::ForgetViews();
+#if MW2_TRACE
+        g_remake.erase(into.image);
+#endif
         if (into.view) vkDestroyImageView(g.device, into.view, nullptr);
         if (into.gammaView) vkDestroyImageView(g.device, into.gammaView, nullptr);
         if (into.attachmentView) vkDestroyImageView(g.device, into.attachmentView, nullptr);
@@ -236,7 +263,11 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
         // landing further down, or into such an image, goes through the
         // surface's twin.
         const bool direct = from->samples != VK_SAMPLE_COUNT_1_BIT && row == 0 &&
-                            (firstThisFrame || into.attachmentView);
+                            (firstThisFrame || into.attachmentView)
+#if MW2_TRACE
+                            && !vk::trace::Forcing().resolveTwin   // MW2_FORCE_RESOLVE_TWIN
+#endif
+                            ;
         if (!destination || !width || !height ||
             !MakeResolveImage(into, imageWidth, imageHeight, from->scale, from->format, true, firstThisFrame,
                               direct))
@@ -259,6 +290,10 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
                              kShaderStages);
         else
         {
+#if MW2_TRACE
+            if (from->samples != VK_SAMPLE_COUNT_1_BIT && vk::trace::Forcing().resolveTwin)
+                vk::trace::Counts().twinResolves++;
+#endif
             VkImage fromImage = BeginReadingDepth(*from, rect.offset, width, height);
             if (!fromImage) { Skip("depth resolve of a multisampled surface"); SubmitIfFilling(); return; }
             // Layouts change for both aspects together.
@@ -357,11 +392,21 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
     // sits, so a multisampled surface is resolved straight into it, and a
     // single-sampled one copied.
     const VkOffset2D at{ int32_t(destX), int32_t(destY) };
+#if MW2_TRACE
+    // MW2_FORCE_RESOLVE_TWIN: resolved into the surface's twin and copied from there.
+    const bool twin = source->samples != VK_SAMPLE_COUNT_1_BIT && vk::trace::Forcing().resolveTwin;
+    if (twin) vk::trace::Counts().twinResolves++;
+    if (source->samples != VK_SAMPLE_COUNT_1_BIT && !twin)
+#else
     if (source->samples != VK_SAMPLE_COUNT_1_BIT)
+#endif
         ResolveColourInto(*source, at, width, height, into.image);
     else
     {
         const VkImage sourceImage = BeginReadingColour(*source, at, width, height);
+#if MW2_TRACE
+        if (!sourceImage) { Skip("colour resolve through the twin"); SubmitIfFilling(); return; }
+#endif
         VkImageCopy copy{};
         copy.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
         copy.srcOffset = Scaled(int32_t(destX), int32_t(destY), 0, source->scale);
@@ -392,6 +437,9 @@ void vk::renderer::Resolve(const gpu::RegisterFile& r)
 void vk::renderer::Swap(uint32_t frontBuffer)
 {
     if (!g.device) return;
+#if MW2_TRACE
+    MarkResolvesForRemake();
+#endif
     auto found = g.resolvedTo.find(frontBuffer & ~0xFFFu);
     if (found == g.resolvedTo.end()) return;
     Resolved& frame = found->second.copies[found->second.newest];

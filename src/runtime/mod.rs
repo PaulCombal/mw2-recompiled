@@ -60,6 +60,9 @@ pub mod presence;
 pub mod render_size;
 #[deny(unsafe_code)]
 pub mod report;
+// MW2_REPLAY_GPU: the GPU's input fed back with no title running (run.rs hands over).
+#[cfg(all(feature = "diagnostics", not(any(mw2_rig, mw2_screens_rig, mw2_hook_rig))))]
+pub mod gpu_replay;
 // The run itself, which the rigs, with no renderer, stand in for.
 #[cfg(not(any(mw2_rig, mw2_screens_rig, mw2_hook_rig)))]
 #[deny(unsafe_code)]

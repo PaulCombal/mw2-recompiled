@@ -12,6 +12,9 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
+#if MW2_DIAGNOSTICS
+#include "trace.h"   // last: the command trace's wrappers
+#endif
 
 #ifdef MW2_HAVE_VULKAN
 

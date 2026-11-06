@@ -7,6 +7,7 @@
 //   census.cpp             what the stream holds, counted, and the dumps
 //   d3d_hooks.cpp          the hooks on the title's D3D9
 #include <cstdint>
+#include <vector>
 #include "registers.h"
 #include "../diagnostics.h"
 
@@ -67,6 +68,23 @@ namespace gpu::detail
     inline bool DumpingTextures() { return false; }
     inline void DumpBoundTextures(const RegisterFile&) {}
     inline void ReportCensus() {}
+#endif
+
+#if MW2_DIAGNOSTICS
+    // ---- for MW2_CAPTURE_GPU and MW2_REPLAY_GPU (stream_capture.cpp)
+    // command_processor.cpp: the swap packets met so far, and the command
+    // processor's state with the arena's progress, as the capture's state.bin holds
+    // it (mw2_cp_restore_for_replay takes it back).
+    uint64_t SwapsParsed();
+    void SaveCommandProcessor(std::vector<uint8_t>& out);
+    // arena.cpp
+    struct ArenaState { uint32_t block, sequence, pending, havePosition; };
+    ArenaState SaveArena();
+    void RestoreArena(const ArenaState& state);
+    void SetArenaBlock(uint32_t physical);
+    void ReportArena();
+    // gpu.cpp: where the ring is, its size, and the read pointer's write-back.
+    void RingLayout(uint32_t& base, uint32_t& dwords, uint32_t& writeBack);
 #endif
 
     // ---- d3d_hooks.cpp

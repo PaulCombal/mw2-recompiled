@@ -835,7 +835,12 @@ namespace vk::renderer::detail
     struct FrameReadBacks
     {
         bool dump = false, keep = false;
+#if MW2_DIAGNOSTICS
+        bool hash = false;   // MW2_HASH_FRAMES
+        bool Any() const { return dump || keep || hash; }
+#else
         bool Any() const { return dump || keep; }
+#endif
     };
     FrameReadBacks PlanReadBacks();
     // Copies the finished frame out, inside its own command buffer.

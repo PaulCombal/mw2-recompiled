@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include "../diagnostics.h"
 
 // Which pages of guest physical memory the title has written, found out the way
 // Xenia finds out: a page the GPU reads from is made read-only, and the first
@@ -67,4 +68,9 @@ namespace gpu::watch
     bool Unwritten(uint32_t physical, uint32_t bytes, uint64_t since);
 
     void Report();
+
+#if MW2_DIAGNOSTICS
+    // How many times page `page` of the bank has gone from watched to written.
+    uint32_t Loosened(uint32_t page);
+#endif
 }

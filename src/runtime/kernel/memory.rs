@@ -34,6 +34,13 @@ static VIRTUAL_TOP: AtomicU32 = AtomicU32::new(HEAP_BASE);
 pub static VIRTUAL: Heap = Heap::new(c"virtual", HEAP_END, &VIRTUAL_TOP);
 pub static PHYSICAL: Heap = Heap::new(c"physical", PHYSICAL_END, &mw2_kernel_physical_top);
 
+/// MW2_REPLAY_GPU (gpu_replay.rs): the physical heap's top as the capture found it, so
+/// that the command processor tells the addresses it is handed apart as it did then.
+#[cfg(feature = "diagnostics")]
+pub fn set_physical_top(top: u32) {
+    mw2_kernel_physical_top.store(top, Ordering::Release);
+}
+
 impl Heap {
     /// Empty again, from `HEAP_BASE`: tools/hook_diff.py runs each side of a case on
     /// the same heap, so that both are given the same addresses.
