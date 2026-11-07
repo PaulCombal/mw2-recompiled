@@ -265,10 +265,18 @@ impl SdlSettings {
         };
         #[cfg(not(windows))]
         {
+            #[cfg(not(target_os = "macos"))]
             unsafe extern "C" {
                 static environ: *const *const c_char;
             }
+            #[cfg(target_os = "macos")]
+            unsafe extern "C" {
+                fn _NSGetEnviron() -> *mut *const *const c_char;
+            }
+            #[cfg(not(target_os = "macos"))]
             let mut entry = unsafe { environ };
+            #[cfg(target_os = "macos")]
+            let mut entry = unsafe { *_NSGetEnviron() };
             while !entry.is_null() && !unsafe { *entry }.is_null() {
                 keep(unsafe { CStr::from_ptr(*entry) }.to_bytes());
                 entry = unsafe { entry.add(1) };
@@ -317,12 +325,14 @@ impl SdlSettings {
 /// install than the running one's half connects, then crashes in its first call.
 /// MW2_STEAM_ROOT keeps the one running from it.
 #[cfg(not(windows))]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub struct Running {
     pub pid: i32,
     pub root: PathBuf,
 }
 
 #[cfg(not(windows))]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn running_steams() -> Vec<Running> {
     let mut found = Vec::new();
     let named = env::text(c"MW2_STEAM_ROOT");
@@ -393,7 +403,12 @@ fn find_client() -> Option<PathBuf> {
         let path = root.join("steamclient64.dll");
         path.exists().then_some(path)
     }
-    #[cfg(not(windows))]
+    // Not looked for yet: the game plays without Steam (LAN, or a relay).
+    #[cfg(target_os = "macos")]
+    {
+        None
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         for steam in running_steams() {
             let path = steam.root.join("linux64").join("steamclient.so");
@@ -985,12 +1000,13 @@ impl Drop for Client {
     }
 }
 
-#[cfg(windows)]
+// Nor does macOS have the namespaces the Linux one does it with.
+#[cfg(any(windows, target_os = "macos"))]
 pub fn enter_namespace() -> Option<i32> {
     None
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 mod namespace {
     use super::*;
     use crate::log::log_warn;
@@ -1118,5 +1134,5 @@ mod namespace {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub use namespace::enter_namespace;

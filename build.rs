@@ -253,10 +253,14 @@ fn windows_vulkan(root: &Path, out: &Path, mingw: &Path) -> (PathBuf, PathBuf) {
 
 // Whether the build machine has Vulkan's headers: without them the renderer is
 // built with no window.
-fn linux_vulkan(compiler: &Path, out: &Path) -> bool {
+fn linux_vulkan(compiler: &Path, out: &Path, brew: &Option<PathBuf>) -> bool {
     let probe = out.join("vulkan-probe.cpp");
     fs::write(&probe, "#include <vulkan/vulkan.h>\n").unwrap();
-    Command::new(compiler).arg("-fsyntax-only").arg(&probe).status().is_ok_and(|status| status.success())
+    let mut command = Command::new(compiler);
+    if let Some(brew) = brew {
+        command.arg(format!("-I{}", brew.join("include").display()));
+    }
+    command.arg("-fsyntax-only").arg(&probe).status().is_ok_and(|status| status.success())
 }
 
 // One C++ file and how it is compiled.
@@ -438,6 +442,10 @@ fn main() {
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let windows = env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows";
+    let apple = env::var("CARGO_CFG_TARGET_OS").unwrap() == "macos";
+    // The x86-64 level the C++ is compiled for; any other processor (arm64 macOS) has
+    // SIMDe turn the console's vector code into NEON, and no level to name.
+    let x86 = env::var("CARGO_CFG_TARGET_ARCH").unwrap() == "x86_64";
     let diagnostics = env::var_os("CARGO_FEATURE_DIAGNOSTICS").is_some();
     let portable = env::var_os("CARGO_FEATURE_PORTABLE").is_some();
     let rust_renderer = env::var_os("CARGO_FEATURE_RUST_RENDERER").is_some();
@@ -503,6 +511,8 @@ fn main() {
         .then(|| PathBuf::from(rerun_if("LLVM_MINGW").expect("a Windows build needs LLVM_MINGW=<llvm-mingw folder>")));
     let (compiler, archiver) = match &mingw {
         Some(mingw) => (mingw.join("bin/x86_64-w64-mingw32-clang++"), mingw.join("bin/llvm-ar")),
+        // Apple's own toolchain: its linker reads the bitcode of its clang (ThinLTO).
+        None if apple => (PathBuf::from("/usr/bin/clang++"), PathBuf::from("/usr/bin/ar")),
         None => (PathBuf::from("clang++-18"), PathBuf::from("llvm-ar-18")),
     };
     // The SDL sdl3-sys built, whose headers the renderer's C++ includes.
@@ -530,7 +540,11 @@ fn main() {
                 .or_else(|| rerun_if("MW2_BUILD_DIR").map(|build| format!("{build}/lto-cache")))
                 .map_or_else(|| out.join("lto-cache"), PathBuf::from);
             link.push("-flto=thin".into());
-            link.push(format!("-Wl,--thinlto-cache-dir={}", cache.display()));
+            if apple {
+                link.push(format!("-Wl,-cache_path_lto,{}", cache.display()));
+            } else {
+                link.push(format!("-Wl,--thinlto-cache-dir={}", cache.display()));
+            }
         }
         if let Some(profile) = profile(&root, &out, title, version) {
             // A function changed since the recording is compiled without its counts.
@@ -549,12 +563,12 @@ fn main() {
     if !logging {
         definitions.push("MW2_NO_LOGGING=1".into());
     }
-    let x86_level = "-march=x86-64-v2".to_string();
+    let x86_level = if x86 { "-march=x86-64-v2".to_string() } else { String::new() };
     let simde = root.join("XenonRecomp-rs/thirdparty/simde");
 
     // The renderer and its glue.
     let mut runtime: Vec<String> = common.clone();
-    runtime.push(x86_level.clone());
+    runtime.extend(Some(x86_level.clone()).filter(|level| !level.is_empty()));
     runtime.extend(definitions.iter().map(|definition| format!("-D{definition}")));
     runtime.extend(
         [format!("MW2_DIAGNOSTICS={}", u8::from(diagnostics)), "MW2_RUST=1".into(), "MW2_USE_SDL=1".into()]
@@ -573,6 +587,15 @@ fn main() {
         runtime.push(format!("-I{}", include.display()));
     }
     let mut libraries = Vec::new();
+    // Homebrew's prefix, where macOS has the Vulkan loader and headers (brew install
+    // vulkan-headers vulkan-loader molten-vk), and where SDL's dependencies are.
+    let brew = apple.then(|| {
+        let prefix = Command::new("brew").arg("--prefix").output().ok().filter(|output| output.status.success());
+        PathBuf::from(prefix.map_or_else(|| "/opt/homebrew".into(), |output| String::from_utf8_lossy(&output.stdout).trim().to_string()))
+    });
+    if let Some(brew) = &brew {
+        runtime.push(format!("-I{}", brew.join("include").display()));
+    }
     match &mingw {
         Some(mingw) => {
             let (include, library) = windows_vulkan(&root, &out, mingw);
@@ -581,7 +604,7 @@ fn main() {
             runtime.push(include.display().to_string());
             libraries.push(library.display().to_string());
         }
-        None if linux_vulkan(&compiler, &out) => {
+        None if linux_vulkan(&compiler, &out, &brew) => {
             runtime.push("-DMW2_HAVE_VULKAN=1".into());
             libraries.push("-lvulkan".into());
         }
@@ -674,7 +697,8 @@ fn main() {
     let fallback = root.join(format!("{}_rs/cpp/ppc_fallback.cpp", ppc.display()));
     watch(&fallback);
     let mut flags = common.clone();
-    flags.extend(["-w".into(), "-fwrapv".into(), x86_level]);
+    flags.extend(["-w".into(), "-fwrapv".into()]);
+    flags.extend(Some(x86_level).filter(|level| !level.is_empty()));
     flags.push("-include".into());
     flags.push(root.join("runtime/mmio_hook.h").display().to_string());
     flags.extend(definitions.iter().map(|definition| format!("-D{definition}")));
@@ -689,7 +713,8 @@ fn main() {
     let archived = fs::metadata(&archive).and_then(|archive| archive.modified()).ok();
     if archived.is_none_or(|archived| fs::metadata(&fallback_object).unwrap().modified().unwrap() > archived) {
         let _ = fs::remove_file(&archive);
-        run(Command::new(&archiver).arg("rcsD").arg(&archive).arg(&fallback_object));
+        // (Apple's ar has no D, and adds no timestamps to a thin member either.)
+        run(Command::new(&archiver).arg(if apple { "rcs" } else { "rcsD" }).arg(&archive).arg(&fallback_object));
     }
 
     // ---- the link ------------------------------------------------------------------
@@ -711,6 +736,16 @@ fn main() {
         }
         // rustc says -no-pie, which means nothing to a PE.
         link.push("-Wno-unused-command-line-argument".into());
+    } else if apple {
+        // Mach-O has no dynamic list: every symbol of the executable is exported, which
+        // backtrace_symbols names the guest functions by. The linker is Apple's, which
+        // reads the bitcode of Apple's clang.
+        link.push("-Wl,-export_dynamic".into());
+        // ash links the Vulkan loader by name, and the C++ the same.
+        if let Some(brew) = &brew {
+            println!("cargo:rustc-link-search=native={}", brew.join("lib").display());
+            link.push(format!("-L{}", brew.join("lib").display()));
+        }
     } else {
         // lld, which reads LLVM bitcode, and takes its inputs in any order: rustc puts
         // its system libraries ahead of these.
@@ -732,6 +767,8 @@ fn main() {
         link.extend(
             ["-l:libc++.a", "-l:libunwind.a", "-lws2_32", "-liphlpapi", "-lwinmm", "-lbcrypt"].map(String::from),
         );
+    } else if apple {
+        link.push("-lc++".into());
     } else if portable {
         link.push("-l:libstdc++.a".into());
     } else {

@@ -21,6 +21,15 @@ option(MW2_DIAGNOSTICS "Build the traces, dumps, statistics, reports and test ha
 # so on an older one (runtime/cpu_level.cpp) rather than stopping on the first
 # instruction it lacks.
 set(MW2_X86_LEVEL "x86-64-v2" CACHE STRING "The -march the game is compiled for")
+# On any other processor (arm64 macOS) SIMDe turns the console's vector code into
+# NEON, and there is no level to name.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    set(MW2_X86 TRUE)
+    set(MW2_MARCH "-march=${MW2_X86_LEVEL}")
+else()
+    set(MW2_X86 FALSE)
+    set(MW2_MARCH "")
+endif()
 
 # ---- which executable ------------------------------------------------------
 # The disc carries two: default.xex (the campaign and special ops) and
@@ -67,14 +76,19 @@ if(MW2_PGO_TRAINING)
 else()
     if(MW2_LTO)
         add_compile_options(-flto=thin)
-        add_link_options(-flto=thin "-Wl,--thinlto-cache-dir=${MW2_LTO_CACHE}")
-        if(NOT WIN32)
+        if(APPLE)
+            add_link_options(-flto=thin "-Wl,-cache_path_lto,${MW2_LTO_CACHE}")
+        else()
+            add_link_options(-flto=thin "-Wl,--thinlto-cache-dir=${MW2_LTO_CACHE}")
+        endif()
+        if(NOT WIN32 AND NOT APPLE)
             # The system linker reads no LLVM bitcode; llvm-mingw's already is lld.
+            # (Apple's does, with the bitcode of Apple's own clang.)
             add_link_options(-fuse-ld=lld)
         endif()
         # Static libraries of bitcode need LLVM's archiver to be indexed; CMake
         # takes it with clang.
-        if(NOT CMAKE_AR MATCHES "llvm-ar")
+        if(NOT APPLE AND NOT CMAKE_AR MATCHES "llvm-ar")
             message(FATAL_ERROR "ThinLTO needs llvm-ar, not ${CMAKE_AR}: build with clang (cargo xtask), or -DMW2_LTO=OFF")
         endif()
     endif()
@@ -82,7 +96,7 @@ else()
     # name its hash makes, so that a new one rebuilds everything with it. The
     # disc's version (tu0) is other code, and has none.
     set(MW2_PGO_ARCHIVE "${CMAKE_SOURCE_DIR}/pgo/${MW2_TITLE}.tar.xz")
-    if(MW2_PGO AND MW2_VERSION STREQUAL "tu6" AND EXISTS "${MW2_PGO_ARCHIVE}")
+    if(MW2_PGO AND MW2_X86 AND MW2_VERSION STREQUAL "tu6" AND EXISTS "${MW2_PGO_ARCHIVE}")
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MW2_PGO_ARCHIVE}")
         file(SHA256 "${MW2_PGO_ARCHIVE}" hash)
         string(SUBSTRING "${hash}" 0 16 hash)
@@ -117,7 +131,7 @@ target_include_directories(ppc_recomp PUBLIC
 # The generated code is machine output; its warnings are noise. Guest arithmetic
 # wraps as the console's does: without -fwrapv a mulld that overflows a signed
 # register is undefined, and the compiler miscompiles it.
-target_compile_options(ppc_recomp PRIVATE -w -fwrapv -march=${MW2_X86_LEVEL})
+target_compile_options(ppc_recomp PRIVATE -w -fwrapv ${MW2_MARCH})
 # The console's hardware registers are plain memory in this address space. The
 # recompiler marks the stores that address them (eieio follows), and this header
 # routes those through a hook so the XMA decoder sees its kick, lock and clear
@@ -216,11 +230,13 @@ if(MW2_RUST)
     set_target_properties(mw2 ppc_recomp PROPERTIES EXCLUDE_FROM_ALL TRUE)
 endif()
 target_link_libraries(mw2 PRIVATE ppc_recomp)
-target_compile_options(mw2 PRIVATE -march=${MW2_X86_LEVEL})
+target_compile_options(mw2 PRIVATE ${MW2_MARCH})
 # The one file that must run on any x86-64 processor: it checks for the others.
 # Compiled to machine code at once, so the link-time optimiser cannot mix it
 # with code of the higher level.
-set_source_files_properties("${CMAKE_SOURCE_DIR}/runtime/cpu_level.cpp" PROPERTIES COMPILE_OPTIONS "-march=x86-64;-fno-lto")
+if(MW2_X86)
+    set_source_files_properties("${CMAKE_SOURCE_DIR}/runtime/cpu_level.cpp" PROPERTIES COMPILE_OPTIONS "-march=x86-64;-fno-lto")
+endif()
 if(MW2_PGO_TRAINING)
     # The runtime leaves with _exit, which writes no profile: this writes it first.
     target_sources(mw2 PRIVATE "${CMAKE_SOURCE_DIR}/runtime/pgo/training.cpp")
@@ -296,11 +312,16 @@ if(WIN32)
 else()
     # The sub_XXXXXXXX guest functions exported so backtrace_symbols can name
     # them, and nothing else (runtime/exports.list).
-    target_link_options(mw2 PRIVATE
-        -Wl,--dynamic-list=${CMAKE_CURRENT_SOURCE_DIR}/runtime/exports.list)
-    set_property(TARGET mw2 APPEND PROPERTY LINK_DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/exports.list)
-    if(MW2_PORTABLE)
+    if(APPLE)
+        # Mach-O has no dynamic list: every symbol of the executable is exported.
+        target_link_options(mw2 PRIVATE -Wl,-export_dynamic)
+    else()
+        target_link_options(mw2 PRIVATE
+            -Wl,--dynamic-list=${CMAKE_CURRENT_SOURCE_DIR}/runtime/exports.list)
+        set_property(TARGET mw2 APPEND PROPERTY LINK_DEPENDS
+            ${CMAKE_CURRENT_SOURCE_DIR}/runtime/exports.list)
+    endif()
+    if(MW2_PORTABLE AND NOT APPLE)
         target_link_options(mw2 PRIVATE -static-libstdc++ -static-libgcc)
     endif()
 endif()
@@ -322,6 +343,10 @@ if(MW2_USE_SDL)
     # same version.
     target_link_libraries(mw2 PRIVATE SDL3::SDL3-static)
     target_compile_definitions(mw2 PRIVATE MW2_USE_SDL=1)
+    if(APPLE)
+        # SDL's static library leaves its iconv to the program.
+        target_link_libraries(mw2 PRIVATE iconv "-framework CoreFoundation")
+    endif()
 endif()
 
 # ---- XMA decoder ----------------------------------------------------------
@@ -522,6 +547,8 @@ if(MW2_USE_SDL)
     # MW2_RELEASE_TAG above). A build without one does not update.
     if(WIN32)
         set(MW2_RELEASE_KIND "windows")
+    elseif(APPLE)
+        set(MW2_RELEASE_KIND "macos")
     else()
         set(MW2_RELEASE_KIND "linux")
     endif()
@@ -529,6 +556,9 @@ if(MW2_USE_SDL)
         "MW2_RELEASE_TAG=\"${MW2_RELEASE_TAG}\";MW2_RELEASE_KIND=\"${MW2_RELEASE_KIND}\"")
     # The decoder the game has for its sound, for the menu sounds (launcher/sound.cpp).
     target_link_libraries(launcher PRIVATE SDL3::SDL3-static ffmpeg_xma zlibstatic)
+    if(APPLE)
+        target_link_libraries(launcher PRIVATE iconv)
+    endif()
     if(Vulkan_FOUND)
         target_link_libraries(launcher PRIVATE Vulkan::Vulkan)
         target_compile_definitions(launcher PRIVATE MW2_HAVE_VULKAN=1)
@@ -549,7 +579,7 @@ if(MW2_USE_SDL)
         endif()
     else()
         target_link_libraries(launcher PRIVATE pthread)
-        if(MW2_PORTABLE)
+        if(MW2_PORTABLE AND NOT APPLE)
             target_link_options(launcher PRIVATE -static-libstdc++ -static-libgcc)
         endif()
     endif()
@@ -573,7 +603,7 @@ if(MW2_USE_SDL)
     if(NOT WIN32)
         target_link_libraries(map-port PRIVATE pthread)   # (std::async: stock files are read on worker threads)
     endif()
-    if(MW2_PORTABLE)
+    if(MW2_PORTABLE AND NOT APPLE)
         target_link_options(map-port PRIVATE -static-libstdc++ -static-libgcc)
     endif()
 endif()

@@ -15,8 +15,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 unsafe extern "C" {
     fn snprintf(buffer: *mut c_char, size: usize, format: *const c_char, ...) -> c_int;
     fn fprintf(stream: *mut c_void, format: *const c_char, ...) -> c_int;
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     #[link_name = "stderr"]
+    static STDERR: *mut c_void;
+    // Apple's C library names it so.
+    #[cfg(target_os = "macos")]
+    #[link_name = "__stderrp"]
     static STDERR: *mut c_void;
     #[cfg(windows)]
     fn __acrt_iob_func(index: u32) -> *mut c_void;

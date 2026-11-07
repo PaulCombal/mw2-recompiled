@@ -288,18 +288,31 @@ pub fn load_float_mode(ctx: &mut PPCContext) -> u32 {
 
 /// The host's float mode as it stands.
 pub fn host_float_mode() -> u32 {
+    #[cfg(target_arch = "x86_64")]
     #[allow(deprecated)]
     unsafe {
         std::arch::x86_64::_mm_getcsr()
+    }
+    // FPCR, which ppc_rt's FPSCR keeps in MXCSR's place on arm64.
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        let fpcr: u64;
+        std::arch::asm!("mrs {}, fpcr", out(reg) fpcr, options(nostack, preserves_flags, nomem));
+        fpcr as u32
     }
 }
 
 /// Puts the host's float mode back to what `host_float_mode` gave.
 pub fn set_host_float_mode(csr: u32) {
     // Deprecated in favour of inline assembly, which is what it is.
+    #[cfg(target_arch = "x86_64")]
     #[allow(deprecated)]
     unsafe {
         std::arch::x86_64::_mm_setcsr(csr)
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        std::arch::asm!("msr fpcr, {}", in(reg) csr as u64, options(nostack, preserves_flags, nomem));
     }
 }
 

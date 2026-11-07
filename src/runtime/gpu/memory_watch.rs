@@ -56,6 +56,12 @@ use std::sync::atomic::AtomicU32;
 #[cfg(feature = "diagnostics")]
 use crate::log::log_info;
 
+// The granularity mprotect works at: the host's page. Apple Silicon's is 16 KB, and a call
+// on a range that does not start and end on one fails. A watched "page" there holds four
+// of the console's, which are all written or all not.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub const PAGE_BYTES: u32 = 16384;
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 pub const PAGE_BYTES: u32 = 4096;
 const PHYSICAL_BYTES: u32 = PHYSICAL_END - PHYSICAL_BASE;
 const PAGES: usize = (PHYSICAL_BYTES / PAGE_BYTES) as usize;

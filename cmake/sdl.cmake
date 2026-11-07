@@ -3,8 +3,14 @@
 # options are the ones the game had when CMake fetched SDL itself, and the compiler
 # the rest of the game's C and C++ is built with.
 if(NOT CMAKE_C_COMPILER)
-    set(CMAKE_C_COMPILER clang-18)
-    set(CMAKE_CXX_COMPILER clang++-18)
+    if(APPLE)
+        # Apple's own: its linker reads the bitcode of its clang.
+        set(CMAKE_C_COMPILER /usr/bin/clang)
+        set(CMAKE_CXX_COMPILER /usr/bin/clang++)
+    else()
+        set(CMAKE_C_COMPILER clang-18)
+        set(CMAKE_CXX_COMPILER clang++-18)
+    endif()
 endif()
 # Only the static library; sdl3-sys asks for it.
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)

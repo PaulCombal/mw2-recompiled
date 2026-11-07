@@ -14,12 +14,18 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU64, 
 
 const PROT_READ: c_int = 1;
 const PROT_WRITE: c_int = 2;
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
+#[cfg(not(target_os = "macos"))]
 const SC_PAGESIZE: c_int = 30;
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
+#[cfg(target_os = "macos")]
+const SC_PAGESIZE: c_int = 29;
 const TRAP_FLAG: u64 = 0x100;
 const FAULT_BUDGET: u64 = 2000000;
 
 unsafe extern "C" {
     fn mprotect(address: *mut c_void, size: usize, protection: c_int) -> c_int;
+    #[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
     fn sysconf(name: c_int) -> i64;
     fn sched_yield() -> c_int;
     fn backtrace(frames: *mut *mut c_void, size: c_int) -> c_int;
@@ -58,6 +64,7 @@ fn protect(flags: c_int) {
     unsafe { mprotect(PAGE.load(Ordering::Relaxed).cast(), LENGTH.load(Ordering::Relaxed), flags) };
 }
 
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 fn arm(address: u32, bytes: u32) {
     let base = guest_memory::base();
     if base.is_null() || address == 0 || bytes == 0 {
@@ -84,6 +91,20 @@ fn arm(address: u32, bytes: u32) {
 }
 
 pub fn install() {
+    // It steps over the store it faulted on with the x86 trap flag: not on arm64.
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        if env::text(c"MW2_WATCH").is_some() {
+            log_info!("watchpoint: MW2_WATCH single-steps with the x86 trap flag, and is not available here");
+        }
+        return;
+    }
+    #[cfg(target_arch = "x86_64")]
+    install_x86();
+}
+
+#[cfg(target_arch = "x86_64")]
+fn install_x86() {
     BUDGET.store(env::number(c"MW2_WATCH_REPORTS", 20) as i32, Ordering::Relaxed);
     let Some(text) = env::text(c"MW2_WATCH") else { return };
     let (lo, rest) = env::parse_number(text, 16);
@@ -112,8 +133,15 @@ pub fn resume() {
 
 // The flags in the machine state a signal handler can change: gregs[REG_EFL] of the
 // ucontext_t, whose gregs follow 40 bytes in.
+#[cfg(target_arch = "x86_64")]
 fn flags(context: *mut c_void) -> *mut u64 {
     context.cast::<u8>().wrapping_add(40 + 17 * 8).cast()
+}
+
+// Nothing arms the watchpoint where there is no trap flag, so nothing steps.
+#[cfg(not(target_arch = "x86_64"))]
+fn flags(_: *mut c_void) -> *mut u64 {
+    unreachable!("a watchpoint is not armed on arm64")
 }
 
 /// From the fault handler, before it decides the process is dying: true when the fault

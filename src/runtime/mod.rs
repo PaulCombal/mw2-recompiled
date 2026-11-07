@@ -17,6 +17,8 @@
 
 pub mod bridge;
 pub mod clock;
+// Only x86-64 has levels to check: on arm64 every processor does NEON.
+#[cfg(target_arch = "x86_64")]
 mod cpu_level;
 pub mod crash;
 mod exports;

@@ -31,16 +31,47 @@ fn tool(program: &str, args: &[&str]) -> Result<String> {
     crate::output(Command::new(program).args(args))
 }
 
+// Apple's nm (llvm's, in Xcode) lists a symbol as "<address> (<segment>,<section>)
+// [weak ]external <name>", the name with the leading underscore Mach-O gives every C
+// symbol, and says "weak external" of a weak definition where other formats have a
+// letter: T is a strong one, W a weak one.
+#[cfg(target_os = "macos")]
+fn nm(paths: &[&str]) -> Result<Vec<(String, String, String)>> {
+    let mut args = vec!["-m", "-U"];
+    args.extend(paths);
+    Ok(tool("nm", &args)?
+        .lines()
+        .filter_map(|line| {
+            let name = line.split_whitespace().last()?.strip_prefix('_')?;
+            let kind = if line.contains(" weak external ") { "W" } else { "T" };
+            let address = line.split_whitespace().next()?;
+            Some((name.to_string(), kind.to_string(), address.to_string()))
+        })
+        .collect())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn nm(paths: &[&str]) -> Result<Vec<(String, String, String)>> {
+    let mut args = vec!["--defined-only"];
+    args.extend(paths);
+    Ok(tool("llvm-nm-18", &args)?
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            let [.., kind, name] = parts[..] else { return None };
+            Some((name.to_string(), kind.to_string(), parts[0].to_string()))
+        })
+        .collect())
+}
+
 // sub_X -> its kind (T for a strong definition), the last file's where several have one.
 fn symbols(paths: &[String]) -> Result<HashMap<String, String>> {
     let mut found = HashMap::new();
     for chunk in paths.chunks(100) {
-        let mut args = vec!["--defined-only"];
-        args.extend(chunk.iter().map(String::as_str));
-        for line in tool("llvm-nm-18", &args)?.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 && guest(parts[parts.len() - 1]) {
-                found.insert(parts[parts.len() - 1].to_string(), parts[parts.len() - 2].to_string());
+        let chunk: Vec<&str> = chunk.iter().map(String::as_str).collect();
+        for (name, kind, _) in nm(&chunk)? {
+            if guest(&name) {
+                found.insert(name, kind);
             }
         }
     }
@@ -58,6 +89,10 @@ fn defined(path: &str) -> Result<Vec<(String, String)>> {
 // What runs on a processor too old for the game may use nothing it lacks, in a crate
 // compiled for one that has (src/runtime/cpu_level.rs).
 fn check_processor(path: &str) -> Result<HashSet<String>> {
+    // Only x86-64 has a check: on arm64 every processor does NEON.
+    if cfg!(target_os = "macos") {
+        return Ok(HashSet::new());
+    }
     let names: HashSet<String> = defined(path)?
         .into_iter()
         .map(|(name, _)| name)
