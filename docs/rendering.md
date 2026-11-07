@@ -508,6 +508,17 @@ is what four players wait on; the multi-draw keeps all of it on the recorder.
 
 `MW2_RECORD_THREAD=0` (diagnostics builds) makes the calls on the consumer.
 
+The Rust renderer's recorder (`src/runtime/gpu/vulkan/recorder.rs`), its device
+wrapper (`device.rs`: ash's tables, a method for each Vulkan call the renderer
+makes, which writes the command trace's line when the trace is on) and the trace
+itself (`trace.rs`) are built but not yet called: they take over with the rest of
+the renderer. A queued call is a Rust closure, moved into the ring behind its
+header and moved out, and dropped, once by the recorder. Every `park` sits in a
+loop on its own condition, which its waker sets before it unparks, so a stray
+token costs one more look. `tools/gpu_diff.py --rig recorder,recorder_inline,
+recorder_sleeps,device_trace` holds them against `recorder.cpp` and `trace.cpp`,
+and `--rig recorder_bench --bench` times the two recorders.
+
 ## Presenting
 
 The window, its device and the frame queue are

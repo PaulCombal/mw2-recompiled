@@ -21,7 +21,7 @@ pub const PIPELINE: usize = 1;
 const COSTS: usize = 2;
 
 pub const EXECUTING: usize = 0;
-const RECORDER_WAIT: usize = 1;
+pub const RECORDER_WAIT: usize = 1;
 const GPU_WAIT: usize = 2;
 const TEXTURES: usize = 3;
 const COMPILING: usize = 4;

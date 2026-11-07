@@ -65,3 +65,53 @@ pub unsafe fn barrier(
         )
     };
 }
+
+/// The renderer's barrier (util.h's Barrier as the renderer calls it): `barrier`'s
+/// transition, through the renderer's device, so the command trace has it when the
+/// command buffer is one the renderer made.
+///
+/// # Safety
+/// As `barrier`, on `device`.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(mw2_owns_renderer), allow(dead_code))] // the renderer's from S10 (plan S8)
+pub unsafe fn renderer_barrier(
+    device: &super::device::Vk,
+    commands: vk::CommandBuffer,
+    image: vk::Image,
+    aspect: vk::ImageAspectFlags,
+    from: vk::ImageLayout,
+    to: vk::ImageLayout,
+    source_access: vk::AccessFlags,
+    destination_access: vk::AccessFlags,
+    source_stage: vk::PipelineStageFlags,
+    destination_stage: vk::PipelineStageFlags,
+) {
+    let barriers = [vk::ImageMemoryBarrier {
+        src_access_mask: source_access,
+        dst_access_mask: destination_access,
+        old_layout: from,
+        new_layout: to,
+        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        image,
+        subresource_range: vk::ImageSubresourceRange {
+            aspect_mask: aspect,
+            base_mip_level: 0,
+            level_count: vk::REMAINING_MIP_LEVELS,
+            base_array_layer: 0,
+            layer_count: vk::REMAINING_ARRAY_LAYERS,
+        },
+        ..Default::default()
+    }];
+    unsafe {
+        device.util_barrier(
+            commands,
+            source_stage,
+            destination_stage,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &barriers,
+        )
+    };
+}

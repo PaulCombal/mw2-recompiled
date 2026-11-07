@@ -9,10 +9,20 @@
 
 pub mod backdrop;
 pub mod capture;
+// The renderer's device tables and its Vulkan calls (device.rs), the recorder thread and
+// queue (recorder.rs) and the command trace (trace.rs): the renderer's from S10, built and
+// proven (tools/gpu_diff.py --rig recorder,device_trace) before anything calls them.
+#[cfg_attr(not(mw2_owns_renderer), allow(dead_code))]
+pub mod device;
 pub mod gpu_time;
 pub mod presenter;
+#[cfg_attr(not(mw2_owns_recorder), allow(dead_code))]
+pub mod recorder;
 #[deny(unsafe_code)]
 pub mod texture_formats;
+#[cfg(feature = "diagnostics")]
+#[cfg_attr(not(mw2_owns_trace), allow(dead_code))]
+pub mod trace;
 pub mod util;
 
 use crate::runtime::bridge;

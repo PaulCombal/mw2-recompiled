@@ -19,6 +19,11 @@
 # real page protections, a memfd mapped as the two physical windows (watch.cpp says how).
 # preload is tools/hook_diff.py on the two shader-preload hooks, whose cases are the
 # synthetic shader objects (hook_diff.cpp's Tune).
+# The recorder (recorder, recorder_inline, recorder_sleeps, recorder_bench) and the Rust
+# Vk's trace lines (device_trace) run both sides in one process: the C++ recorder.cpp and
+# trace.cpp as they are, the Vulkan both reach a stand-in (device_stubs.cpp); --cases is
+# the script's ops, the trace's cases, or the benchmark's rounds (recorder.cpp says how).
+# Their Rust is not wired into the game yet, so they need no file in RUST_OWNS.
 #
 #   usage: gpu_diff.py <build folder> --rig <name>[,<name>...] [--seeds N] [--cases N]
 #                      [--src folder] [--bench] [--side cpp|rust] [--capture <dir>]
@@ -53,6 +58,12 @@ RIGS = {
     "watch_stress": (WATCH, "watch", ["stress"]),
     "watch_livelock": (WATCH, "watch", ["livelock"]),
     "watch_teardown": (WATCH, "watch", ["teardown"]),
+    # Dormant until S10: nothing for Rust to own yet.
+    "recorder": ([], "recorder", ["recorder"]),
+    "recorder_inline": ([], "recorder", ["inline"]),
+    "recorder_sleeps": ([], "recorder", ["sleeps"]),
+    "recorder_bench": ([], "recorder", ["bench"]),
+    "device_trace": ([], "recorder", ["trace"]),
 }
 # What each program compiles: the originals as they are, then its helpers.
 PROGRAMS = {
@@ -69,6 +80,9 @@ PROGRAMS = {
     "pm4": (["gpu/command_processor.cpp", "gpu/census.cpp", "image_move.cpp", "gpu/arena.cpp"], ["rig_bridge"]),
     # memory_watch.cpp included whole by watch.cpp, for its file statics.
     "watch": ([], ["rig_bridge"]),
+    # recorder.cpp included whole by recorder.cpp, trace.cpp by trace_cpp.cpp, both for their
+    # file statics; the Vulkan they reach is device_stubs.cpp's.
+    "recorder": ([], ["device_stubs", "trace_cpp", "device_trace", "rig_bridge"]),
 }
 # What a program links with beyond the others: the watch rig wraps mprotect, to see and
 # steer every protection change either side makes.
@@ -89,6 +103,8 @@ PM4_ENVIRONMENTS = [{}, {"MW2_TRACE_FRAME": "6", "MW2_TRACE_DRAWS": "60"},
 # the recompiled code's header. These programs compare the lines each side prints, so
 # their C++ and their Rust log, into memory (rig_log.h); the others' do not.
 TITLED = {"arena", "interrupts", "pm4", "watch"}
+# Programs that compare printed lines but need no title.
+LOGGED = {"recorder"}
 
 def run(*command, **options):
     return subprocess.run(command, check=True, text=True, **options)
@@ -200,7 +216,7 @@ def main():
             run(*flags, "-c", f"{ROOT}/tools/gpu_diff/{helper}.cpp", "-o", target)
             objects.append(target)
         program = f"{work}/{program_name}"
-        library = library_for(program_name in TITLED)
+        library = library_for(program_name in TITLED or program_name in LOGGED)
         run(*flags, f"{ROOT}/tools/gpu_diff/{program_name}.cpp", *objects, library, "-fuse-ld=lld",
             "-Wl,--gc-sections,--unresolved-symbols=ignore-all", *LINK_FLAGS.get(program_name, []), "-lvulkan",
             "-lpthread", "-ldl", "-lm", "-lgcc_s", "-o", program)
