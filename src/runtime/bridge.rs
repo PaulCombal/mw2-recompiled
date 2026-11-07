@@ -1,7 +1,9 @@
 // What the Rust runtime asks of the C++ one: runtime/rust_calls.cpp. The kernel's
 // go as the rest of the kernel moves, the renderer's stay.
 
-use std::ffi::{CStr, c_char, c_void};
+#[cfg(not(all(feature = "rust-renderer", mw2_owns_memory_watch)))]
+use std::ffi::c_void;
+use std::ffi::{CStr, c_char};
 
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
@@ -12,7 +14,9 @@ pub struct WatchCosts {
 }
 
 unsafe extern "C" {
+    #[cfg(not(all(feature = "rust-renderer", mw2_owns_memory_watch)))]
     fn mw2_watch_costs(costs: *mut WatchCosts);
+    #[cfg(not(all(feature = "rust-renderer", mw2_owns_memory_watch)))]
     fn mw2_watch_handle_fault(address: *const c_void) -> bool;
     #[cfg(all(feature = "diagnostics", not(windows), not(all(feature = "rust-renderer", mw2_owns_gpu))))]
     fn mw2_gpu_frame_count() -> u64;
@@ -36,13 +40,22 @@ unsafe extern "C" {
     fn mw2_renderer_flash_seen(how: *const c_char);
 }
 
+/// The memory watch's faults and protection changes so far: memory_watch.cpp's, or with
+/// it in Rust (build.rs, RUST_OWNS), gpu/memory_watch.rs's.
 pub fn watch_costs() -> WatchCosts {
-    let mut costs = WatchCosts::default();
-    unsafe { mw2_watch_costs(&mut costs) };
-    costs
+    #[cfg(all(feature = "rust-renderer", mw2_owns_memory_watch))]
+    return crate::runtime::gpu::memory_watch::costs();
+    #[cfg(not(all(feature = "rust-renderer", mw2_owns_memory_watch)))]
+    {
+        let mut costs = WatchCosts::default();
+        unsafe { mw2_watch_costs(&mut costs) };
+        costs
+    }
 }
 
-/// A write to a page the renderer watches is marked, and may go on.
+/// A write to a page the renderer watches is marked, and may go on. With the watch in
+/// Rust, crash.rs calls gpu/memory_watch.rs's handle_fault itself.
+#[cfg(not(all(feature = "rust-renderer", mw2_owns_memory_watch)))]
 pub fn watch_handle_fault(address: *const c_void) -> bool {
     unsafe { mw2_watch_handle_fault(address) }
 }
@@ -243,6 +256,7 @@ pub mod gpu {
         fn mw2_census_report();
         fn mw2_renderer_report();
         fn mw2_textures_report();
+        #[cfg(not(mw2_owns_memory_watch))]
         fn mw2_watch_report();
         #[cfg(not(mw2_owns_image_move))]
         fn mw2_imagepool_report();
@@ -357,7 +371,12 @@ pub mod gpu {
 
     #[cfg(feature = "diagnostics")]
     pub fn watch_report() {
-        unsafe { mw2_watch_report() }
+        #[cfg(mw2_owns_memory_watch)]
+        crate::runtime::gpu::memory_watch::report();
+        #[cfg(not(mw2_owns_memory_watch))]
+        unsafe {
+            mw2_watch_report()
+        }
     }
 
     #[cfg(feature = "diagnostics")]
@@ -449,6 +468,8 @@ pub mod renderer {
         fn mw2_renderer_idle();
         fn mw2_renderer_before_stream_write(physical: u32, size: u32);
         fn mw2_textures_memory_written(physical: u32, size: u32);
+        #[cfg(mw2_owns_shader_preload)]
+        fn mw2_renderer_prepare_shader(pixel: bool, code: *const u32, words: usize);
     }
 
     #[inline(always)]
@@ -500,12 +521,22 @@ pub mod renderer {
     pub fn textures_memory_written(physical: u32, size: u32) {
         unsafe { mw2_textures_memory_written(physical, size) }
     }
+
+    /// vk::renderer::PrepareShader: a shader the title loaded, to compile before its first
+    /// draw (hooks/shader_preload.rs).
+    #[cfg(mw2_owns_shader_preload)]
+    pub fn prepare_shader(pixel: bool, code: &[u32]) {
+        unsafe { mw2_renderer_prepare_shader(pixel, code.as_ptr(), code.len()) }
+    }
 }
 
-// The memory watch (gpu/memory_watch.cpp, C++ until it moves): what the command
-// processor's shader memo and the image pool ask of it.
+// The memory watch: what the command processor's shader memo and the image pool ask of
+// it. gpu/memory_watch.rs's when Rust owns memory_watch.cpp (build.rs, RUST_OWNS), else
+// the C++'s through runtime/rust_calls.cpp -- and in tools/gpu_diff.py's pm4 and
+// image_pool rigs and tools/hook_diff.py, the rig's loggers, as the C++ side calls them.
 #[cfg(feature = "rust-renderer")]
 pub mod watch {
+    #[cfg(any(not(mw2_owns_memory_watch), mw2_gpu_rig, mw2_hook_rig))]
     unsafe extern "C" {
         fn mw2_watch_enabled() -> bool;
         fn mw2_watch_track(physical: u32, bytes: u32, frame: u64) -> u64;
@@ -513,22 +544,53 @@ pub mod watch {
         fn mw2_watch_will_write(address: u32, bytes: u32);
     }
 
+    #[cfg(all(mw2_owns_memory_watch, not(any(mw2_gpu_rig, mw2_hook_rig))))]
+    use crate::runtime::gpu::memory_watch as watch;
+
+    #[cfg(all(mw2_owns_memory_watch, not(any(mw2_gpu_rig, mw2_hook_rig))))]
+    unsafe extern "C" {
+        fn mw2_renderer_completed_submission() -> u64;
+    }
+
+    #[inline]
     pub fn enabled() -> bool {
-        unsafe { mw2_watch_enabled() }
+        #[cfg(all(mw2_owns_memory_watch, not(any(mw2_gpu_rig, mw2_hook_rig))))]
+        return watch::enabled();
+        #[cfg(any(not(mw2_owns_memory_watch), mw2_gpu_rig, mw2_hook_rig))]
+        unsafe {
+            mw2_watch_enabled()
+        }
     }
 
     /// Before reading the range: a stamp when every page of it is watched from then on.
+    /// The C++ asks vk::renderer::CompletedSubmission (a cached number) only when a page
+    /// has to be copied; the Rust takes it first, the same number.
     pub fn track(physical: u32, bytes: u32, frame: u64) -> u64 {
-        unsafe { mw2_watch_track(physical, bytes, frame) }
+        #[cfg(all(mw2_owns_memory_watch, not(any(mw2_gpu_rig, mw2_hook_rig))))]
+        return watch::track(physical, bytes, unsafe { mw2_renderer_completed_submission() }, frame);
+        #[cfg(any(not(mw2_owns_memory_watch), mw2_gpu_rig, mw2_hook_rig))]
+        unsafe {
+            mw2_watch_track(physical, bytes, frame)
+        }
     }
 
     pub fn unwritten(physical: u32, bytes: u32, since: u64) -> bool {
-        unsafe { mw2_watch_unwritten(physical, bytes, since) }
+        #[cfg(all(mw2_owns_memory_watch, not(any(mw2_gpu_rig, mw2_hook_rig))))]
+        return watch::unwritten(physical, bytes, since);
+        #[cfg(any(not(mw2_owns_memory_watch), mw2_gpu_rig, mw2_hook_rig))]
+        unsafe {
+            mw2_watch_unwritten(physical, bytes, since)
+        }
     }
 
     /// Before this runtime writes a large range of guest memory itself.
     pub fn will_write(address: u32, bytes: u32) {
-        unsafe { mw2_watch_will_write(address, bytes) }
+        #[cfg(all(mw2_owns_memory_watch, not(any(mw2_gpu_rig, mw2_hook_rig))))]
+        watch::will_write(address, bytes);
+        #[cfg(any(not(mw2_owns_memory_watch), mw2_gpu_rig, mw2_hook_rig))]
+        unsafe {
+            mw2_watch_will_write(address, bytes)
+        }
     }
 }
 

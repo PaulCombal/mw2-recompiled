@@ -11,7 +11,8 @@ would sample at the moment a draw executes.
 | The Rust against the C++ | `tools/gpu_diff.py <build> --rig tiling,texture,formats` (`tools/gpu_diff/texture.cpp`), through the build's forwarders too; `--rig texture_bench --bench` for MB/s |
 | Images, samplers, the texture set, re-reads | `runtime/gpu/vulkan/texture_cache.{h,cpp}` |
 | The images' memory, in blocks | `runtime/gpu/vulkan/image_memory.{h,cpp}` |
-| Write watch on guest pages | `runtime/gpu/memory_watch.{h,cpp}` |
+| Write watch on guest pages | `src/runtime/gpu/memory_watch.rs`, with the fix for a write that faulted for ever on a page loosened while it was being copied ([rendering.md](rendering.md#the-shadow-of-guest-memory)); the C++ renderer's `runtime/gpu/memory_watch.h` calls it (`runtime/rust_renderer.cpp`), and `memory_watch.cpp` is the `--renderer cpp` build's |
+| The Rust watch against the C++ | `tools/gpu_diff.py <build> --rig watch,watch_stress,watch_livelock,watch_teardown` (`tools/gpu_diff/watch.cpp`): real page protections on a memfd mapped as both windows; `watch_teardown` checks that `set_shadow(null)` leaves no `Loose` page read-only |
 | The image pool's block copy | `src/runtime/gpu/image_move.rs` and the hook `src/hooks/image_move.rs`; `runtime/image_move.{h,cpp}` is the `--renderer cpp` build's |
 | Upload round-trip test | `tools/upload_texture.cpp` (target `upload-texture`) |
 

@@ -469,6 +469,12 @@ namespace
         for (PPCRegister* reg : volatile_registers) reg->u64 = read();
         ctx.f1.f64 = double(int32_t(random.Next())) / 4.0;
 
+        // D3D makes the shader object in place, and patches the vertex shader's fetches in
+        // its microcode: what the preload hooks read is what the originals leave.
+        if (IsStub(id, "__imp__T_D3D_InitPixelShader") && from >= kArena && from < kArena + 0x1000)
+            Store32(from + 40, random.Below(4) ? 0x102A1100u + random.Below(256) : uint32_t(random.Next()));
+        else if (IsStub(id, "__imp__T_D3D_PatchVertexFetches") && to >= kArena && to < kArena + 0x50000)
+            Store32(to + 4 * random.Below(16), uint32_t(random.Next()));
         if (IsStub(id, "T_Huffman_DecodeSymbol"))
         {
             Store32(to, uint32_t(random.Next()));
@@ -1076,6 +1082,43 @@ namespace
                 constexpr uint32_t kBlocks[] = { 0, 0xA0001000u, 0xA0001000u, 0xBFFFFFF0u, 0xC0002000u, 0x82000004u, 0x40000000u };
                 Set32(kArena + device + 10896, random.Below(8) ? kBlocks[random.Below(std::size(kBlocks))] : uint32_t(random.Next()));
             }
+        }
+        if (name == "T_D3D_InitPixelShader" || name == "T_D3D_PatchVertexFetches")
+        {
+            // A D3D shader object over a program in the arena: its header at +40 (pixel) or
+            // +872 (vertex), the header's seventh word the offset of the table that says
+            // where the microcode starts and how long it is. The magic good or not, the
+            // microcode 0, 64 or 128 bytes in or past the 4096 allowed, its size at the
+            // limits (0, not a multiple of 4, 256 KB and past it), no program, and for a
+            // vertex shader a patched copy elsewhere, or none.
+            const bool pixel = name == "T_D3D_InitPixelShader";
+            const uint32_t object = kArena + 0x100 + random.Below(64) * 4 + (random.Below(16) ? 0 : 1 + random.Below(3));
+            const uint32_t header = object + (pixel ? 40 : 872);
+            constexpr uint32_t kMagics[] = { 0x102A1100u, 0x102A1100u, 0x102A1100u, 0x102A11FFu, 0x102A1101u,
+                                             0x102A1000u, 0x002A1100u, 0x102B1100u, 0u, 0xFFFFFFFFu };
+            Set32(header, random.Below(4) ? kMagics[random.Below(3)] : kMagics[random.Below(std::size(kMagics))]);
+            const uint32_t tableOffset = random.Below(16) ? 0x40 + random.Below(64) * 4 : uint32_t(random.Next());
+            Set32(header + 24, tableOffset);
+            constexpr uint32_t kOffsets[] = { 0, 64, 128, 0, 64, 128, 4092, 4096, 4097, 4100, 8192, 0xFFFFFFFFu };
+            constexpr uint32_t kSizes[] = { 4, 8, 64, 400, 1024, 4096, 0, 3, 6, 4094, (256u << 10) - 4, 256u << 10,
+                                            (256u << 10) + 4, 0x80000000u };
+            const uint32_t offset = random.Below(4) ? kOffsets[random.Below(6)] : kOffsets[random.Below(std::size(kOffsets))];
+            const uint32_t bytes = random.Below(4) ? kSizes[random.Below(6)] : kSizes[random.Below(std::size(kSizes))];
+            if (tableOffset < 0x200)
+            {
+                Set32(header + tableOffset, offset);
+                Set32(header + tableOffset + 4, bytes);
+            }
+            const uint32_t program = kArena + 0x8000 + random.Below(16) * 0x100;
+            const uint32_t copy = kArena + 0x4000 + random.Below(16) * 4;
+            for (uint32_t i = 0; i < 64; i++)
+            {
+                Set32(program + (offset < 4096 ? offset : 0) + i * 4, uint32_t(random.Next()));
+                Set32(copy + i * 4, uint32_t(random.Next()));
+            }
+            ctx.r3.u64 = object;
+            ctx.r4.u64 = random.Below(8) ? (pixel ? program : copy) : 0;
+            if (random.Below(16) == 0) ctx.r4.u64 |= random.Next() << 32;
         }
         if (name == "T_D3D_ReplayRecording")
         {

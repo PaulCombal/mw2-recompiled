@@ -172,9 +172,36 @@ records would be the same share one.
 The same buffer continues with a 512 MB shadow of guest physical memory, in
 which physical address N sits at offset N. A vertex window in pages the title
 has not written since they were copied is read there instead of being copied.
-`gpu/memory_watch.cpp` tracks writes as Xenia does. Copied pages are made
-read-only through both windows of the physical bank, and the title's first
-write faults once, which marks the page and makes it writable again.
+`src/runtime/gpu/memory_watch.rs` tracks writes as Xenia does
+(`runtime/gpu/memory_watch.cpp` in the `--renderer cpp` build). Copied pages
+are made read-only through both windows of the physical bank, and the title's
+first write faults once, which marks the page and makes it writable again.
+
+A page is `Never` (never copied), `Loose` (written since its copy), `Arming`
+(read-only, being copied) or `Watched` (read-only, the copy current). The
+consumer stores `Arming`, protects the run read-only, copies it and moves it to
+`Watched`. A writer makes the page writable before it moves it to `Loose`.
+
+- **A fault on a `Loose` page makes the page writable again** (counted, and
+  reported as `loose faults` when there are any). A writer can loosen a page
+  between the consumer's store of `Arming` and its protect, which leaves the
+  page `Loose` and read-only. The C++ handler answered every fault on such a
+  page without making it writable, so the writing thread faulted for ever,
+  unless the consumer happened to copy that page again. The Rust handler makes
+  it writable and reads the state again, so a page armed again in between is
+  loosened properly. The count is every fault on a `Loose` page, not only
+  stuck ones: when two threads fault on one page together, the second handler
+  finds it `Loose` and protects it once more (two more protections under
+  `MW2_REPORT` than the C++). The handler cannot tell the two cases apart
+  without asking the kernel, so `loose faults` is not a livelock count.
+- **Turning the watch off makes every `Loose` page writable too.** Such a page
+  can still be read-only when the renderer shuts down, and once the watch is off
+  the handler no longer answers, so a write to it would be taken for a crash.
+  `set_shadow(null)` makes each run of `Loose` pages writable in one call before
+  it turns the handler off. These protections are not counted in the report.
+- The fault handler, `WillWrite` and the protect take no lock, allocate
+  nothing and log nothing. Whether protections are timed (`MW2_REPORT`) is read
+  once, when the shadow is set.
 
 - A page's copy is replaced only once no submission on the GPU has read it.
 - A page rewritten within 1024 frames of its copy waits 2^strikes frames (at
@@ -582,7 +609,8 @@ there is one.
 
 On the console a shader is ready as soon as it is loaded. With
 `VK_EXT_graphics_pipeline_library` the runtime compiles it at that point too
-(`renderer_libraries.cpp`, `runtime/shader_preload.cpp`):
+(`renderer_libraries.cpp`, the hooks in `src/hooks/shader_preload.rs`;
+`runtime/shader_preload.cpp` in the `--renderer cpp` build):
 
 - `T_D3D_InitPixelShader` and `T_D3D_PatchVertexFetches` are hooked. The
   shader object's header (magic `0x102A11xx`) is at +40 (pixel) or +872

@@ -331,7 +331,7 @@ Ports below 1024 are shifted up by 30000, since binding them needs privileges.
 on Windows. A fault is offered in turn to:
 
 1. the `MW2_WATCH` write watchpoint (diagnostic builds, Linux only);
-2. the GPU's write watch (`gpu/memory_watch.*`);
+2. the GPU's write watch (`src/runtime/gpu/memory_watch.rs`; `runtime/gpu/memory_watch.*` in the `--renderer cpp` build);
 3. on Windows, the first-touch commit of a reserved page.
 
 What is left is a real fault. The report gives the guest address, what region

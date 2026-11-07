@@ -30,7 +30,7 @@ GUEST = re.compile(r"^(__imp__)?sub_[0-9A-F]{8}$")
 # With MW2_TRACE_PACING and MW2_STUTTERS, the pacing notes and the stutter detector's
 # calls log here (src/runtime/pacing_trace.rs, stutters.rs), so their order is compared.
 ENVIRONMENTS = [{}, {"MW2_FOV": "90", "MW2_CUSTOM_MAPS": "1"}, {"MW2_FOV": "130", "MW2_ANISOTROPY": "8x"}, {"MW2_FOV": "nan", "MW2_TRACE_PACING": "/dev/null", "MW2_STUTTERS": "1"}, {"MW2_ANISOTROPY": "3", "MW2_CUSTOM_MAPS": "1"},
-                {"MW2_ENGINE_LOG": "1", "MW2_TRACE_CBUF": "1"}, {"MW2_ENGINE_LOG": "1"}, {"MW2_RENDER": "960x600", "MW2_CUSTOM_MAPS": "1"}, {"MW2_RENDER": "1280x800"}, {"MW2_RENDER": "640x480", "MW2_CUSTOM_MAPS": "1"}, {"MW2_RENDER": "1600x900"}, {"MW2_RENDER": " 1024x+640"}]
+                {"MW2_ENGINE_LOG": "1", "MW2_TRACE_CBUF": "1", "MW2_TRACE_SHADER_LOADS": "1"}, {"MW2_ENGINE_LOG": "1"}, {"MW2_RENDER": "960x600", "MW2_CUSTOM_MAPS": "1"}, {"MW2_RENDER": "1280x800"}, {"MW2_RENDER": "640x480", "MW2_CUSTOM_MAPS": "1"}, {"MW2_RENDER": "1600x900"}, {"MW2_RENDER": " 1024x+640"}]
 
 # The custom maps' hooks list .arena files in the game folder: each seed gets a folder
 # of its own, of arenas whose maps are installed or not, with a picture or not, and

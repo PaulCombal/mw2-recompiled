@@ -15,6 +15,10 @@
 # (--side), the same program twice, and the two outputs are compared case by case; the
 # first case that differs is shown whole from both (pm4.cpp says what a case logs).
 # --capture <dir> feeds a capture of the game's GPU input (MW2_CAPTURE_GPU) to pm4.
+# The memory watch (watch, watch_stress, watch_livelock, watch_teardown) runs both sides in one process on
+# real page protections, a memfd mapped as the two physical windows (watch.cpp says how).
+# preload is tools/hook_diff.py on the two shader-preload hooks, whose cases are the
+# synthetic shader objects (hook_diff.cpp's Tune).
 #
 #   usage: gpu_diff.py <build folder> --rig <name>[,<name>...] [--seeds N] [--cases N]
 #                      [--src folder] [--bench] [--side cpp|rust] [--capture <dir>]
@@ -33,6 +37,7 @@ TEXTURE = ["gpu/texture.cpp", "gpu/vulkan/texture_formats.cpp"]
 PRESENTER = ["gpu/vulkan/presenter.cpp", "gpu/vulkan/backdrop.cpp", "gpu/vulkan/gpu_time.cpp", "gpu/vulkan/capture.cpp"]
 THREADS = ["gpu/gpu.cpp", "gpu/arena.cpp", "gpu/d3d_hooks.cpp"]
 PM4 = ["gpu/command_processor.cpp", "gpu/census.cpp", "image_move.cpp"]
+WATCH = ["gpu/memory_watch.cpp"]
 RIGS = {
     "tiling": (TEXTURE, "texture", ["tiling"]),
     "texture": (TEXTURE, "texture", ["texture"]),
@@ -44,6 +49,10 @@ RIGS = {
     "interrupts": (THREADS, "interrupts", ["interrupts", "vblank", "worker"]),
     "pm4": (PM4, "pm4", ["pm4"]),
     "image_pool": (PM4, "pm4", ["image_pool"]),
+    "watch": (WATCH, "watch", ["watch"]),
+    "watch_stress": (WATCH, "watch", ["stress"]),
+    "watch_livelock": (WATCH, "watch", ["livelock"]),
+    "watch_teardown": (WATCH, "watch", ["teardown"]),
 }
 # What each program compiles: the originals as they are, then its helpers.
 PROGRAMS = {
@@ -58,7 +67,12 @@ PROGRAMS = {
     # The command processor, census, image pool and arena as they are; the guest's clock
     # in the command processor is the rig's (rig_timebase), and its mw2_* export renamed.
     "pm4": (["gpu/command_processor.cpp", "gpu/census.cpp", "image_move.cpp", "gpu/arena.cpp"], ["rig_bridge"]),
+    # memory_watch.cpp included whole by watch.cpp, for its file statics.
+    "watch": ([], ["rig_bridge"]),
 }
+# What a program links with beyond the others: the watch rig wraps mprotect, to see and
+# steer every protection change either side makes.
+LINK_FLAGS = {"watch": ["-Wl,--wrap=mprotect"]}
 # Flags of one original's own.
 # Its sleeps between WAIT_REG_MEM polls, the rig's (pm4_sleep.h).
 SOURCE_FLAGS = {"gpu/command_processor.cpp": ["-DPPC_QueryTimebase=rig_timebase", "-include",
@@ -74,7 +88,7 @@ PM4_ENVIRONMENTS = [{}, {"MW2_TRACE_FRAME": "6", "MW2_TRACE_DRAWS": "60"},
 # What a program's C++ needs beyond the others': gpu.cpp includes the title's table and
 # the recompiled code's header. These programs compare the lines each side prints, so
 # their C++ and their Rust log, into memory (rig_log.h); the others' do not.
-TITLED = {"arena", "interrupts", "pm4"}
+TITLED = {"arena", "interrupts", "pm4", "watch"}
 
 def run(*command, **options):
     return subprocess.run(command, check=True, text=True, **options)
@@ -146,6 +160,20 @@ def main():
         return libraries[logged]
 
     for name in arguments.rig.split(","):
+        if name == "preload":
+            # The shader-preload hooks are hooks: hook_diff.py runs them, C++ against Rust,
+            # on the synthetic shader objects of its cases (hook_diff.cpp, Tune).
+            if "mw2_owns_shader_preload" not in owns:
+                sys.exit(f"{build}: Rust does not own shader_preload.cpp (renderer_cfgs.txt)")
+            result = subprocess.run([sys.executable, "-I", f"{ROOT}/tools/hook_diff.py", build, "--hook",
+                                     "T_D3D_InitPixelShader,T_D3D_PatchVertexFetches", "--src", arguments.src,
+                                     "--seeds", str(arguments.seeds), "--cases", str(arguments.cases),
+                                     "--work", f"{work}/preload"], text=True, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT)
+            print(result.stdout[-4000:], end="")
+            if result.returncode != 0:
+                sys.exit(f"preload: hook_diff exits {result.returncode}")
+            continue
         owned, program_name, parts = RIGS[name]
         for source in owned:
             stem = os.path.basename(source)[:-4]
@@ -174,8 +202,8 @@ def main():
         program = f"{work}/{program_name}"
         library = library_for(program_name in TITLED)
         run(*flags, f"{ROOT}/tools/gpu_diff/{program_name}.cpp", *objects, library, "-fuse-ld=lld",
-            "-Wl,--gc-sections,--unresolved-symbols=ignore-all", "-lvulkan", "-lpthread", "-ldl", "-lm", "-lgcc_s",
-            "-o", program)
+            "-Wl,--gc-sections,--unresolved-symbols=ignore-all", *LINK_FLAGS.get(program_name, []), "-lvulkan",
+            "-lpthread", "-ldl", "-lm", "-lgcc_s", "-o", program)
         if program_name in TWO_SIDED:
             two_sided(program, name, parts, arguments, work)
             continue

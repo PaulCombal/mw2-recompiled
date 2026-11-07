@@ -91,6 +91,8 @@ mod render_size;
     T_STR_CorruptedFile
 ))]
 mod script_save_ids;
+#[cfg(all(mw2_owns_shader_preload, T_D3D_InitPixelShader))]
+mod shader_preload;
 #[cfg(all(
     T_MSG_ReadDeltaEntity,
     T_MSG_ReadDeltaPlayerState,

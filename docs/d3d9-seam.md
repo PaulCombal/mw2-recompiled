@@ -26,7 +26,8 @@ can adopt the guest structs but cannot replace them.
 
 The D3D hooks below are `src/hooks/d3d_hooks.rs` (`runtime/gpu/d3d_hooks.cpp` in the
 `--renderer cpp` build), the image pool's `src/hooks/image_move.rs`
-(`runtime/image_move.cpp`), and the shader hooks `runtime/shader_preload.cpp`.
+(`runtime/image_move.cpp`), and the shader hooks `src/hooks/shader_preload.rs`
+(`runtime/shader_preload.cpp`).
 
 | Hook (`title.h`) | Campaign | MP | Purpose |
 |---|---|---|---|
@@ -34,7 +35,7 @@ The D3D hooks below are `src/hooks/d3d_hooks.rs` (`runtime/gpu/d3d_hooks.cpp` in
 | `T_D3D_ArenaWait` | `820B9800` | `820E1E70` | learns the arena progress block from `[r3+10896]` |
 | `T_D3D_ReplayRecording` | `820C6130` | `820E4848` | diagnostics: warns of a recorded chunk list (`[object+116]`: next +0, count +4) with a zero count or a cycle, which the do-while replay loop would never leave |
 | `T_Image_FlushMove` | `823DE738` | `823DD658` | queues the image pool's block move for the command processor to make at its copy draw, or makes it at once when nothing consumes the stream (below) |
-| `T_D3D_InitPixelShader`, `T_D3D_PatchVertexFetches` | `820B8B58`, `820B6B10` | `820D7268`, `820D5220` | hand shader microcode to the renderer at load: a pixel shader as it is made, a vertex shader once D3D has bound it to a declaration (`shader_preload.cpp`, [rendering.md](rendering.md#pipelines)) |
+| `T_D3D_InitPixelShader`, `T_D3D_PatchVertexFetches` | `820B8B58`, `820B6B10` | `820D7268`, `820D5220` | hand shader microcode to the renderer at load: a pixel shader as it is made, a vertex shader once D3D has bound it to a declaration (`shader_preload.rs`, [rendering.md](rendering.md#pipelines)) |
 
 ## The `Vd*` imports (`src/runtime/kernel/video.rs`)
 

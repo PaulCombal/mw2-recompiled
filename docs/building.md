@@ -352,7 +352,8 @@ lists some of them stops at a `compile_error!` in `src/runtime/gpu/mod.rs`. The 
 same list as definitions, `MW2_OWNS_<STEM>` (`MW2_OWNS_COMMAND_PROCESSOR`): for the
 command processor, the census and the image pool, `rust_calls.cpp` routes into the C++
 file only while it is compiled and `rust_renderer.cpp` forwards to the Rust only while
-Rust owns it. `RUST_ONLY` holds the
+Rust owns it; the memory watch the same way (`MW2_OWNS_MEMORY_WATCH`), whose fault
+handler `crash.rs` then calls in Rust. `RUST_ONLY` holds the
 C++ that exists only beside the Rust renderer: `runtime/rust_renderer.cpp` defines
 the C++ declarations of what moved as calls to `src/runtime/gpu/exports.rs`, so no
 header and no caller of the C++ renderer changes. Calls from the Rust into the C++
@@ -666,7 +667,7 @@ and the memory, with what the hardware keeps for itself (an integrated
 graphics chip's share, on Windows), the least that was free in play and the
 game's own peak. A reading costs about 0.1 ms, once a second, on the ring
 consumer's thread. A fourth line counts the memory watch's write faults and
-changes of page protection a second of play (`gpu/memory_watch.cpp`), and
+changes of page protection a second of play (`src/runtime/gpu/memory_watch.rs`), and
 what the changes cost: a few microseconds each on Linux, more on Windows,
 and more again with Memory Integrity on. They are counted and timed only in
 this mode.
@@ -764,10 +765,10 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `kernel/` | kernel and XAM imports: memory, objects and waits, threads, files, content and profile, input, networking, video, audio |
 | `apu/` | the XAudio render driver and the XMA decoder (the C++ build's), and `xma_codec.cpp`, FFmpeg's decoder behind C calls for `tools/xma_diff.py` |
 | `online/` | the online services (`lan`, `server`, `steam`), chosen as the game starts |
-| `gpu/` | the command processor: ring and PM4 packets, interrupts, D3D9's command-buffer arena, texture fetch and tiling, the D3D9 hooks, the write watch (`memory_watch.*`); the ring consumer, the arena, the command processor, the register file, the census, the D3D9 hooks and texture tiling are `src/runtime/gpu/`'s and `src/hooks/d3d_hooks.rs`, and their C++ the `--renderer cpp` build's |
+| `gpu/` | the command processor: ring and PM4 packets, interrupts, D3D9's command-buffer arena, texture fetch and tiling, the D3D9 hooks, the write watch (`memory_watch.*`); the ring consumer, the arena, the command processor, the register file, the census, the write watch, the D3D9 hooks and texture tiling are `src/runtime/gpu/`'s and `src/hooks/d3d_hooks.rs`, and their C++ the `--renderer cpp` build's |
 | `gpu/vulkan/` | the Vulkan renderer: draws, targets, resolves, frames, pipelines and pipeline libraries, the shader translator, the texture cache, the recorder thread, the display table; the presenter window, its backdrop, the GPU's busy time and RenderDoc capture are `src/runtime/gpu/vulkan/`'s, and their C++ the `--renderer cpp` build's |
 | `image_move.cpp` | the image pool's block copy, which the console makes with a memory-export draw; `src/runtime/gpu/image_move.rs` and `src/hooks/image_move.rs`, and this the `--renderer cpp` build's |
-| `shader_preload.cpp` | hands shaders loaded with a level to the renderer to compile |
+| `shader_preload.cpp` | hands shaders loaded with a level to the renderer to compile; `src/hooks/shader_preload.rs`, and this the `--renderer cpp` build's |
 | `engine.h`, `engine_log.cpp`, `predicate_waits.cpp`, `console.cpp` | hooks into the engine: print and error paths, spin waits, the console command buffer |
 | `player.cpp` | the headless walker and route recorder |
 | `field_of_view.cpp` | `MW2_FOV`: scales the view angle the title computes |

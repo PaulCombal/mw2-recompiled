@@ -52,7 +52,7 @@ payload is command buffer rather than microcode.
 
 A shader is identified by a hash of its microcode. An `IM_LOAD`'s microcode and
 hash are kept by address, length and stage while the memory watch
-(`gpu/memory_watch.h`) says nothing has written their pages, so a frame's
+(`src/runtime/gpu/memory_watch.rs`) says nothing has written their pages, so a frame's
 thousands of loads of a few hundred shaders read and hash each one once. With diagnostics compiled in
 (the default; `-DMW2_DIAGNOSTICS=OFF` removes them, see
 [building.md](building.md)), `MW2_DUMP_SHADERS=<dir>` writes each distinct

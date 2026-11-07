@@ -302,6 +302,119 @@ mod image_move {
     }
 }
 
+// What the C++ renderer calls of memory_watch.cpp (gpu/memory_watch.rs): the arena's
+// Serve once a vertex fetch (renderer_arena.cpp), the texture cache's Enabled, Track and
+// Unwritten, the renderer's SetShadow, and the capture's Loosened (stream_capture.cpp);
+// and, for a fold that puts image_move.cpp or gpu.cpp back, WillWrite and the report.
+// The forwarders pass the completed serial as a value, CompletedSubmission's cached one.
+#[cfg(mw2_owns_memory_watch)]
+mod memory_watch {
+    use crate::runtime::gpu::memory_watch as watch;
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_memory_watch_enabled() -> bool {
+        watch::enabled()
+    }
+
+    /// `shadow` is the renderer's mapping of the shadow, or null.
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_memory_watch_set_shadow(shadow: *mut u8, bytes: u32) {
+        watch::set_shadow(shadow, bytes);
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_memory_watch_serve(
+        physical: u32,
+        bytes: u32,
+        recording: u64,
+        completed: u64,
+        frame: u64,
+    ) -> bool {
+        watch::serve(physical, bytes, recording, completed, frame)
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_memory_watch_track(physical: u32, bytes: u32, completed: u64, frame: u64) -> u64 {
+        watch::track(physical, bytes, completed, frame)
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_memory_watch_unwritten(physical: u32, bytes: u32, since: u64) -> bool {
+        watch::unwritten(physical, bytes, since)
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_memory_watch_loosened(page: u32) -> u32 {
+        watch::loosened(page)
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_memory_watch_will_write(address: u32, bytes: u32) {
+        watch::will_write(address, bytes);
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_memory_watch_report() {
+        watch::report();
+    }
+}
+
+// tools/gpu_diff.py --rig watch: the rest of memory_watch.rs, and what the rig compares.
+#[cfg(all(mw2_gpu_rig, mw2_owns_memory_watch))]
+mod watch_rig {
+    use crate::runtime::gpu::memory_watch as watch;
+    use std::ffi::c_void;
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_watch_handle_fault(address: *const c_void) -> bool {
+        watch::handle_fault(address)
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_watch_will_write(address: u32, bytes: u32) {
+        watch::will_write(address, bytes);
+    }
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn mw2_rig_watch_costs(out: *mut u64) {
+        let costs = watch::costs();
+        // SAFETY: the rig's uint64_t[3].
+        unsafe { out.cast::<[u64; 3]>().write([costs.faults, costs.protects, costs.protect_nanoseconds]) };
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_watch_report() {
+        watch::report();
+    }
+
+    /// Page `page`'s state, strikes, armed frame, stamp and last submission.
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn mw2_rig_watch_page(page: u32, out: *mut u64) {
+        let (state, strikes, frame, armed_at, served) = watch::rig::page(page);
+        // SAFETY: the rig's uint64_t[5].
+        unsafe { out.cast::<[u64; 5]>().write([state.into(), strikes.into(), frame.into(), armed_at, served]) };
+    }
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn mw2_rig_watch_counters(out: *mut u64) {
+        // SAFETY: the rig's uint64_t[16].
+        unsafe { out.cast::<[u64; 16]>().write(watch::rig::counters()) };
+    }
+
+    /// Page `page`'s state alone: what the rig's mprotect reads while a call is in progress.
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_watch_state(page: u32) -> u8 {
+        watch::rig::state(page)
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn mw2_rig_watch_reset() {
+        watch::rig::reset();
+    }
+}
+
 // tools/hook_diff.py: the values the C++ hooks' gpu::FrameCount and gpu::Consuming give,
 // given to the Rust's too, and what the image pool's hook leaves queued.
 #[cfg(all(mw2_hook_rig, mw2_owns_gpu))]

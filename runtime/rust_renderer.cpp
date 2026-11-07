@@ -280,4 +280,55 @@ void imagepool::QueueForReplay(uint32_t destination, uint32_t source, uint32_t s
 #endif
 #endif
 
+// ---- gpu/memory_watch.cpp (gpu/memory_watch.rs). What the C++ renderer calls: the arena's
+// Serve once a vertex fetch (renderer_arena.cpp), the texture cache's Enabled, Track and
+// Unwritten, the renderer's SetShadow and the capture's Loosened (stream_capture.cpp); and,
+// for a fold that puts image_move.cpp or gpu.cpp back, the image pool's WillWrite and
+// gpu::Report's Report. The fault handler and the costs are Rust's callers' alone. The
+// completed serial crosses as a value: CompletedSubmission's cached number, the one the
+// C++ asked for only when a page had to be copied.
+#include "gpu/memory_watch.h"
+
+#if MW2_OWNS_MEMORY_WATCH
+extern "C"
+{
+    bool mw2_memory_watch_enabled();
+    void mw2_memory_watch_set_shadow(uint8_t* shadow, uint32_t bytes);
+    bool mw2_memory_watch_serve(uint32_t physical, uint32_t bytes, uint64_t recording, uint64_t completed, uint64_t frame);
+    uint64_t mw2_memory_watch_track(uint32_t physical, uint32_t bytes, uint64_t completed, uint64_t frame);
+    bool mw2_memory_watch_unwritten(uint32_t physical, uint32_t bytes, uint64_t since);
+    void mw2_memory_watch_will_write(uint32_t address, uint32_t bytes);
+#if MW2_DIAGNOSTICS
+    uint32_t mw2_memory_watch_loosened(uint32_t page);
+    void mw2_memory_watch_report();
+#endif
+}
+
+bool gpu::watch::Enabled() { return mw2_memory_watch_enabled(); }
+void gpu::watch::SetShadow(uint8_t* shadow, uint32_t bytes) { mw2_memory_watch_set_shadow(shadow, bytes); }
+bool gpu::watch::Serve(uint32_t physical, uint32_t bytes, uint64_t recording, uint64_t (*completed)(), uint64_t frame)
+{
+    return mw2_memory_watch_serve(physical, bytes, recording, completed(), frame);
+}
+uint64_t gpu::watch::Track(uint32_t physical, uint32_t bytes, uint64_t (*completed)(), uint64_t frame)
+{
+    return mw2_memory_watch_track(physical, bytes, completed(), frame);
+}
+bool gpu::watch::Unwritten(uint32_t physical, uint32_t bytes, uint64_t since)
+{
+    return mw2_memory_watch_unwritten(physical, bytes, since);
+}
+void gpu::watch::WillWrite(uint32_t guestAddress, uint32_t bytes) { mw2_memory_watch_will_write(guestAddress, bytes); }
+#if MW2_DIAGNOSTICS
+uint32_t gpu::watch::Loosened(uint32_t page) { return mw2_memory_watch_loosened(page); }
+#endif
+// gpu::Report, its only caller, reaches it in a diagnostics build alone.
+void gpu::watch::Report()
+{
+#if MW2_DIAGNOSTICS
+    mw2_memory_watch_report();
+#endif
+}
+#endif
+
 #endif  // MW2_RUST_RENDERER

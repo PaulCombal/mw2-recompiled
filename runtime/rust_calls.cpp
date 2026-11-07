@@ -13,14 +13,18 @@
 #include "image_move.h"
 #if MW2_DIAGNOSTICS
 #include "gpu/stream_capture.h"
+#include "gpu/vulkan/trace.h"
 #endif
 #endif
 
 #include <string>
 
+// The memory watch's, which the Rust renderer has in Rust (src/runtime/gpu/memory_watch.rs).
+#if !MW2_OWNS_MEMORY_WATCH
 extern "C" void mw2_watch_costs(gpu::watch::Costs* costs) { *costs = gpu::watch::CostsSoFar(); }
 
 extern "C" bool mw2_watch_handle_fault(const void* address) { return gpu::watch::HandleFault(address); }
+#endif
 
 // gpu.cpp's, which the Rust renderer has in Rust (src/runtime/gpu/gpu.rs).
 #if !MW2_RUST_RENDERER
@@ -140,7 +144,9 @@ extern "C" void mw2_renderer_report() { vk::renderer::Report(); }
 
 extern "C" void mw2_textures_report() { vk::textures::Report(); }
 
+#if !MW2_OWNS_MEMORY_WATCH
 extern "C" void mw2_watch_report() { gpu::watch::Report(); }
+#endif
 
 #if !MW2_OWNS_IMAGE_MOVE
 extern "C" void mw2_imagepool_report() { imagepool::Report(); }
@@ -211,7 +217,8 @@ extern "C" void mw2_renderer_before_stream_write(uint32_t physical, uint32_t siz
 
 extern "C" void mw2_textures_memory_written(uint32_t physical, uint32_t size) { vk::textures::MemoryWritten(physical, size); }
 
-// The memory watch, C++ until it moves.
+#if !MW2_OWNS_MEMORY_WATCH
+// The memory watch, C++ while Rust does not own it.
 extern "C" bool mw2_watch_enabled() { return gpu::watch::Enabled(); }
 
 extern "C" uint64_t mw2_watch_track(uint32_t physical, uint32_t bytes, uint64_t frame)
@@ -225,6 +232,33 @@ extern "C" bool mw2_watch_unwritten(uint32_t physical, uint32_t bytes, uint64_t 
 }
 
 extern "C" void mw2_watch_will_write(uint32_t address, uint32_t bytes) { gpu::watch::WillWrite(address, bytes); }
+#else
+// What gpu/memory_watch.rs asks of the renderer: the last submission the GPU has finished
+// (a cached number), which the shader memo's Track is given.
+extern "C" uint64_t mw2_renderer_completed_submission() { return vk::renderer::CompletedSubmission(); }
+
+#if MW2_DIAGNOSTICS
+// The command trace's line for each page the shadow copies.
+extern "C" void mw2_trace_shadow_arm(uint32_t first, uint32_t count, const uint8_t* shadow)
+{
+#if MW2_TRACE
+    if (vk::trace::Wanted())
+        for (uint32_t p = first; p < first + count; p++)
+            vk::trace::Note("ShadowArm page=%u fnv=%016llx", p,
+                            (unsigned long long)vk::trace::FnvWriteCombined(shadow + size_t(p) * gpu::watch::kPageBytes,
+                                                                            gpu::watch::kPageBytes));
+#endif
+}
+#endif
+#endif
+
+#if MW2_OWNS_SHADER_PRELOAD
+// A shader the title loaded, to compile before its first draw (src/hooks/shader_preload.rs).
+extern "C" void mw2_renderer_prepare_shader(bool pixel, const uint32_t* code, size_t words)
+{
+    vk::renderer::PrepareShader(pixel, code, words);
+}
+#endif
 
 #if MW2_DIAGNOSTICS
 // The capture's three flags, by address: the Rust reads them where the C++ reads them inline.

@@ -332,6 +332,27 @@ mod system {
         while unsafe { getrandom((&raw mut value).cast(), 8, 0) } != 8 {}
         value
     }
+
+    /// Makes [address, address + len) read-only, or readable and writable again: what
+    /// the GPU's memory watch asks (gpu/memory_watch.rs). Safe in a signal handler:
+    /// mprotect is one system call, and this allocates nothing, logs nothing and takes
+    /// no lock. (At the module's end, so that no line above it moves.)
+    ///
+    /// # Safety
+    /// The range is page-aligned memory this process mapped, which nothing that
+    /// cannot take the fault relies on being writable.
+    #[cfg(feature = "rust-renderer")]
+    #[inline]
+    pub unsafe fn protect(address: *mut u8, len: usize, writable: bool) -> bool {
+        unsafe extern "C" {
+            fn mprotect(address: *mut c_void, len: usize, protection: c_int) -> c_int;
+        }
+        const PROT_READ: c_int = 1;
+        const PROT_WRITE: c_int = 2;
+        let protection = if writable { PROT_READ | PROT_WRITE } else { PROT_READ };
+        // SAFETY: the caller's contract.
+        unsafe { mprotect(address.cast(), len, protection) == 0 }
+    }
 }
 
 #[cfg(windows)]
@@ -565,5 +586,22 @@ mod system {
             return nearest;
         }
         2.0 * (x * 0.5).round()
+    }
+
+    /// Makes [address, address + len) read-only, or readable and writable again: what
+    /// the GPU's memory watch asks (gpu/memory_watch.rs). Safe in the vectored
+    /// exception handler: VirtualProtect is one system call, and this allocates
+    /// nothing, logs nothing and takes no lock.
+    ///
+    /// # Safety
+    /// The range is page-aligned memory this process mapped, which nothing that
+    /// cannot take the fault relies on being writable.
+    #[cfg(feature = "rust-renderer")]
+    #[inline]
+    pub unsafe fn protect(address: *mut u8, len: usize, writable: bool) -> bool {
+        let mut was = 0u32;
+        let protection = if writable { PAGE_READWRITE } else { PAGE_READONLY };
+        // SAFETY: the caller's contract; `was` is this frame's.
+        unsafe { VirtualProtect(address.cast(), len, protection, &mut was) != 0 }
     }
 }

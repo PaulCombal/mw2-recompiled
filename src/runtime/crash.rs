@@ -19,6 +19,14 @@ use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 
+// A write to a page the GPU's memory watch protects: gpu/memory_watch.rs's handler when
+// Rust owns memory_watch.cpp (build.rs, RUST_OWNS), the C++'s through bridge.rs if not.
+// Both are safe in a signal handler: they read and write only atomics and protect pages.
+#[cfg(not(all(feature = "rust-renderer", mw2_owns_memory_watch)))]
+use crate::runtime::bridge::watch_handle_fault;
+#[cfg(all(feature = "rust-renderer", mw2_owns_memory_watch))]
+use crate::runtime::gpu::memory_watch::handle_fault as watch_handle_fault;
+
 thread_local! {
     static NAME: Cell<*const c_char> = const { Cell::new(ptr::null()) };
 }
@@ -178,7 +186,7 @@ mod system {
             return;
         }
         // A write to a page the GPU's shadow of guest memory watches.
-        if number == SIGSEGV && code == SEGV_ACCERR && bridge::watch_handle_fault(address.cast()) {
+        if number == SIGSEGV && code == SEGV_ACCERR && watch_handle_fault(address.cast()) {
             return;
         }
         #[cfg(feature = "diagnostics")]
@@ -420,7 +428,7 @@ mod system {
         if access {
             let write = record.information[0] == 1;
             let at = record.information[1] as *const c_void;
-            if write && bridge::watch_handle_fault(at) {
+            if write && watch_handle_fault(at) {
                 return EXCEPTION_CONTINUE_EXECUTION;
             }
             if guest_memory::commit_on_touch(at) {

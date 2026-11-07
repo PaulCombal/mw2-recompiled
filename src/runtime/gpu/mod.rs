@@ -45,6 +45,11 @@ pub mod hash;
 // guest memory.
 #[cfg_attr(not(mw2_owns_image_move), allow(dead_code))]
 pub mod image_move;
+// Which pages of guest physical memory the title has written, and the shadow it keeps of
+// them: unsafe by nature (page protections, a fault handler's half, raw copies). Out of
+// RUST_OWNS it stays compiled but unwired, and the C++ watch answers.
+#[cfg_attr(not(mw2_owns_memory_watch), allow(dead_code))]
+pub mod memory_watch;
 // The register file: safe code.
 #[deny(unsafe_code)]
 #[cfg_attr(not(mw2_owns_command_processor), allow(dead_code))]

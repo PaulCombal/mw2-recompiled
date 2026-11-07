@@ -36,6 +36,8 @@ pub type ExceptionHandler = unsafe extern "system" fn(*mut ExceptionPointers) ->
 
 pub const INVALID_HANDLE_VALUE: Handle = -1isize as Handle;
 pub const PAGE_NOACCESS: u32 = 0x01;
+#[cfg(feature = "rust-renderer")]
+pub const PAGE_READONLY: u32 = 0x02;
 pub const PAGE_READWRITE: u32 = 0x04;
 pub const MEM_COMMIT: u32 = 0x1000;
 pub const MEM_RESERVE: u32 = 0x2000;
@@ -111,6 +113,8 @@ unsafe extern "system" {
     pub fn LoadLibraryExW(path: *const u16, file: Handle, flags: u32) -> Module;
     pub fn VirtualAlloc(address: *mut c_void, size: usize, kind: u32, protection: u32) -> *mut c_void;
     pub fn VirtualFree(address: *mut c_void, size: usize, kind: u32) -> c_int;
+    #[cfg(feature = "rust-renderer")]
+    pub fn VirtualProtect(address: *mut c_void, size: usize, protection: u32, old: *mut u32) -> c_int;
     pub fn VirtualQuery(address: *const c_void, info: *mut MemoryBasicInformation, size: usize) -> usize;
     pub fn CreateFileMappingW(
         file: Handle,

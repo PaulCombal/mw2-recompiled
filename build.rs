@@ -429,6 +429,8 @@ const RUST_OWNS: &[&str] = &[
     "runtime/gpu/command_processor.cpp",
     "runtime/gpu/census.cpp",
     "runtime/image_move.cpp",
+    "runtime/gpu/memory_watch.cpp",
+    "runtime/shader_preload.cpp",
 ];
 const RUST_ONLY: &[&str] = &["runtime/rust_renderer.cpp", "runtime/gpu/vulkan/shader_translator_rust.cpp"];
 

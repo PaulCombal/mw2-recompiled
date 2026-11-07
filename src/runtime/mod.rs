@@ -8,9 +8,9 @@
 // safe types; what is the system's or a C library's is unsafe by nature, and is kept
 // to itself (guest_memory, platform, windows, install/spawn, cpu_level, crash,
 // fault_text, watchpoint, scan, online/udp, online/steam/client, and of the renderer
-// gpu/exports, gpu/texture and every gpu/vulkan file that calls Vulkan or SDL). Text
-// goes back through a sink that copies it (runtime/text_sink.h): C++ never frees what
-// Rust made, nor the other way round.
+// gpu/exports, gpu/texture, gpu/memory_watch and every gpu/vulkan file that calls
+// Vulkan or SDL). Text goes back through a sink that copies it (runtime/text_sink.h):
+// C++ never frees what Rust made, nor the other way round.
 //
 // Rust is outside the C++'s ThinLTO and profile: what gpu/ calls for each draw
 // stays inline in its header, or has been measured.
