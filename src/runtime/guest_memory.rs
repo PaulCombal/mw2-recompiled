@@ -67,15 +67,24 @@ pub fn memory() -> Memory {
 mod system {
     use super::*;
     use crate::log::log_error;
-    use std::ffi::{c_int, c_long};
+    use std::ffi::c_int;
+    #[cfg(not(target_os = "macos"))]
+    use std::ffi::c_long;
 
     const PROT_READ_WRITE: c_int = 1 | 2;
     const MAP_SHARED: c_int = 0x01;
     const MAP_PRIVATE: c_int = 0x02;
     const MAP_FIXED: c_int = 0x10;
+    #[cfg(not(target_os = "macos"))]
     const MAP_ANONYMOUS: c_int = 0x20;
+    #[cfg(not(target_os = "macos"))]
     const MAP_NORESERVE: c_int = 0x4000;
+    #[cfg(target_os = "macos")]
+    const MAP_ANONYMOUS: c_int = 0x1000;
+    #[cfg(target_os = "macos")]
+    const MAP_NORESERVE: c_int = 0x40;
     const MAP_FAILED: *mut c_void = usize::MAX as *mut c_void;
+    #[cfg(not(target_os = "macos"))]
     const SYS_MEMFD_CREATE: c_long = 319;
 
     unsafe extern "C" {
@@ -87,7 +96,14 @@ mod system {
             fd: c_int,
             offset: i64,
         ) -> *mut c_void;
+        #[cfg(not(target_os = "macos"))]
         fn syscall(number: c_long, ...) -> c_long;
+        #[cfg(target_os = "macos")]
+        fn shm_open(name: *const std::ffi::c_char, flags: c_int, ...) -> c_int;
+        #[cfg(target_os = "macos")]
+        fn shm_unlink(name: *const std::ffi::c_char) -> c_int;
+        #[cfg(target_os = "macos")]
+        fn getpid() -> c_int;
         fn ftruncate(fd: c_int, size: i64) -> c_int;
         fn close(fd: c_int) -> c_int;
     }
@@ -103,10 +119,36 @@ mod system {
         true
     }
 
-    pub fn map_physical_aperture() -> bool {
+    // No memfd on macOS: a POSIX shared memory object, unlinked at once so that only the
+    // descriptor and the mappings name it.
+    #[cfg(target_os = "macos")]
+    fn physical_bank() -> c_int {
+        const O_RDWR: c_int = 0x2;
+        const O_CREAT: c_int = 0x200;
+        const O_EXCL: c_int = 0x800;
+        let name = format!("/mw2-physical-{}\0", unsafe { getpid() });
+        let name = name.as_ptr().cast();
+        let fd = unsafe { shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0o600 as c_int) };
+        if fd < 0 {
+            log_error!("shm_open failed");
+            return fd;
+        }
+        unsafe { shm_unlink(name) };
+        fd
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn physical_bank() -> c_int {
         let fd = unsafe { syscall(SYS_MEMFD_CREATE, c"mw2-physical".as_ptr(), 0 as c_int) } as c_int;
         if fd < 0 {
             log_error!("memfd_create failed");
+        }
+        fd
+    }
+
+    pub fn map_physical_aperture() -> bool {
+        let fd = physical_bank();
+        if fd < 0 {
             return false;
         }
         let mut ok = unsafe { ftruncate(fd, PHYSICAL_SIZE as i64) } == 0;

@@ -78,27 +78,46 @@ mod system {
 
     const SIGILL: c_int = 4;
     const SIGTRAP: c_int = 5;
-    const SIGBUS: c_int = 7;
     const SIGFPE: c_int = 8;
-    const SIGUSR1: c_int = 10;
     const SIGSEGV: c_int = 11;
     #[cfg(feature = "diagnostics")]
-    const SIGUSR2: c_int = 12;
-    #[cfg(feature = "diagnostics")]
     const SIGALRM: c_int = 14;
+    #[cfg(not(target_os = "macos"))]
+    const SIGBUS: c_int = 7;
+    #[cfg(not(target_os = "macos"))]
+    const SIGUSR1: c_int = 10;
+    #[cfg(all(not(target_os = "macos"), feature = "diagnostics"))]
+    const SIGUSR2: c_int = 12;
+    #[cfg(not(target_os = "macos"))]
     const SA_SIGINFO: c_int = 4;
+    #[cfg(not(target_os = "macos"))]
     const SA_RESTART: c_int = 0x10000000;
+    #[cfg(target_os = "macos")]
+    const SIGBUS: c_int = 10;
+    #[cfg(target_os = "macos")]
+    const SIGUSR1: c_int = 30;
+    #[cfg(all(target_os = "macos", feature = "diagnostics"))]
+    const SIGUSR2: c_int = 31;
+    #[cfg(target_os = "macos")]
+    const SA_SIGINFO: c_int = 0x40;
+    #[cfg(target_os = "macos")]
+    const SA_RESTART: c_int = 0x2;
+    #[cfg(not(target_os = "macos"))]
     const SEGV_ACCERR: c_int = 2;
 
     // glibc's, for x86-64.
+    #[cfg(not(target_os = "macos"))]
+    type SigSet = [u64; 16];
+    #[cfg(not(target_os = "macos"))]
     #[repr(C)]
     struct SigAction {
         handler: usize,
-        mask: [u64; 16],
+        mask: SigSet,
         flags: c_int,
         restorer: usize,
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[repr(C)]
     struct SigInfo {
         number: c_int,
@@ -108,9 +127,33 @@ mod system {
         address: *mut u8,
     }
 
+    // macOS's: a 32-bit set, and a siginfo that has the sender and a status before the
+    // address.
+    #[cfg(target_os = "macos")]
+    type SigSet = u32;
+    #[cfg(target_os = "macos")]
+    #[repr(C)]
+    struct SigAction {
+        handler: usize,
+        mask: SigSet,
+        flags: c_int,
+    }
+
+    #[cfg(target_os = "macos")]
+    #[repr(C)]
+    struct SigInfo {
+        number: c_int,
+        error: c_int,
+        code: c_int,
+        pid: c_int,
+        uid: c_int,
+        status: c_int,
+        address: *mut u8,
+    }
+
     unsafe extern "C" {
         fn sigaction(signal: c_int, action: *const SigAction, old: *mut SigAction) -> c_int;
-        fn sigemptyset(mask: *mut [u64; 16]) -> c_int;
+        fn sigemptyset(mask: *mut SigSet) -> c_int;
         #[cfg(feature = "diagnostics")]
         fn signal(signal: c_int, handler: usize) -> usize;
         #[cfg(feature = "diagnostics")]
@@ -178,7 +221,9 @@ mod system {
     }
 
     unsafe extern "C" fn fault_handler(number: c_int, info: *const SigInfo, context: *mut c_void) {
-        let (address, code) = unsafe { ((*info).address, (*info).code) };
+        let address = unsafe { (*info).address };
+        #[cfg(not(target_os = "macos"))]
+        let code = unsafe { (*info).code };
         // A write watchpoint takes the page's faults and steps over them; it is not the
         // process dying, so it must be asked first.
         #[cfg(feature = "diagnostics")]
@@ -186,7 +231,13 @@ mod system {
             return;
         }
         // A write to a page the GPU's shadow of guest memory watches.
-        if number == SIGSEGV && code == SEGV_ACCERR && watch_handle_fault(address.cast()) {
+        #[cfg(not(target_os = "macos"))]
+        let protection = number == SIGSEGV && code == SEGV_ACCERR;
+        // A write to a read-only page is a SIGBUS here as often as a SIGSEGV, and the code
+        // does not say which kind of fault it was: the watch knows the pages it watches.
+        #[cfg(target_os = "macos")]
+        let protection = number == SIGSEGV || number == SIGBUS;
+        if protection && watch_handle_fault(address.cast()) {
             return;
         }
         #[cfg(feature = "diagnostics")]
@@ -344,18 +395,20 @@ mod system {
         let mut frame = [ptr::null_mut(); 1];
         unsafe { backtrace(frame.as_mut_ptr(), 1) };
 
+        #[cfg(not(target_os = "macos"))]
         let mut fault =
             SigAction { handler: fault_handler as *const () as usize, mask: [0; 16], flags: SA_SIGINFO, restorer: 0 };
+        #[cfg(target_os = "macos")]
+        let mut fault = SigAction { handler: fault_handler as *const () as usize, mask: 0, flags: SA_SIGINFO };
         unsafe { sigemptyset(&mut fault.mask) };
         for number in [SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP] {
             unsafe { sigaction(number, &fault, ptr::null_mut()) };
         }
-        let mut dump = SigAction {
-            handler: thread_dump_handler as *const () as usize,
-            mask: [0; 16],
-            flags: SA_RESTART,
-            restorer: 0,
-        };
+        #[cfg(not(target_os = "macos"))]
+        let mut dump =
+            SigAction { handler: thread_dump_handler as *const () as usize, mask: [0; 16], flags: SA_RESTART, restorer: 0 };
+        #[cfg(target_os = "macos")]
+        let mut dump = SigAction { handler: thread_dump_handler as *const () as usize, mask: 0, flags: SA_RESTART };
         unsafe {
             sigemptyset(&mut dump.mask);
             sigaction(SIGUSR1, &dump, ptr::null_mut());

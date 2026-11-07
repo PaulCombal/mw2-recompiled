@@ -995,7 +995,9 @@ pub unsafe fn fnv_write_combined(bytes: *const u8, size: usize) -> u64 {
     let mut size = size;
     while size != 0 {
         let take = size.min(chunk.0.len());
+        #[cfg_attr(not(target_arch = "x86_64"), allow(unused_mut))]
         let mut n = 0;
+        #[cfg(target_arch = "x86_64")]
         if at as usize & 15 == 0 {
             while n + 16 <= take {
                 // SAFETY: 16 readable bytes at a 16-aligned address, into the chunk's own

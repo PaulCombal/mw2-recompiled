@@ -32,6 +32,7 @@ bool vk::pipeline::CreateModule(const uint32_t*, size_t, const char** error)
     return false;
 }
 bool vk::pipeline::DeviceHasExtension(void*, const char*) { return false; }
+bool vk::pipeline::PortabilityEnumeration(std::vector<const char*>&) { return false; }
 uint32_t vk::pipeline::GraphicsFamily(void*) { return UINT32_MAX; }
 void vk::pipeline::SetCachePath(const char*) {}
 bool vk::pipeline::CacheLoaded() { return false; }
@@ -153,6 +154,21 @@ bool vk::pipeline::DeviceHasExtension(void* physical, const char* name)
     return false;
 }
 
+bool vk::pipeline::PortabilityEnumeration(std::vector<const char*>& extensions)
+{
+    uint32_t count = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
+    std::vector<VkExtensionProperties> offered(count);
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, offered.data());
+    for (const auto& e : offered)
+        if (std::strcmp(e.extensionName, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) == 0)
+        {
+            extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+            return true;
+        }
+    return false;
+}
+
 bool vk::pipeline::CreateDevice(void* physicalDevice, uint32_t family,
                                 const char* const* extraExtensions, uint32_t extraCount,
                                 void** deviceOut, void** queueOut, void* features)
@@ -198,6 +214,10 @@ bool vk::pipeline::CreateDevice(void* physicalDevice, uint32_t family,
     // its own without the driver giving up compression; naming it in an image's
     // pNext without enabling it is invalid.
     std::vector<const char*> extensions(extraExtensions, extraExtensions + extraCount);
+    // A device that is a layer over another API (MoltenVK) must be told that its
+    // subset of Vulkan is known.
+    if (DeviceHasExtension(physical, "VK_KHR_portability_subset"))
+        extensions.push_back("VK_KHR_portability_subset");
     if (DeviceHasExtension(physical, VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME))
         extensions.push_back(VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME);
     // The driver's word on whether a shader came out of the pipeline cache:
@@ -409,8 +429,13 @@ namespace
         // multisampled surfaces need.
         app.apiVersion = VK_API_VERSION_1_2;
 
+        std::vector<const char*> instanceExtensions;
         VkInstanceCreateInfo info{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
         info.pApplicationInfo = &app;
+        if (vk::pipeline::PortabilityEnumeration(instanceExtensions))
+            info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+        info.enabledExtensionCount = uint32_t(instanceExtensions.size());
+        info.ppEnabledExtensionNames = instanceExtensions.data();
         VkResult r = vkCreateInstance(&info, nullptr, &g.instance);
         if (r != VK_SUCCESS) { LOGW("pipeline: no Vulkan instance (%s)", Explain(r)); return false; }
 

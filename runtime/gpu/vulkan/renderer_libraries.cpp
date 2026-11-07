@@ -166,7 +166,7 @@ namespace
         std::unordered_set<uint64_t> known;      // every shader queued or built
         std::unordered_set<uint64_t> busy;       // being compiled now
         std::unordered_map<uint64_t, Shader> ready;
-        std::vector<std::thread> workers;
+        std::vector<platform::Thread> workers;
         bool running = false, stopped = false;
         uint64_t handed = 0, compiled = 0, taken = 0, waited = 0, stolen = 0;
         uint64_t compileMicroseconds = 0, waitMicroseconds = 0;
@@ -218,7 +218,7 @@ namespace
         std::deque<Job> jobs;
         std::vector<std::pair<PipelineKey, VkPipeline>> finished;
         std::atomic<bool> anyFinished{ false };
-        std::thread worker;
+        platform::Thread worker;
         bool running = false;
     } o;
 
@@ -400,7 +400,7 @@ namespace vk::renderer::detail
             std::lock_guard lock(o.lock);
             o.running = true;
         }
-        o.worker = std::thread(Optimise);
+        o.worker = platform::Thread(Optimise);
         LOGI("renderer: shaders are compiled as the title loads them, on %u thread%s; pipelines"
              " are linked from them at the draw and optimised in the background", threads,
              threads == 1 ? "" : "s");
@@ -415,7 +415,7 @@ namespace vk::renderer::detail
             p.jobs.clear();
             p.work.notify_all();
         }
-        for (std::thread& worker : p.workers) worker.join();
+        for (platform::Thread& worker : p.workers) worker.join();
         p.workers.clear();
         {
             std::lock_guard lock(o.lock);

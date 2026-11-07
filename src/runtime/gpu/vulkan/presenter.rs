@@ -610,7 +610,22 @@ pub fn draw_one_frame(flow: &mut Flow, steps: &mut impl Steps, shared: &Shared, 
 // ---- the window --------------------------------------------------------------------
 
 static SHARED: Shared = Shared::new();
-static WORKER: Mutex<Option<JoinHandle<Presenter>>> = Mutex::new(None);
+static WORKER: Mutex<Option<Worker>> = Mutex::new(None);
+
+// The window belongs to the process's first thread on macOS (platform::run_main): the
+// presenter's thread is a job it serves, whose presenter comes back through a channel.
+#[cfg(target_os = "macos")]
+struct Worker(std::sync::mpsc::Receiver<Presenter>);
+
+#[cfg(target_os = "macos")]
+impl Worker {
+    fn join(self) -> Result<Presenter, ()> {
+        self.0.recv().map_err(|_| ())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+type Worker = JoinHandle<Presenter>;
 static WAITER: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 // The window thread's state once it has stopped, for stop() to tear down.
 static STOPPED: Mutex<Option<Presenter>> = Mutex::new(None);
@@ -878,7 +893,16 @@ impl Presenter {
         if validating {
             extensions.push(ash::ext::debug_utils::NAME.as_ptr());
         }
+        // MoltenVK (macOS) is a "portability" implementation: the loader hides it from an
+        // instance that does not ask for it.
+        let mut flags = vk::InstanceCreateFlags::empty();
+        let offered = unsafe { entry().enumerate_instance_extension_properties(None) }.unwrap_or_default();
+        if offered.iter().any(|offer| offer.extension_name_as_c_str() == Ok(ash::khr::portability_enumeration::NAME)) {
+            extensions.push(ash::khr::portability_enumeration::NAME.as_ptr());
+            flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
+        }
         let info = vk::InstanceCreateInfo {
+            flags,
             // instance creation's own messages
             p_next: if validating { (&raw const messenger).cast() } else { std::ptr::null() },
             p_application_info: &app,
@@ -1544,9 +1568,12 @@ impl Presenter {
             if let Some(instance) = self.instance.take() {
                 instance.destroy_instance(None);
             }
-            if !self.window.is_null() {
-                sdl::SDL_DestroyWindow(self.window);
-            }
+        }
+        if !self.window.is_null() {
+            // AppKit traps a window hidden or closed off the process's first thread, and
+            // the run ends on a thread of its own: there the first thread does it.
+            let window = self.window as usize;
+            platform::on_main_thread(move || unsafe { sdl::SDL_DestroyWindow(window as *mut sdl::SDL_Window) });
         }
         self.surface = vk::SurfaceKHR::null();
         self.window = std::ptr::null_mut();
@@ -2045,30 +2072,42 @@ pub fn start() -> bool {
         return false;
     }
     SHARED.running.store(true, Ordering::SeqCst);
-    let spawned = std::thread::Builder::new()
-        .name("vulkan presenter".into())
-        .stack_size(platform::default_thread_stack())
-        .spawn(|| {
-            crash::register_thread(c"vulkan presenter");
-            let mut presenter = Presenter::new();
-            if !presenter.bring() {
-                log_warn!("vulkan: presenting disabled, continuing headless");
-                SHARED.running.store(false, Ordering::SeqCst);
-                SHARED.ready.store(true, Ordering::SeqCst);
-                return presenter;
-            }
-            presenter.follow_the_display();
-            SHARED.ready.store(true, Ordering::SeqCst);
-            log_info!("vulkan: presenter running");
-            presenter.run();
-            presenter
-        });
-    match spawned {
-        Ok(handle) => *lock(&WORKER) = Some(handle),
-        Err(_) => {
-            log_warn!("vulkan: the presenter thread would not start");
+    let body = || {
+        crash::register_thread(c"vulkan presenter");
+        let mut presenter = Presenter::new();
+        if !presenter.bring() {
+            log_warn!("vulkan: presenting disabled, continuing headless");
             SHARED.running.store(false, Ordering::SeqCst);
-            return false;
+            SHARED.ready.store(true, Ordering::SeqCst);
+            return presenter;
+        }
+        presenter.follow_the_display();
+        SHARED.ready.store(true, Ordering::SeqCst);
+        log_info!("vulkan: presenter running");
+        presenter.run();
+        presenter
+    };
+    #[cfg(target_os = "macos")]
+    {
+        let (send, receive) = std::sync::mpsc::channel();
+        platform::run_on_main_thread(Box::new(move || {
+            let _ = send.send(body());
+        }));
+        *lock(&WORKER) = Some(Worker(receive));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let spawned = std::thread::Builder::new()
+            .name("vulkan presenter".into())
+            .stack_size(platform::default_thread_stack())
+            .spawn(body);
+        match spawned {
+            Ok(handle) => *lock(&WORKER) = Some(handle),
+            Err(_) => {
+                log_warn!("vulkan: the presenter thread would not start");
+                SHARED.running.store(false, Ordering::SeqCst);
+                return false;
+            }
         }
     }
     while !SHARED.ready.load(Ordering::Acquire) {

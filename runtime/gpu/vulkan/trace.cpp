@@ -22,7 +22,9 @@
 #include <string>
 #include <unordered_map>
 
+#if defined(__x86_64__) || defined(_M_X64)
 #include <smmintrin.h>
+#endif
 
 namespace vk::trace::detail
 {
@@ -730,10 +732,12 @@ uint64_t vk::trace::FnvWriteCombined(const void* bytes, size_t size)
     {
         const size_t take = std::min(size, sizeof chunk);
         size_t n = 0;
+#if defined(__x86_64__) || defined(_M_X64)
         if ((reinterpret_cast<uintptr_t>(at) & 15) == 0)
             for (; n + 16 <= take; n += 16)
                 _mm_store_si128(reinterpret_cast<__m128i*>(chunk + n),
                                 _mm_stream_load_si128(reinterpret_cast<const __m128i*>(at + n)));
+#endif
         std::memcpy(chunk + n, at + n, take - n);
         hash = Mix(hash, chunk, take);   // whole words but at the very end: the same as Fnv64
         at += take;

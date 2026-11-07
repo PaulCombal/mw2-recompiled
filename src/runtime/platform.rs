@@ -104,7 +104,23 @@ pub fn exit_now(code: i32) -> ! {
     }
 }
 
-#[cfg(not(windows))]
+/// The program's entry. On macOS the window system (SDL's windows and events) works on the
+/// process's first thread alone, so there `entry` runs on a thread of its own with a large
+/// stack, the first thread serves `on_main_thread`'s jobs, and the process ends with
+/// `entry`'s result; elsewhere it is just called.
+#[cfg(not(target_os = "macos"))]
+pub fn run_main(entry: impl FnOnce() -> i32 + Send + 'static) -> i32 {
+    entry()
+}
+
+/// Runs `job` on the process's first thread and returns what it gave. Elsewhere any thread
+/// will do.
+#[cfg(not(target_os = "macos"))]
+pub fn on_main_thread<R: Send + 'static>(job: impl FnOnce() -> R + Send + 'static) -> R {
+    job()
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
 mod system {
     use super::*;
     use std::fs;
@@ -347,6 +363,349 @@ mod system {
         unsafe extern "C" {
             fn mprotect(address: *mut c_void, len: usize, protection: c_int) -> c_int;
         }
+        const PROT_READ: c_int = 1;
+        const PROT_WRITE: c_int = 2;
+        let protection = if writable { PROT_READ | PROT_WRITE } else { PROT_READ };
+        // SAFETY: the caller's contract.
+        unsafe { mprotect(address.cast(), len, protection) == 0 }
+    }
+}
+
+// macOS: the same asks, in its own words. Mach has the thread and machine statistics
+// where Linux has /proc, a thread's id is a 64-bit number from pthread_threadid_np, and
+// a thread names only itself.
+#[cfg(target_os = "macos")]
+mod system {
+    use super::*;
+    use std::ptr;
+
+    const CLOCK_PROCESS_CPUTIME_ID: c_int = 12;
+    const CLOCK_THREAD_CPUTIME_ID: c_int = 16;
+    const SC_CLK_TCK: c_int = 3;
+    const SC_NPROCESSORS_ONLN: c_int = 58;
+    const RTLD_NOW: c_int = 2;
+    const RTLD_NOLOAD: c_int = 0x10;
+    const QOS_CLASS_UTILITY: c_int = 0x11;
+    const QOS_CLASS_BACKGROUND: c_int = 0x09;
+    const THREAD_BASIC_INFO: c_int = 3;
+    const HOST_CPU_LOAD_INFO: c_int = 3;
+    const HOST_VM_INFO64: c_int = 4;
+    const CPU_STATE_IDLE: usize = 2;
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct Timespec {
+        seconds: i64,
+        nanoseconds: i64,
+    }
+
+    // thread_basic_info: user and system time as seconds and microseconds, and what else
+    // the call fills in.
+    #[repr(C)]
+    #[derive(Default)]
+    struct ThreadBasicInfo {
+        user_seconds: i32,
+        user_microseconds: i32,
+        system_seconds: i32,
+        system_microseconds: i32,
+        rest: [i32; 6],
+    }
+
+    unsafe extern "C" {
+        #[link_name = "__stderrp"]
+        static STDERR: *mut c_void;
+        fn pthread_threadid_np(thread: usize, id: *mut u64) -> c_int;
+        fn pthread_main_np() -> c_int;
+        fn pthread_setname_np(name: *const c_char) -> c_int;
+        fn pthread_set_qos_class_self_np(class: c_int, relative_priority: c_int) -> c_int;
+        fn clock_gettime(clock: c_int, time: *mut Timespec) -> c_int;
+        fn sysconf(name: c_int) -> i64;
+        fn backtrace(frames: *mut *mut c_void, size: c_int) -> c_int;
+        fn backtrace_symbols_fd(frames: *const *mut c_void, size: c_int, fd: c_int);
+        fn dlopen(path: *const c_char, flags: c_int) -> *mut c_void;
+        fn dlsym(library: *mut c_void, name: *const c_char) -> *mut c_void;
+        fn mach_thread_self() -> u32;
+        fn mach_host_self() -> u32;
+        fn thread_info(thread: u32, flavor: c_int, info: *mut ThreadBasicInfo, count: *mut u32) -> c_int;
+        fn host_statistics(host: u32, flavor: c_int, info: *mut u32, count: *mut u32) -> c_int;
+        fn host_statistics64(host: u32, flavor: c_int, info: *mut u32, count: *mut u32) -> c_int;
+        fn sysctlbyname(name: *const c_char, old: *mut c_void, old_len: *mut usize, new: *const c_void, new_len: usize)
+            -> c_int;
+        fn getrusage(who: c_int, usage: *mut [i64; 18]) -> c_int;
+        fn getentropy(buffer: *mut c_void, size: usize) -> c_int;
+        fn gethostuuid(uuid: *mut [u8; 16], timeout: *const Timespec) -> c_int;
+        fn time(out: *mut i64) -> i64;
+        fn localtime_r(time: *const i64, tm: *mut Tm) -> *mut Tm;
+        fn mprotect(address: *mut c_void, len: usize, protection: c_int) -> c_int;
+    }
+
+    // struct tm.
+    #[repr(C)]
+    struct Tm {
+        numbers: [c_int; 9],
+        offset: i64,
+        zone: *const c_char,
+    }
+
+    // CoreFoundation's run loop and libdispatch's main queue, which the first thread serves.
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        static kCFRunLoopCommonModes: *const c_void;
+        fn CFAbsoluteTimeGetCurrent() -> f64;
+        fn CFRunLoopGetMain() -> *mut c_void;
+        fn CFRunLoopRun();
+        fn CFRunLoopAddTimer(run_loop: *mut c_void, timer: *mut c_void, mode: *const c_void);
+        fn CFRunLoopTimerCreate(
+            allocator: *const c_void,
+            fire_date: f64,
+            interval: f64,
+            flags: u64,
+            order: i64,
+            callout: extern "C" fn(*mut c_void, *mut c_void),
+            context: *mut c_void,
+        ) -> *mut c_void;
+        static _dispatch_main_q: c_void;
+        fn dispatch_async_f(queue: *const c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
+    }
+
+    /// Runs `entry` on a thread of its own, and serves the first thread's jobs. The game's
+    /// own `main` had 8 MB as the first thread; the recompiled code nests deep.
+    pub fn run_main(entry: impl FnOnce() -> i32 + Send + 'static) -> i32 {
+        let started = std::thread::Builder::new().name("game".into()).stack_size(64 << 20).spawn(move || {
+            let code = entry();
+            unsafe { fflush(ptr::null_mut()) };
+            std::process::exit(code)
+        });
+        if started.is_err() {
+            return 1;
+        }
+        // Serves on_main_thread's jobs on this thread (dispatch_main would run them on
+        // another); the process ends with the game thread's exit, or the run's own _exit. A
+        // run loop with nothing left to wait for returns, and returning from main would run
+        // the static destructors under the threads that are still shutting down: so it is
+        // given a timer that never fires, and told to run again if it returns anyway.
+        extern "C" fn never(_: *mut c_void, _: *mut c_void) {}
+        unsafe {
+            let timer = CFRunLoopTimerCreate(ptr::null(), CFAbsoluteTimeGetCurrent() + 1e9, 1e9, 0, 0, never, ptr::null_mut());
+            CFRunLoopAddTimer(CFRunLoopGetMain(), timer, kCFRunLoopCommonModes);
+            loop {
+                CFRunLoopRun();
+            }
+        }
+    }
+
+    /// Hands `job` to the process's first thread, and returns at once.
+    pub fn run_on_main_thread(job: Box<dyn FnOnce() + Send>) {
+        extern "C" fn trampoline(context: *mut c_void) {
+            // SAFETY: the box run_on_main_thread leaked, once.
+            let job = unsafe { Box::from_raw(context.cast::<Box<dyn FnOnce() + Send>>()) };
+            job()
+        }
+        let context = Box::into_raw(Box::new(job)).cast::<c_void>();
+        unsafe { dispatch_async_f(&raw const _dispatch_main_q, context, trampoline) };
+    }
+
+    /// Runs `job` on the process's first thread and returns what it gave.
+    pub fn on_main_thread<R: Send + 'static>(job: impl FnOnce() -> R + Send + 'static) -> R {
+        if is_main_thread() {
+            return job();
+        }
+        let (send, receive) = std::sync::mpsc::channel();
+        run_on_main_thread(Box::new(move || {
+            let _ = send.send(job());
+        }));
+        receive.recv().expect("the first thread serves jobs until the process ends")
+    }
+
+    /// The host stack of a thread that runs recompiled code, or a driver's, which nests
+    /// deep: Windows gives the executable's 16 MB and Linux 8 MB, but a thread macOS
+    /// starts gets 512 KB. Memory it only touches as it uses it.
+    pub fn default_thread_stack() -> usize {
+        16 << 20
+    }
+
+    fn nanoseconds(time: &Timespec) -> u64 {
+        (time.seconds as u64).wrapping_mul(1_000_000_000).wrapping_add(time.nanoseconds as u64)
+    }
+
+    pub fn standard_error() -> *mut c_void {
+        unsafe { STDERR }
+    }
+
+    pub fn initialise() {}
+
+    pub fn thread_id() -> u32 {
+        let mut id = 0u64;
+        unsafe { pthread_threadid_np(0, &mut id) };
+        id as u32
+    }
+
+    pub fn is_main_thread() -> bool {
+        unsafe { pthread_main_np() != 0 }
+    }
+
+    /// macOS names only the calling thread, and keeps 63 characters.
+    pub fn set_thread_name(name: &CStr) {
+        unsafe { pthread_setname_np(name.as_ptr()) };
+    }
+
+    pub fn lower_thread_priority() {
+        unsafe { pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0) };
+    }
+
+    pub fn idle_thread_priority() {
+        unsafe { pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0) };
+    }
+
+    /// The calling thread's host stack to stderr. The recompiled functions are named
+    /// sub_XXXXXXXX, so where symbols resolve this is the guest's stack. Called from the
+    /// crash handler: nothing here allocates.
+    pub fn print_backtrace(why: &CStr) {
+        let mut frames = [std::ptr::null_mut(); 64];
+        let n = unsafe { backtrace(frames.as_mut_ptr(), 64) };
+        unsafe {
+            fprintf(STDERR, c"\n[E] ---- %s (%d frames) ----\n".as_ptr(), why.as_ptr(), n);
+            fflush(STDERR);
+            backtrace_symbols_fd(frames.as_ptr(), n, 2);
+            fprintf(STDERR, c"[E] --------------------------------\n".as_ptr());
+            fflush(STDERR);
+        }
+    }
+
+    /// As std::thread::hardware_concurrency says, whatever this process may use.
+    pub fn processor_threads() -> u32 {
+        (unsafe { sysconf(SC_NPROCESSORS_ONLN) }).max(0) as u32
+    }
+
+    /// The clock is the thread's Mach port, which any thread can ask the time of.
+    /// Shifted past 0, which says there is none. The reference mach_thread_self takes is
+    /// kept: the port must outlive the thread for thread_time to say it ended.
+    pub fn thread_clock() -> usize {
+        (unsafe { mach_thread_self() } as usize) + 1
+    }
+
+    fn port_time(port: u32) -> Option<u64> {
+        let mut info = ThreadBasicInfo::default();
+        let mut count = (size_of::<ThreadBasicInfo>() / 4) as u32;
+        if unsafe { thread_info(port, THREAD_BASIC_INFO, &mut info, &mut count) } != 0 {
+            return None;
+        }
+        let seconds = info.user_seconds as u64 + info.system_seconds as u64;
+        let microseconds = info.user_microseconds as u64 + info.system_microseconds as u64;
+        Some(seconds * 1_000_000_000 + microseconds * 1000)
+    }
+
+    /// The calling thread's processor time so far, in nanoseconds.
+    #[cfg(feature = "diagnostics")]
+    pub fn thread_cpu_time() -> u64 {
+        let mut time = Timespec::default();
+        unsafe { clock_gettime(CLOCK_THREAD_CPUTIME_ID, &mut time) };
+        nanoseconds(&time)
+    }
+
+    pub fn thread_time(clock: usize) -> Option<u64> {
+        if clock == 0 { None } else { port_time((clock - 1) as u32) }
+    }
+
+    pub fn processor_load(load: &mut Load) -> bool {
+        let mut time = Timespec::default();
+        if unsafe { clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &mut time) } != 0 {
+            return false;
+        }
+        load.process = nanoseconds(&time);
+        let mut ticks = [0u32; 4];
+        let mut count = 4u32;
+        if unsafe { host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, ticks.as_mut_ptr(), &mut count) } != 0 {
+            return false;
+        }
+        let tick = 1_000_000_000 / unsafe { sysconf(SC_CLK_TCK) } as u64;
+        let total: u64 = ticks.iter().map(|&n| u64::from(n)).sum();
+        load.total = total * tick;
+        load.busy = (total - u64::from(ticks[CPU_STATE_IDLE])) * tick;
+        true
+    }
+
+    pub fn memory_state(memory: &mut MemoryState) {
+        let mut installed = 0u64;
+        let mut size = size_of::<u64>();
+        if unsafe { sysctlbyname(c"hw.memsize".as_ptr(), (&raw mut installed).cast(), &mut size, ptr::null(), 0) } == 0 {
+            memory.installed = installed;
+            memory.usable = installed;
+        }
+        // vm_statistics64: free_count, active_count, inactive_count, ... as 32-bit pages.
+        let mut vm = [0u32; 40];
+        let mut count = vm.len() as u32;
+        if unsafe { host_statistics64(mach_host_self(), HOST_VM_INFO64, vm.as_mut_ptr(), &mut count) } == 0 {
+            let mut page = 0u32;
+            let mut page_size = size_of::<u32>();
+            unsafe { sysctlbyname(c"vm.pagesize".as_ptr(), (&raw mut page).cast(), &mut page_size, ptr::null(), 0) };
+            let page = if page == 0 { 16384 } else { u64::from(page) };
+            memory.free = (u64::from(vm[0]) + u64::from(vm[2])) * page;
+        }
+        // struct rusage: two timevals, then ru_maxrss, which is in bytes here and in
+        // kilobytes on Linux.
+        let mut usage = [0i64; 18];
+        if unsafe { getrusage(0, &mut usage) } == 0 {
+            memory.process_peak = usage[4] as u64;
+        }
+    }
+
+    /// RTLD_LOCAL is 4, and RTLD_NOW alone is RTLD_GLOBAL's absence there.
+    pub fn open_library(path: &CStr) -> *mut c_void {
+        unsafe { dlopen(path.as_ptr(), RTLD_NOW) }
+    }
+
+    pub fn loaded_library(name: &CStr) -> *mut c_void {
+        unsafe { dlopen(name.as_ptr(), RTLD_NOW | RTLD_NOLOAD) }
+    }
+
+    pub unsafe fn symbol(library: *mut c_void, name: &CStr) -> *mut c_void {
+        unsafe { dlsym(library, name.as_ptr()) }
+    }
+
+    /// What tells this machine from others, as its system names it: the hardware UUID.
+    pub fn machine_id() -> Vec<u8> {
+        let mut uuid = [0u8; 16];
+        let wait = Timespec { seconds: 1, nanoseconds: 0 };
+        if unsafe { gethostuuid(&mut uuid, &wait) } != 0 {
+            return Vec::new();
+        }
+        let mut text = String::new();
+        for (i, byte) in uuid.iter().enumerate() {
+            if matches!(i, 4 | 6 | 8 | 10) {
+                text.push('-');
+            }
+            text += &format!("{byte:02X}");
+        }
+        text.into_bytes()
+    }
+
+    /// The hour and the minute on this machine's clock.
+    pub fn local_hour_minute() -> (u32, u32) {
+        let now = unsafe { time(ptr::null_mut()) };
+        let mut tm = Tm { numbers: [0; 9], offset: 0, zone: ptr::null() };
+        unsafe { localtime_r(&now, &mut tm) };
+        (tm.numbers[2] as u32, tm.numbers[1] as u32)
+    }
+
+    /// A number from the system's random source.
+    pub fn random() -> u64 {
+        let mut value = 0u64;
+        while unsafe { getentropy((&raw mut value).cast(), 8) } != 0 {}
+        value
+    }
+
+    /// Makes [address, address + len) read-only, or readable and writable again: what
+    /// the GPU's memory watch asks (gpu/memory_watch.rs). Safe in a signal handler:
+    /// mprotect is one system call, and this allocates nothing, logs nothing and takes
+    /// no lock.
+    ///
+    /// # Safety
+    /// The range is page-aligned memory this process mapped, which nothing that
+    /// cannot take the fault relies on being writable.
+    #[cfg(feature = "rust-renderer")]
+    #[inline]
+    pub unsafe fn protect(address: *mut u8, len: usize, writable: bool) -> bool {
         const PROT_READ: c_int = 1;
         const PROT_WRITE: c_int = 2;
         let protection = if writable { PROT_READ | PROT_WRITE } else { PROT_READ };

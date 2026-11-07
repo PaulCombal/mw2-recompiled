@@ -8,6 +8,9 @@
 #include <windows.h>
 #else
 #include <sys/utsname.h>
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#endif
 #endif
 #include <SDL3/SDL.h>
 
@@ -175,7 +178,11 @@ namespace
         if (std::atoi(build.c_str()) >= 22000) ReplaceAll(name, "Windows 10", "Windows 11");
         return name + " " + Registry(key, L"DisplayVersion") + " (build " + build + ")";
 #else
+#ifdef __APPLE__
+        std::string name = "macOS";
+#else
         std::string name = "Linux";
+#endif
         std::ifstream release("/etc/os-release");
         for (std::string line; std::getline(release, line);)
             if (line.rfind("PRETTY_NAME=", 0) == 0)
@@ -197,6 +204,10 @@ namespace
         std::string name;
 #ifdef _WIN32
         name = Registry(L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", L"ProcessorNameString");
+#elif defined(__APPLE__)
+        char brand[256] = {};
+        size_t size = sizeof brand - 1;
+        if (sysctlbyname("machdep.cpu.brand_string", brand, &size, nullptr, 0) == 0) name = brand;
 #else
         std::ifstream cpu("/proc/cpuinfo");
         for (std::string line; std::getline(cpu, line);)

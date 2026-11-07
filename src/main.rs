@@ -30,6 +30,12 @@ extern crate ppc_recomp;
 #[unsafe(no_mangle)]
 unsafe extern "C" fn main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     runtime::clock::start();
-    let arguments: Vec<&CStr> = (0..argc.max(0) as usize).map(|i| unsafe { CStr::from_ptr(*argv.add(i)) }).collect();
-    runtime::run::run(&arguments)
+    // The command line lives as long as the process; the run may be on another thread.
+    let argv = argv as usize;
+    runtime::platform::run_main(move || {
+        let argv = argv as *mut *mut c_char;
+        let arguments: Vec<&CStr> =
+            (0..argc.max(0) as usize).map(|i| unsafe { CStr::from_ptr(*argv.add(i)) }).collect();
+        runtime::run::run(&arguments)
+    })
 }

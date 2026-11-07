@@ -30,14 +30,18 @@ fn name(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-// PPC_WEAK_FUNC(<identifier>)
+// PPC_WEAK_FUNC(<identifier>), and PPC_FUNC_IMPL(<identifier>): the body each weak name
+// calls, which is no kernel import. A linker that takes a weak stub in an object file
+// for the definition (Mach-O's) never reads the real one from the archive.
 fn definitions(text: &[u8], out: &mut BTreeSet<String>) {
-    for at in find_all(text, b"PPC_WEAK_FUNC(") {
-        let start = at + b"PPC_WEAK_FUNC(".len();
-        if let Some(found) = identifier(text, start)
-            && text.get(start + found.len()) == Some(&b')')
-        {
-            out.insert(name(found));
+    for marker in [&b"PPC_WEAK_FUNC("[..], &b"PPC_FUNC_IMPL("[..]] {
+        for at in find_all(text, marker) {
+            let start = at + marker.len();
+            if let Some(found) = identifier(text, start)
+                && text.get(start + found.len()) == Some(&b')')
+            {
+                out.insert(name(found));
+            }
         }
     }
 }

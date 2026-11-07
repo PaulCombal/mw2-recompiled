@@ -373,6 +373,10 @@ fn worker(pcr: u32) {
 
         let wptr = memory.u32_at(CP_RB_WPTR) & mask;
         if wptr != read {
+            // The title wrote the packets before it moved the write pointer, and saw to
+            // their order (its sync and eieio are fences now): this makes the reads of
+            // them follow the read of the pointer, which arm64 does not do of itself.
+            std::sync::atomic::fence(Ordering::Acquire);
             let available = wptr.wrapping_sub(read) & mask;
             #[cfg(feature = "diagnostics")]
             let began = now();
@@ -392,6 +396,8 @@ fn worker(pcr: u32) {
                 }
             }
             RING.read_index.store(wptr, Ordering::Relaxed);
+            // The packets are read before the title is told it may reuse their room.
+            std::sync::atomic::fence(Ordering::Release);
             let write_back = RPTR_WRITE_BACK.load(Ordering::Relaxed);
             if write_back != 0 {
                 memory.store_u32(write_back, wptr);

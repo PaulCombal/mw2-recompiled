@@ -52,7 +52,12 @@ namespace vk::bindings
     constexpr uint32_t kImages = 0, kSamplers = 1;
     constexpr uint32_t kImageKinds = 3;          // 2D, cube, volume: the stand-ins
     constexpr uint32_t kImageCount = 65536;
+    // Metal, under MoltenVK, binds 1024 samplers to a stage at most.
+#ifdef __APPLE__
+    constexpr uint32_t kSamplerCount = 1024;
+#else
     constexpr uint32_t kSamplerCount = 4096;
+#endif
     // A slot's word in the record: the image's index, then the sampler's.
     constexpr uint32_t kHandleImageBits = 16;
 

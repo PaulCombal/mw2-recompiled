@@ -28,6 +28,30 @@ or a patch.
 - Title update 6: its package, or its files in `mw2/update/`
   ([Title update 6](#title-update-6)).
 
+## macOS (Apple silicon)
+
+`cargo xtask build` builds and runs the game natively on an arm64 Mac, on MoltenVK
+with CoreAudio. It needs Xcode's command line tools (Apple's clang and linker, whose
+ThinLTO the build uses), rustup (which fetches the compiler `rust-toolchain.toml`
+pins), and `brew install cmake ninja vulkan-headers vulkan-loader molten-vk`.
+
+What differs from Linux, so that the other two are not touched:
+
+- The guest code's vector instructions are the x86 intrinsics of `ppc_rt`, which
+  `XenonUtils/rust/neon.rs` implements in NEON for arm64 with x86's results
+  (`XenonTests/rust_backend/neon_semantics.rs` checks each against the manuals), and
+  `sync`, `lwsync` and `eieio` are real fences there, where the title's locks and ring
+  buffers need them. Rounding and flush state are FPCR's.
+- Mach-O has no weak alias, so each guest function `sub_X` is a weak definition that
+  jumps to `__imp__sub_X`; a hook's strong `sub_X` replaces it as on Linux.
+- The window belongs to the process's first thread (`platform::run_main`): the game
+  runs on a thread of its own, and the presenter is a job the first thread serves.
+- The host's page is 16 KB, which is what the GPU's memory watch protects, and a write
+  to a read-only page arrives as SIGBUS as often as SIGSEGV.
+- A thread macOS starts gets 512 KB of stack, so the runtime's threads ask for 16 MB.
+- Not there yet: Steam (the game plays without it; LAN and relays work), `MW2_WATCH`
+  (it steps with x86's trap flag), the PGO profile (x86 counts), and `--cpp`.
+
 ## cargo xtask
 
 `cargo xtask build`, at the top of the tree, does everything, in order

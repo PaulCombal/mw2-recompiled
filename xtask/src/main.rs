@@ -213,6 +213,30 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
 }
 
+// The C and C++ compilers the build names: clang-18 on Linux, where the tree is
+// tested, and on macOS Apple's own, whose linker reads the bitcode of its clang
+// (ThinLTO) and links what SDL's Objective-C makes.
+fn cc() -> &'static str {
+    if cfg!(target_os = "macos") { "/usr/bin/clang" } else { "clang-18" }
+}
+
+fn cxx() -> &'static str {
+    if cfg!(target_os = "macos") { "/usr/bin/clang++" } else { "clang++-18" }
+}
+
+// Homebrew's prefix, where cmake finds the Vulkan loader and headers MoltenVK
+// goes with (brew install vulkan-headers vulkan-loader molten-vk).
+fn brew_prefix() -> String {
+    Command::new("brew")
+        .arg("--prefix")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|prefix| prefix.trim().to_string())
+        .unwrap_or_else(|| "/opt/homebrew".into())
+}
+
 fn jobs() -> String {
     std::thread::available_parallelism().map_or(1, |jobs| jobs.get()).to_string()
 }
@@ -340,11 +364,17 @@ fn xenon_checkout() -> Result {
 }
 
 fn xenon_build() -> Result {
-    quiet(Command::new("cmake").args(["-B", XENON_BUILD, "-S", "XenonRecomp-rs", "-G", "Ninja"]).args([
-        "-DCMAKE_BUILD_TYPE=Release",
-        "-DCMAKE_C_COMPILER=clang-18",
-        "-DCMAKE_CXX_COMPILER=clang++-18",
-    ]))?;
+    let mut configure = Command::new("cmake");
+    configure.args(["-B", XENON_BUILD, "-S", "XenonRecomp-rs", "-G", "Ninja"]).args([
+        "-DCMAKE_BUILD_TYPE=Release".to_string(),
+        format!("-DCMAKE_C_COMPILER={}", cc()),
+        format!("-DCMAKE_CXX_COMPILER={}", cxx()),
+    ]);
+    if cfg!(target_os = "macos") {
+        // XenonRecomp's fmt predates libc++ not including <cstdlib> for it.
+        configure.arg("-DCMAKE_CXX_FLAGS=-include cstdlib");
+    }
+    quiet(&mut configure)?;
     quiet(Command::new("cmake").args(["--build", XENON_BUILD, "-j", &jobs()]))
 }
 
@@ -361,7 +391,7 @@ fn xexpatch() -> Result<String> {
     let disasm = format!("{XENON_BUILD}/thirdparty/disasm/libdisasm.a");
     let built = modified(&program);
     if [&utils, &disasm, &"tools/xexpatch.cpp".into()].iter().any(|input| modified(input) >= built) {
-        run(Command::new("clang++-18")
+        run(Command::new(cxx())
             .args(["-std=c++20", "-O1", "-IXenonRecomp-rs/XenonUtils", "-IXenonRecomp-rs/thirdparty/simde"])
             .args(["tools/xexpatch.cpp", &utils, &disasm, "-o", &program]))?;
     }
@@ -651,7 +681,11 @@ fn build(options: &Options, title: &Title) -> Result {
             format!("-DLLVM_MINGW={llvm_mingw}"),
         ]
     } else {
-        vec!["-DCMAKE_C_COMPILER=clang-18".into(), "-DCMAKE_CXX_COMPILER=clang++-18".into()]
+        let mut toolchain = vec![format!("-DCMAKE_C_COMPILER={}", cc()), format!("-DCMAKE_CXX_COMPILER={}", cxx())];
+        if cfg!(target_os = "macos") {
+            toolchain.push(format!("-DCMAKE_PREFIX_PATH={}", brew_prefix()));
+        }
+        toolchain
     };
 
     println!("==> 8. build the runtime + recompiled game");

@@ -183,7 +183,17 @@ set(FFMPEG_SOURCES
     ${FFMPEG_SRC}/libavutil/xtea.c
 )
 
+# The x86 files are the SIMD initialisers of x86 (and its cpu detection): on
+# any other processor FFmpeg's portable C is built alone, no assembly.
+if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|x86)$")
+    list(FILTER FFMPEG_SOURCES EXCLUDE REGEX "/x86/")
+    set(FFMPEG_NO_ASM TRUE)
+endif()
+
 add_library(ffmpeg_xma STATIC ${FFMPEG_SOURCES})
+if(FFMPEG_NO_ASM)
+    target_compile_definitions(ffmpeg_xma PRIVATE MW2_FFMPEG_NO_ASM=1)
+endif()
 target_include_directories(ffmpeg_xma
     PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}" "${FFMPEG_SRC}"
     PRIVATE "${FFMPEG_SRC}/libavcodec")

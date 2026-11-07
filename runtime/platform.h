@@ -2,6 +2,17 @@
 // The few things the runtime asks of the host system that Linux and Windows
 // spell differently. Everything else goes through the C++ library or SDL.
 #include <cstdint>
+#include <thread>
+#ifdef __APPLE__
+#include <cstdio>
+#include <cstdlib>
+#include <exception>
+#include <functional>
+#include <memory>
+#include <pthread.h>
+#include <type_traits>
+#include <utility>
+#endif
 
 namespace platform
 {
@@ -15,6 +26,85 @@ namespace platform
         uint64_t commitLimit = 0, committed = 0;           // the whole system's
         uint64_t processPeak = 0, processCommitted = 0;    // this process's
     };
+}
+
+namespace platform
+{
+    // A thread that runs recompiled code, or a driver's, which nests deep on the
+    // host's stack: Windows gives the stack the executable asks for (16 MB) and
+    // Linux 8 MB, but a thread macOS starts gets 512 KB. So there it is a pthread
+    // with a stack of 16 MB (memory it only touches as it uses it); elsewhere it
+    // is std::thread itself.
+#ifdef __APPLE__
+    // Header-only: the Rust build compiles no platform.cpp, and the C++ renderer in it
+    // starts threads.
+    class Thread
+    {
+    public:
+        Thread() = default;
+        template <typename F, typename = std::enable_if_t<!std::is_same_v<std::decay_t<F>, Thread>>>
+        explicit Thread(F&& function) { Start(std::function<void()>(std::forward<F>(function))); }
+        Thread(Thread&& other) noexcept : thread_(other.thread_), started_(other.started_) { other.started_ = false; }
+        Thread& operator=(Thread&& other) noexcept
+        {
+            if (started_) std::terminate();
+            thread_ = other.thread_;
+            started_ = other.started_;
+            other.started_ = false;
+            return *this;
+        }
+        Thread(const Thread&) = delete;
+        Thread& operator=(const Thread&) = delete;
+        ~Thread()   // ends the process if still joinable, as std::thread does
+        {
+            if (started_) std::terminate();
+        }
+
+        bool joinable() const { return started_; }
+        void join()
+        {
+            if (!started_) return;
+            pthread_join(thread_, nullptr);
+            started_ = false;
+        }
+        void detach()
+        {
+            if (!started_) return;
+            pthread_detach(thread_);
+            started_ = false;
+        }
+
+    private:
+        static void* Main(void* argument)
+        {
+            std::unique_ptr<std::function<void()>> function(static_cast<std::function<void()>*>(argument));
+            (*function)();
+            return nullptr;
+        }
+
+        void Start(std::function<void()> function)
+        {
+            pthread_attr_t attributes;
+            pthread_attr_init(&attributes);
+            pthread_attr_setstacksize(&attributes, size_t(16) << 20);
+            auto* argument = new std::function<void()>(std::move(function));
+            const int error = pthread_create(&thread_, &attributes, Main, argument);
+            pthread_attr_destroy(&attributes);
+            if (error != 0)
+            {
+                delete argument;
+                std::fprintf(stderr, "[E] could not start a thread (%d)\n", error);
+                std::abort();
+            }
+            started_ = true;
+        }
+
+        pthread_t thread_{};
+        bool started_ = false;
+    };
+#else
+    using Thread = std::thread;
+#endif
 }
 
 extern "C"

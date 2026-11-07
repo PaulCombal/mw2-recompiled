@@ -22,7 +22,14 @@ namespace gpu::watch
     struct Costs { uint64_t faults = 0, protects = 0, protectNanoseconds = 0; };
     Costs CostsSoFar();
 
+    // The granularity mprotect works at: the host's page. Apple Silicon's is 16 KB,
+    // and a call on a range that does not start and end on one fails. A watched
+    // "page" there holds four of the console's, which are all written or all not.
+#if defined(__APPLE__) && defined(__aarch64__)
+    constexpr uint32_t kPageBytes = 16384;
+#else
     constexpr uint32_t kPageBytes = 4096;
+#endif
 
     // The copy, as mapped for the CPU: physical address N at `shadow + N`.
     // Null leaves every draw on the per-draw copy (MW2_NO_SHADOW=1 does that).
