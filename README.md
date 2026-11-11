@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <b>Call of Duty: Modern Warfare 2 (2009) for the Xbox 360, running natively on Linux and Windows.</b><br>
+  <b>Call of Duty: Modern Warfare 3 (2011) for the Xbox 360, running natively on PS4.</b><br>
   Not an emulator: the game's executables are recompiled ahead of time.<br>
   No game files are included. You need your own disc.
 </p>
