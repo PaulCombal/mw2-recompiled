@@ -134,7 +134,7 @@ def main() -> int:
     for path in generated:
         functions.update(function_definitions(path.read_text(errors="replace")))
 
-    imports = {line.strip() for line in imports_file.read_text().splitlines() if line.strip()}
+    imports = {line.strip() if line.strip().startswith("__imp__") else "__imp__" + line.strip()\n               for line in imports_file.read_text().splitlines() if line.strip()}
     if not imports:
         raise SystemExit("MW3 kernel import list is empty")
 
