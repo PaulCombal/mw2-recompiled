@@ -37,3 +37,20 @@ cmake --build build-mw3 --target mw3-recomp-check --parallel
   are added. Unknown hooks stay undefined rather than inheriting MW2 addresses.
 - The generated `ppc_mw3/` directory and extracted game executable are local
   inputs/artifacts and are not committed.
+
+
+## Optional GitHub Actions build with a private executable
+
+The pull-request workflow always runs source/configuration checks. The full
+recompile-and-compile job is enabled only when the repository has:
+
+- Repository variable `MW3_ASSET_REPO`: the private `owner/repository` holding
+  the user's own MW3 executable as `default.xex` at its root.
+- Repository secret `MW3_ASSET_REPO_TOKEN`: a fine-grained token with
+  read-only Contents access to that private asset repository.
+
+The workflow verifies that `default.xex` has SHA-256
+`d90bc8d93b7b8f6001ead8330271196a6ef7a5c2e4a9e9b63118f47d58a05912`
+before copying it into the ignored working tree. A different executable is
+rejected rather than silently generating code for a different image. The XEX
+is deleted from the runner workspace after staging and is never committed.
