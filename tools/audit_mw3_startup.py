@@ -101,6 +101,8 @@ def reachable_graph(functions: dict[str, str], aliases: dict[str, str],
     reached_imports: set[str] = set()
     unresolved: set[str] = set()
     aliases_followed: set[str] = set()
+    parents: dict[str, str | None] = {root: None}
+    import_paths: dict[str, list[str]] = {}
     queue = deque([root])
     while queue:
         name = queue.popleft()
@@ -112,12 +114,23 @@ def reachable_graph(functions: dict[str, str], aliases: dict[str, str],
             aliases_followed.update(chain)
             if target in imports:
                 reached_imports.add(target)
+                cursor: str | None = name
+                path: list[str] = []
+                while cursor is not None:
+                    path.append(cursor)
+                    cursor = parents[cursor]
+                path.reverse()
+                alias_label = " => ".join((raw_target, *chain[1:], target)) if chain else target
+                candidate = path + [alias_label]
+                if target not in import_paths or len(candidate) < len(import_paths[target]):
+                    import_paths[target] = candidate
             elif target in functions:
-                if target not in visited:
+                if target not in parents:
+                    parents[target] = name
                     queue.append(target)
             else:
                 unresolved.add(raw_target)
-    return visited, reached_imports, unresolved, adjacency, aliases_followed
+    return visited, reached_imports, unresolved, adjacency, aliases_followed, import_paths
 
 
 def self_test() -> None:
@@ -142,13 +155,17 @@ def self_test() -> None:
     """)
     imports = {"__imp__NtCreateFile", "__imp__KeWaitForSingleObject"}
     entry = select_entry_node(generated, aliases, "_xstart")
-    visited, reached, unresolved, _, followed = reachable_graph(
+    visited, reached, unresolved, _, followed, paths = reachable_graph(
         generated, aliases, entry, imports
     )
     assert entry == "__imp___xstart"
     assert reached == imports and not unresolved
     assert {"__imp___xstart", "__imp__sub_100", "__imp__sub_200"} <= visited
     assert {"sub_100", "sub_200"} <= followed
+    assert paths["__imp__NtCreateFile"] == ["__imp___xstart", "__imp__NtCreateFile"]
+    assert paths["__imp__KeWaitForSingleObject"] == [
+        "__imp___xstart", "sub_100 => __imp__sub_100", "__imp__KeWaitForSingleObject"
+    ]
 
     # Alias chains are legal to resolve; cycles must fail closed.
     chained = {"sub_a": "sub_b", "sub_b": "__imp__sub_b"}
@@ -209,7 +226,7 @@ def main() -> int:
         raise SystemExit("MW3 kernel import list is empty")
 
     try:
-        visited, reached, unresolved, adjacency, aliases_followed = reachable_graph(
+        visited, reached, unresolved, adjacency, aliases_followed, import_paths = reachable_graph(
             functions, aliases, entry_node, imports
         )
     except ValueError as exc:
@@ -232,9 +249,6 @@ def main() -> int:
 
     runtime_imports = reached & runtime_implemented
     logging_stub_imports = reached - runtime_implemented
-    generated_reachable = {
-        name for name in visited if name in functions and not name.startswith("__imp__")
-    }
     unresolved_abi = {name for name in unresolved if ABI_HELPER.match(name)}
     unresolved_other = unresolved - unresolved_abi
 
@@ -247,7 +261,6 @@ def main() -> int:
         f"generated weak aliases indexed: {len(aliases)}",
         f"generated implementation nodes reachable: {len(visited)}",
         f"reachable weak aliases followed: {len(aliases_followed)}",
-        f"reachable generated wrapper nodes: {len(generated_reachable)}",
         f"kernel/XAM imports in full image: {len(imports)}",
         f"kernel/XAM imports reachable from entry point: {len(reached)}",
         f"reachable imports called directly by selected entry node: {len(direct)}",
@@ -269,6 +282,12 @@ def main() -> int:
         "REACHABLE IMPORTS STILL COVERED ONLY BY LOGGING STUBS:",
         *(sorted(logging_stub_imports) or ["(none)"]),
         "",
+        "SHORTEST STATIC CALL PATHS TO REACHABLE LOGGING-STUB IMPORTS:",
+        *(
+            f"{name}: " + " -> ".join(import_paths[name])
+            for name in sorted(logging_stub_imports) if name in import_paths
+        ) or ["(none)"],
+        "",
         "UNRESOLVED POWERPC ABI HELPER TARGETS:",
         *(sorted(unresolved_abi) or ["(none)"]),
         "",
@@ -279,6 +298,7 @@ def main() -> int:
         "- This is a static direct-call graph over XenonRecomp-emitted function(ctx, base) calls.",
         "- XenonRecomp weak guest-function aliases are followed to their __imp__ implementation bodies.",
         "- Indirect calls, function pointers, callbacks, data imports, and dynamically selected thread entry points are not resolved.",
+        "- Reported import paths are shortest static direct-call paths, not observed execution traces.",
         "- Reachability is not execution order: a reachable call may be conditional or occur only on an error path.",
         "- Runtime import classification is a PPC_FUNC macro-name match, not proof of MW3 semantic compatibility.",
         "- Logging stubs are diagnostic placeholders and do not implement kernel behavior.",
