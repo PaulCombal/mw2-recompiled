@@ -28,7 +28,8 @@ jobs:
         run: bash -n tools/build_mw3.sh tools/recomp_mw3.sh
 
       - name: Compile-check Python tooling
-        run: python -m compileall -q tools
+        run: |
+          python -m compileall -q tools
           python tools/audit_mw3_startup.py --self-test
 
       - name: Test MW2-to-MW3 hook matcher
