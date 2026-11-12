@@ -20,11 +20,12 @@ No game executable or game data is included. You must supply your own legally ob
 | MW3 title block (`runtime/title.h`) | **Present:** entry point, `Com_Error`, D3D Present/ArenaWait and shader hooks, MW3-specific D3D device offsets, and kernel data-import records |
 | MW3 recompilation | **Pass:** 128 jump tables; 142 generated PPC translation units plus function mapping; no remaining switch-case-bound errors in the validated output |
 | Generated PPC compilation | **Pass:** CI compiles the generated code into `libppc_recomp.a` |
-| Runtime/import compile validation | Expanded compile-only target covers kernel, title, GPU, APU, install and online sources, with optional Vulkan/XMA sources when dependencies exist; current CI validation is in progress. This is not proof of MW3 runtime compatibility |
+| Runtime/import compile validation | **Pass:** expanded compile-only target covers kernel, title, GPU, APU, install and online sources, including Vulkan sources in CI. This is not proof of MW3 runtime compatibility |
 | Generated symbol/import audit | **Pass:** metadata-only audit inventories generated symbols and runtime/import coverage |
 | Startup call-graph audit | **Pass:** entry-point mapping, weak aliases and reachable direct-call paths are analyzed |
 | DPC investigation | **Provisional implementation present:** queue bookkeeping and a guest-context worker; graphics-interrupt ordering and Xbox scheduler semantics remain unverified |
-| Linked desktop executable / first boot | **Not started** |
+| Diagnostic desktop executable | **Pass:** host runtime and generated PPC library link into a headless `mw3` executable; no game execution proven yet |
+| First runtime execution / boot | **Next:** controlled CI smoke test against the private XEX; main-menu boot not established |
 | Playable desktop campaign | **Not started** |
 | PS4 build, package and runtime testing | **Not started** |
 
