@@ -57,16 +57,22 @@
 // the D3D9 library's hooks, found by call structure (docs/MW3-BRINGUP.md)
 #define T_D3D_Present          820A16E8   // takes the device in r3 and writes its flip
 #define T_D3D_ArenaWait        8209B5E8   // first instruction loads [r3+11024]
+// Identical to MW2's sub_820B8B58 statement for statement: it clears the 40-byte
+// resource header and stores the program at +24, and the hook reads the shader
+// header after it (shader_preload.cpp), checking its magic before it trusts it.
+#define T_D3D_InitPixelShader  820984F0
+// MW2's sub_820B6B10: the only function in either executable with its four
+// large immediates (22413312, 3145728, -1077542912, -1077936128), 1572 bytes in
+// both, with the same sequence of structure accesses.
+#define T_D3D_PatchVertexFetches 820A4468
 
 // Located, not enabled: each reads fields of the title's own structures at MW2
 // offsets, which have not been re-derived (MW2's +21628 is +21908 on the device).
-//   T_D3D_InitPixelShader        820984F0
 //   T_Cbuf_AddText               8228CA48
 //   T_Memcard_InitializeSystem   8232EC08
 //   T_Image_FlushMove            823D4398
 //   T_CG_CullZoom                821067A8
-// Not located: T_D3D_ReplayRecording, T_D3D_PatchVertexFetches,
-// T_Job_WaitPredicate, T_CG_ViewFov, T_Dvar_RegisterInt, T_DB_MissingAsset,
+// Not located: T_D3D_ReplayRecording, T_Job_WaitPredicate, T_CG_ViewFov, T_Dvar_RegisterInt, T_DB_MissingAsset,
 // T_Com_Printf (MW3 has no such function).
 
 // the kernel's data imports: the image's own import records, found by their

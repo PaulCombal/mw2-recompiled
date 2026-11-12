@@ -197,6 +197,10 @@ How the MW3 values were found: `sub_820A11B8` writes the flip packet (the immedi
 
 The shift is not uniform (+128, +276, +296), so none of these can be derived from another by adding a constant. `sub_820A16E8` takes the device in `r3` and uses 11024 and 21908 on it, consistent with the table. Not yet checked on a live boot: that the interval field is read by the flip handler the way MW2's is, and the remaining device offsets in `docs/d3d9-seam.md` (command buffer base, cursor and end), which the runtime does not read from the guest today.
 
+### Shader preload hooks
+
+`T_D3D_InitPixelShader` (820984F0) and `T_D3D_PatchVertexFetches` (820A4468) are enabled. The first is statement-for-statement MW2's `sub_820B8B58`. The second was found by searching both executables' generated code for the four large immediates MW2's `sub_820B6B10` uses (22413312, 3145728, -1077542912, -1077936128): each executable has exactly one such function, both are 1572 bytes, and their sequences of structure accesses are identical. The hooks only read a shader's header after D3D's own routine ran and check its magic first, falling back to compile-at-first-draw, so a wrong guess costs startup time rather than correctness. Not checked on a live boot.
+
 ## Title update
 
 The disc's executable and the title-updated one differ, and the recompiled
