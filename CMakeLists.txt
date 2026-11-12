@@ -218,8 +218,8 @@ if(MW3_RECOMP_ONLY)
         -march=${MW2_X86_LEVEL} -fwrapv)
     target_compile_definitions(mw3-runtime-compile-check PRIVATE
         MW3_TITLE=1 MW2_DIAGNOSTICS=0
-        MW2_XEX_SHA256_SP="compile-check" MW2_XEX_SHA256_MP="compile-check"
-        MW2_DISC_SHA256_SP="compile-check" MW2_DISC_SHA256_MP="compile-check")
+        MW2_XEX_SHA256_SP=\"compile-check\" MW2_XEX_SHA256_MP=\"compile-check\"
+        MW2_DISC_SHA256_SP=\"compile-check\" MW2_DISC_SHA256_MP=\"compile-check\")
 
     add_custom_target(mw3-recomp-check)
     add_dependencies(mw3-recomp-check ppc_recomp mw3-runtime-compile-check)
