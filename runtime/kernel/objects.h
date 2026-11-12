@@ -68,7 +68,7 @@ namespace kernel
         bool Signalled(uintptr_t) const override { return count > 0; }
         void Satisfy(uintptr_t) override { count--; }
         // Returns the previous count. Takes the dispatcher lock itself.
-        int32_t Release(int32_t delta);
+        int32_t Release(int32_t delta, bool* limitExceeded = nullptr);
     };
 
     // Owned by one thread at a time, which may take it again as often as it
