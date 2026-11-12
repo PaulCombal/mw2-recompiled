@@ -14,6 +14,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <limits>
 
 uint64_t kernel::SystemTime100ns()
 {
@@ -57,6 +58,99 @@ PPC_FUNC(__imp__KeQuerySystemTime)
 {
     auto* out = GuestPtr<be64>(ctx.r3.u32);
     if (out) *out = kernel::SystemTime100ns();
+}
+
+// TIME_FIELDS is eight big-endian SHORTs. NT LARGE_INTEGER time is
+// measured in 100ns units from 1601-01-01 UTC.
+namespace
+{
+    struct XTimeFields
+    {
+        be16 year;
+        be16 month;
+        be16 day;
+        be16 hour;
+        be16 minute;
+        be16 second;
+        be16 milliseconds;
+        be16 weekday;
+    };
+
+    constexpr uint64_t kNtTicksPerMillisecond = 10000;
+    constexpr uint64_t kNtTicksPerSecond = 10000000;
+    constexpr uint64_t kNtTicksPerDay = 864000000000;
+    constexpr std::chrono::sys_days kNtEpoch =
+        std::chrono::sys_days{ std::chrono::year{1601} / 1 / 1 };
+}
+
+PPC_FUNC(__imp__RtlTimeToTimeFields)
+{
+    const auto* time = GuestPtr<const be64>(ctx.r3.u32);
+    auto* fields = GuestPtr<XTimeFields>(ctx.r4.u32);
+    if (!time || !fields) return;
+
+    const uint64_t ticks = uint64_t(*time);
+    const uint64_t dayCount = ticks / kNtTicksPerDay;
+    uint64_t remainder = ticks % kNtTicksPerDay;
+    const auto date = kNtEpoch + std::chrono::days{ int64_t(dayCount) };
+    const std::chrono::year_month_day ymd{ date };
+
+    fields->year = int16_t(int(ymd.year()));
+    fields->month = uint16_t(unsigned(ymd.month()));
+    fields->day = uint16_t(unsigned(ymd.day()));
+    fields->weekday = uint16_t(std::chrono::weekday{ date }.c_encoding());
+    fields->hour = uint16_t(remainder / (3600 * kNtTicksPerSecond));
+    remainder %= 3600 * kNtTicksPerSecond;
+    fields->minute = uint16_t(remainder / (60 * kNtTicksPerSecond));
+    remainder %= 60 * kNtTicksPerSecond;
+    fields->second = uint16_t(remainder / kNtTicksPerSecond);
+    remainder %= kNtTicksPerSecond;
+    fields->milliseconds = uint16_t(remainder / kNtTicksPerMillisecond);
+}
+
+PPC_FUNC(__imp__RtlTimeFieldsToTime)
+{
+    const auto* fields = GuestPtr<const XTimeFields>(ctx.r3.u32);
+    auto* time = GuestPtr<be64>(ctx.r4.u32);
+    if (!fields || !time) { ctx.r3.u64 = 0; return; }
+
+    const int yearValue = int16_t(fields->year);
+    const unsigned monthValue = uint16_t(fields->month);
+    const unsigned dayValue = uint16_t(fields->day);
+    const unsigned hourValue = uint16_t(fields->hour);
+    const unsigned minuteValue = uint16_t(fields->minute);
+    const unsigned secondValue = uint16_t(fields->second);
+    const unsigned millisecondValue = uint16_t(fields->milliseconds);
+
+    const std::chrono::year_month_day date{
+        std::chrono::year{ yearValue },
+        std::chrono::month{ monthValue },
+        std::chrono::day{ dayValue }
+    };
+    if (yearValue < 1601 || !date.ok() || hourValue > 23 ||
+        minuteValue > 59 || secondValue > 59 || millisecondValue > 999)
+    {
+        ctx.r3.u64 = 0;
+        return;
+    }
+
+    const int64_t dayCount = (std::chrono::sys_days{ date } - kNtEpoch).count();
+    if (dayCount < 0) { ctx.r3.u64 = 0; return; }
+
+    const uint64_t ticks =
+        uint64_t(dayCount) * kNtTicksPerDay +
+        uint64_t(hourValue) * 3600 * kNtTicksPerSecond +
+        uint64_t(minuteValue) * 60 * kNtTicksPerSecond +
+        uint64_t(secondValue) * kNtTicksPerSecond +
+        uint64_t(millisecondValue) * kNtTicksPerMillisecond;
+    if (ticks > uint64_t(std::numeric_limits<int64_t>::max()))
+    {
+        ctx.r3.u64 = 0;
+        return;
+    }
+
+    *time = ticks;
+    ctx.r3.u64 = 1;
 }
 
 PPC_FUNC(__imp__KeDelayExecutionThread)
