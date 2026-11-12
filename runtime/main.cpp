@@ -213,7 +213,7 @@ int main(int argc, char** argv)
     }
     else
     {
-        if (!install::LoadImageFile(argv[1], launch.image)) return 1;
+        if (!install::LoadImageFile(argv[1], launch.image, launch.xexHeader)) return 1;
         launch.gameRoot = (argc > 2) ? argv[2] : "mw2/game";
     }
 
@@ -232,7 +232,8 @@ int main(int argc, char** argv)
 
     crash::RegisterThread("main thread");
     player::Record();
-    kernel::Initialise(launch.gameRoot);
+    kernel::Initialise(launch.gameRoot, launch.xexHeader);
+    launch.xexHeader.clear();
     gpu::Initialise();
     // The device is known now, and nothing of the title has run: the launcher
     // compiles the shaders for it and starts the game again. Ended at once,

@@ -6,13 +6,15 @@
 #include <string>
 #include <filesystem>
 #include <functional>
+#include <vector>
 
 namespace kernel
 {
     // The threads blocked in a kernel wait, and on what: for the watchdog.
     void ReportWaits();
 
-    void Initialise(const std::filesystem::path& gameRoot);
+    void Initialise(const std::filesystem::path& gameRoot,
+                    const std::vector<uint8_t>& xexHeader = {});
     const std::filesystem::path& GameRoot();
 
     uint32_t AllocateGuest(uint32_t size, uint32_t alignment = 16);

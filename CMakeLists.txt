@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(CTest)
 if(BUILD_TESTING)
-    add_executable(xex-header-test tests/xex_header_test.cpp)
+    add_executable(xex-header-test tests/xex_header_test.cpp runtime/install/xex.cpp runtime/install/crypto.cpp)
     target_include_directories(xex-header-test PRIVATE "${CMAKE_SOURCE_DIR}")
     add_test(NAME xex-header-test COMMAND xex-header-test)
     add_executable(guest-format-test tests/guest_format_test.cpp)

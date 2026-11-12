@@ -4,9 +4,9 @@
 
 This project adapts the [MW2-recompiled](https://github.com/PaulCombal/mw2-recompiled) codebase to bring up the MW3 single-player campaign. The Xbox 360 PowerPC executable is translated ahead of time into C++ with [XenonRecomp](https://github.com/hedge-dev/XenonRecomp), then progressively integrated with a host runtime. This is static recompilation, not an Xbox 360 emulator.
 
-> **Current status: generated-code build and static audits pass. MW3 does not boot yet.**
+> **Current status: generated PPC compilation and static audits pass; expanded full-runtime compile validation is in progress. MW3 does not boot yet.**
 >
-> The MW3 executable has been recompiled into 142 generated C++ translation units. CI successfully builds the generated PPC library and compile-checks the MW3 runtime/import glue. Startup, kernel-import and DPC investigations have advanced, but there is no linked desktop game executable, playable build, PS4 ELF or FPKG yet.
+> The MW3 executable has been recompiled into 142 generated C++ translation units. Recent work adds MW3-specific D3D hooks, startup import handlers, a provisional DPC dispatcher, and XEX module-handle provisioning. The expanded runtime compile-check and focused tests are being validated in CI. There is still no linked desktop game executable, playable build, PS4 ELF or FPKG.
 
 No game executable or game data is included. You must supply your own legally obtained copy. Do not commit XEX files, extracted game data, or generated proprietary game code.
 
@@ -16,14 +16,14 @@ No game executable or game data is included. You must supply your own legally ob
 |---|---|
 | MW2-derived project/runtime foundation | Present; MW2 remains the existing working title |
 | MW3 executable identification | Supported image identified and SHA-256 pinned; see [bring-up notes](docs/MW3-BRINGUP.md) |
-| MW3 hook discovery | Static comparison against MW2 completed for the current image: 8 engine hooks located (including `D3D_Present` and `Com_Error`) and 7 not found; D3D's device structure moved, so the located hooks are not enabled until their offsets are re-derived. See the [bring-up notes](docs/MW3-BRINGUP.md#progress) |
-| MW3 title block (`runtime/title.h`) | **Present:** entry point, `Com_Error`, kernel data-import records. 74 of 77 non-GPU runtime sources compile against it; the GPU sources have not been checked |
+| MW3 hook discovery | `D3D_Present`, `D3D_ArenaWait`, `D3D_InitPixelShader` and `D3D_PatchVertexFetches` are enabled with MW3-specific addresses/offsets derived by structural comparison. Not validated on a live boot. See the [bring-up notes](docs/MW3-BRINGUP.md#progress) |
+| MW3 title block (`runtime/title.h`) | **Present:** entry point, `Com_Error`, D3D Present/ArenaWait and shader hooks, MW3-specific D3D device offsets, and kernel data-import records |
 | MW3 recompilation | **Pass:** 128 jump tables; 142 generated PPC translation units plus function mapping; no remaining switch-case-bound errors in the validated output |
 | Generated PPC compilation | **Pass:** CI compiles the generated code into `libppc_recomp.a` |
-| Runtime/import compile validation | **Pass:** MW3-generated declarations and import glue are generated and compile-checked; this is not proof of MW3 runtime compatibility |
+| Runtime/import compile validation | Expanded compile-only target covers kernel, title, GPU, APU, install and online sources, with optional Vulkan/XMA sources when dependencies exist; current CI validation is in progress. This is not proof of MW3 runtime compatibility |
 | Generated symbol/import audit | **Pass:** metadata-only audit inventories generated symbols and runtime/import coverage |
 | Startup call-graph audit | **Pass:** entry-point mapping, weak aliases and reachable direct-call paths are analyzed |
-| DPC investigation | **Research complete for the current callsites; implementation deliberately deferred** |
+| DPC investigation | **Provisional implementation present:** queue bookkeeping and a guest-context worker; graphics-interrupt ordering and Xbox scheduler semantics remain unverified |
 | Linked desktop executable / first boot | **Not started** |
 | Playable desktop campaign | **Not started** |
 | PS4 build, package and runtime testing | **Not started** |
@@ -74,7 +74,7 @@ The next engineering milestone is **runtime integration and a first desktop boot
 
 1. Resolve MW3-specific engine hooks and globals against the exact supported XEX; do not reuse MW2 addresses by assumption.
 2. Review reachable imports currently represented by diagnostic stubs and implement only those required by the MW3 startup path, with tests. See the [prioritized startup-import implementation plan](docs/MW3-STARTUP-IMPORT-PLAN.md).
-3. Establish safe guest callback/thread behavior and a verified DPC dispatch design before implementing the graphics-completion DPC imports.
+3. Validate the provisional DPC worker against the graphics-completion path, especially callback ordering, guest thread state and Xbox dispatch semantics; do not treat it as boot-ready yet.
 4. Add an MW3-specific title/runtime configuration and link the generated PPC code against the compatible runtime.
 5. Produce a desktop executable and debug startup until the main menu renders; then work toward loading and playing the first campaign mission.
 6. Measure desktop CPU cost and validate memory/GPU assumptions before investing in PS4-specific runtime and packaging work.

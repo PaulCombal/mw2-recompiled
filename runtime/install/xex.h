@@ -19,6 +19,10 @@ namespace install::xex
     // The header fields a wrong disc is told apart by; false if it is not an XEX2.
     bool ReadInfo(const std::vector<uint8_t>& file, Info& info);
 
+    // Copies the complete XEX2 header (through header_size / PE data offset),
+    // preserving the optional-header records for guest-side RTL lookups.
+    bool Header(const std::vector<uint8_t>& file, std::vector<uint8_t>& header, std::string& error);
+
     // False, with `error` saying why, for anything but encryption none/normal
     // and compression none/basic -- all the disc and a patched executable use.
     bool Image(const std::vector<uint8_t>& file, std::vector<uint8_t>& image, std::string& error);
