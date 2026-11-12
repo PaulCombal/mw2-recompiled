@@ -1,6 +1,10 @@
 # MW3 DPC import investigation
 
-Status: research only. No DPC runtime handlers have been added.
+Status: first implementation added (`runtime/kernel/dpc.cpp`, `dpc_queue.h`, `tests/dpc_queue_test.cpp`), unvalidated on a live boot. The research below is unchanged and still lists what remains unproven.
+
+**What was built.** The Xbox KDPC layout question is sidestepped: the title only passes the DPC pointer around, so the runtime keeps its own record per guest address and never reads or writes the KDPC's memory. `KeInitializeDpc` records routine and context. `KeInsertQueueDpc` returns 1 when it queues and 0 when the DPC is unknown or already queued, and clears the queued flag before the routine runs so the routine may requeue. Routines run as `routine(dpc, context, arg1, arg2)` on one dedicated worker with its own guest stack and thread block, one at a time and never inline in the queuing call. Unit tests cover duplicate insert, argument capture, FIFO order, requeue, re-initialise and wake/stop (ASan, UBSan and TSan clean).
+
+**Not modelled:** IRQL, processor affinity, importance, `KeRemoveQueueDpc`, timer-to-DPC delivery, and the exact ordering against the graphics interrupt thread. Items 1 to 3 of "Required evidence" below remain open; if a boot shows the completion ring misbehaving, ordering against the GPU interrupt callback is the first thing to check.
 
 ## MW3 call-graph evidence
 
@@ -79,9 +83,9 @@ Consequently, calling `CallGuest` directly inside `KeInsertQueueDpc` would be un
 
 The existing timer thread is not a DPC scheduler. Timer-to-DPC delivery would need to be integrated separately if MW3 later reaches `KeSetTimer` with a DPC object.
 
-## Decision
+## Decision (superseded by the status above)
 
-Do not implement these imports yet. The MW3 object relationship and callback role are now substantially better understood, but the Xbox-specific KDPC layout and dispatch contract are still not proven. A guessed structure size or synchronous callback shortcut risks memory corruption, wrong callback arguments, or startup deadlock.
+The original decision was not to implement these imports yet. The MW3 object relationship and callback role are now substantially better understood, but the Xbox-specific KDPC layout and dispatch contract are still not proven. A guessed structure size or synchronous callback shortcut risks memory corruption, wrong callback arguments, or startup deadlock.
 
 ## Required evidence before implementation
 
