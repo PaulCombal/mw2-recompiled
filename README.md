@@ -16,7 +16,8 @@ No game executable or game data is included. You must supply your own legally ob
 |---|---|
 | MW2-derived project/runtime foundation | Present; MW2 remains the existing working title |
 | MW3 executable identification | Supported image identified and SHA-256 pinned; see [bring-up notes](docs/MW3-BRINGUP.md) |
-| MW3 hook discovery | Static comparison against MW2 completed for the current image; candidates and unresolved hooks documented |
+| MW3 hook discovery | Static comparison against MW2 completed for the current image: 8 engine hooks located (including `D3D_Present` and `Com_Error`) and 7 not found; D3D's device structure moved, so the located hooks are not enabled until their offsets are re-derived. See the [bring-up notes](docs/MW3-BRINGUP.md#progress) |
+| MW3 title block (`runtime/title.h`) | **Present:** entry point, `Com_Error`, kernel data-import records. 74 of 77 non-GPU runtime sources compile against it; the GPU sources have not been checked |
 | MW3 recompilation | **Pass:** 128 jump tables; 142 generated PPC translation units plus function mapping; no remaining switch-case-bound errors in the validated output |
 | Generated PPC compilation | **Pass:** CI compiles the generated code into `libppc_recomp.a` |
 | Runtime/import compile validation | **Pass:** MW3-generated declarations and import glue are generated and compile-checked; this is not proof of MW3 runtime compatibility |

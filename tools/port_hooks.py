@@ -51,6 +51,10 @@ def parse_title_h(path, block, version="tu6"):
     runtime/title.h: 'mp' or 'sp', of the title update's version (tu6) or the
     disc's (tu0)."""
     text = open(path).read()
+    # The MW2 chain starts at the multiplayer's #elif; the MW3 block before it is
+    # not one of its four.
+    start = text.index("defined(MW2_TITLE_MP) && !defined(MW2_VERSION_TU0)")
+    text = text[text.rfind("\n", 0, start) + 1:]
     blocks = re.split(r"^#(?:if|elif|else|endif)\b.*$", text, flags=re.M)[1:5]
     mp, sp = blocks[:2] if version == "tu6" else blocks[2:4]
     body = sp if block == "sp" else mp

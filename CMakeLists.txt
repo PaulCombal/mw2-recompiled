@@ -152,7 +152,13 @@ if(MW3_RECOMP_ONLY)
     # compatible with MW3. MW3-specific hooks and title globals remain gated.
     file(GLOB MW3_KERNEL_SOURCES CONFIGURE_DEPENDS
          "${CMAKE_SOURCE_DIR}/runtime/kernel/*.cpp")
-    add_library(mw3-runtime-compile-check OBJECT ${MW3_KERNEL_SOURCES})
+    # The runtime's own sources, which name the title through runtime/title.h:
+    # compiling them against MW3's block checks that every entry the code needs
+    # is there or compiled out. Not gpu/, apu/, online/ or install/, which need
+    # Vulkan, FFmpeg, generated data or the title's hashes.
+    file(GLOB MW3_TITLE_SOURCES CONFIGURE_DEPENDS
+         "${CMAKE_SOURCE_DIR}/runtime/*.cpp")
+    add_library(mw3-runtime-compile-check OBJECT ${MW3_KERNEL_SOURCES} ${MW3_TITLE_SOURCES})
     target_include_directories(mw3-runtime-compile-check PRIVATE
         "${MW2_PPC_DIR}"
         "${CMAKE_SOURCE_DIR}/runtime"

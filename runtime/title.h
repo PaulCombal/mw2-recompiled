@@ -28,7 +28,55 @@
 // data). The multiplayer's client state is 0x200 smaller on the disc; the
 // fields read here have the same offsets.
 
-#if defined(MW2_TITLE_MP) && !defined(MW2_VERSION_TU0)
+// Modern Warfare 3's campaign (iw5sp_ship.exe), the disc's executable, for the
+// recompilation in ppc_mw3/ (-DMW3_TITLE=1; docs/MW3-BRINGUP.md). Every entry here
+// was found in that executable and checked against it: none is an MW2 address.
+// MW2_VERSION does not apply to it.
+//
+// An entry that is not here has not been located, or has been and is not safe
+// to use yet; the code that names it is compiled out under #ifdef, as the
+// multiplayer's is. The ones located and left out are listed below, with what
+// stops them: a hook is the same function in both games, but its body reads
+// the title's structures at MW2's offsets, and those moved.
+#if defined(MW3_TITLE)
+
+#define MW2_TITLE_NAME  "MW3 campaign"
+#define T_ENTRY_POINT   0x82459E58u          // the XEX header's ENTRY_POINT
+
+// the engine
+#define T_Com_Error            8229D688   // logs the error and who raised it; takes (code, format, ...) as MW2's does
+
+// Located, not enabled. Each reads a field of D3D's device (D3D9's present, the
+// arena wait) or of the title's own structures at an MW2 offset, and the device
+// moved: [r3+10896] in MW2 is [r3+11024] here, +21628 is +21908. Each hook has to
+// be given the MW3 offset before its entry goes in.
+//   T_D3D_Present                820A16E8
+//   T_D3D_ArenaWait              8209B5E8
+//   T_D3D_InitPixelShader        820984F0
+//   T_Cbuf_AddText               8228CA48
+//   T_Memcard_InitializeSystem   8232EC08
+//   T_Image_FlushMove            823D4398
+//   T_CG_CullZoom                821067A8
+// Not located: T_D3D_ReplayRecording, T_D3D_PatchVertexFetches,
+// T_Job_WaitPredicate, T_CG_ViewFov, T_Dvar_RegisterInt, T_DB_MissingAsset,
+// T_Com_Printf (MW3 has no such function).
+
+// the kernel's data imports: the image's own import records, found by their
+// (library, ordinal) words, 0x000100AD and 0x00010059, each present once
+#define T_DATA_TimeStampBundlePtr 0x820007B0u   // the KeTimeStampBundle import record
+#define T_DATA_DebugMonitorPtr    0x8200093Cu   // the KeDebugMonitorData import record
+
+// Not derived for this title: the code that reads each of these checks for zero.
+// The MW2 gameplay code (player.cpp's route trace) is the only reader of the
+// client's fields, and the engine's own globals are not mapped for MW3 yet.
+#define T_DATA_DeviceTable        0u
+#define T_DATA_ClientStates       0u
+#define T_CLIENT_STRIDE           0u
+#define T_CLIENT_VALID            0u
+#define T_CLIENT_ORIGIN           0u
+#define T_CLIENT_ANGLES           0u
+
+#elif defined(MW2_TITLE_MP) && !defined(MW2_VERSION_TU0)
 
 #define MW2_TITLE_NAME  "multiplayer"
 #define T_ENTRY_POINT   0x823A90C8u          // the XEX header's ENTRY_POINT

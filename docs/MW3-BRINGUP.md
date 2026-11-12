@@ -157,6 +157,27 @@ repeats steps 1 and 3 from `mw3/tu0/default.xex` in about 15 seconds.
   `ppc_func_mapping.cpp`, all of which `clang++-18 -fsyntax-only` accepts with the
   runtime's flags. They have not been compiled to objects or linked: that needs
   an `mw3` block in `runtime/title.h` and in `CMakeLists.txt` (step 4).
+- **Step 4, title block:** `runtime/title.h` has an MW3 block (`-DMW3_TITLE=1`),
+  with the entry point (`0x82459E58`), `Com_Error`'s logging hook, the two
+  kernel data-import records (`KeTimeStampBundle` at `0x820007B0` and
+  `KeDebugMonitorData` at `0x8200093C`, found by their import words), and zeros
+  for what is not derived. The other located hooks are listed in it, not
+  enabled: they read D3D's device and the title's structures at MW2 offsets,
+  which moved. 74 of the 77 sources of `runtime/` outside `gpu/` compile against
+  it; the three left need FFmpeg, a generated playlist header and the title's
+  hash, none of which the MW3 target supplies. `gpu/` could not be checked, as
+  Vulkan and SDL headers were not available. The 51 top-level sources are now
+  part of `mw3-recomp-check`.
+- **Imports on the startup path** (`tools/audit_mw3_startup.py`): of 258 kernel
+  imports, 188 are reachable from the entry point; 161 of those have a runtime
+  implementation and 27 only a logging stub. The ones to implement first are
+  `RtlImageXexHeaderField` (called in the CRT startup, `sub_82462E50`), the C
+  formatters `sprintf`, `_snprintf`, `_vsnprintf` and `vswprintf` (used on the
+  `D3D_Present` path among others), `KeInitializeDpc` and `KeInsertQueueDpc`
+  (see MW3-DPC-INVESTIGATION.md), `VdSetDisplayModeOverride`, and
+  `RtlUnicodeStringToAnsiString` with `RtlFreeAnsiString`. The network, `Xam*UI`
+  and bug-check imports can stay stubs for an offline boot.
+
 - **Gotcha:** XenonRecomp crashes with a null `FILE*` and no message when its
   output directory (`ppc_mw3/`) does not exist.
 
