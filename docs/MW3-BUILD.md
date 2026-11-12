@@ -10,7 +10,7 @@ copying or guessing those addresses.
 Place your own disc executable at `mw3/tu0/default.xex`, then run:
 
 ```sh
-./tools/build_mw3.sh
+bash tools/build_mw3.sh
 ```
 
 The script runs the existing MW3 XEX/recompiler pipeline and then configures
