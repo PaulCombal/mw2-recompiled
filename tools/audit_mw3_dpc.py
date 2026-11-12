@@ -138,6 +138,99 @@ def inspect_function(name: str, body: str) -> list[dict[str, object]]:
     return rows
 
 
+
+def analyze_dpc_array_relationship(functions: dict[str, str]) -> list[str]:
+    """Recognize the MW3 graphics object's matching initialize/queue DPC array."""
+    init = functions.get("__imp__sub_820A9670", "")
+    queue = functions.get("__imp__sub_820A95A0", "")
+    callback = functions.get("__imp__sub_820A9568", "")
+    startup = functions.get("__imp__sub_820A6788", "")
+    submit = functions.get("__imp__sub_8209C588", "")
+    worker = functions.get("__imp__sub_820A93D0", "")
+    consumer = functions.get("__imp__sub_820A9110", "")
+
+    init_evidence = (
+        "ctx.r30.u64 = ctx.r3.u64;",
+        "ctx.r31.s64 = ctx.r30.s64 + 11524;",
+        "ctx.r31.s64 = ctx.r31.s64 + 108;",
+        "ctx.r3.s64 = ctx.r31.s64 + -36;",
+        "ctx.r28.s64 = ctx.r31.s64 + -68;",
+    )
+    queue_evidence = (
+        "ctx.r26.u64 = ctx.r3.u64;",
+        "PPC_LOAD_U32(ctx.r26.u32 + 11452)",
+        "ctx.r11.s64 = ctx.r11.s64 * 108;",
+        "ctx.r11.u64 = ctx.r11.u64 + ctx.r26.u64;",
+        "ctx.r3.s64 = ctx.r11.s64 + 11488;",
+    )
+    callback_evidence = (
+        "PPC_LOAD_U32(ctx.r4.u32 + 84)",
+        "ctx.r10.s64 = ctx.r10.s64 + 23;",
+        "PPC_STORE_U32(r11.u32 + 84, ctx.r10.u32)",
+        "__imp__KeSetEvent(ctx, base)",
+    )
+    if not all(part in init for part in init_evidence):
+        return []
+    if not all(part in queue for part in queue_evidence):
+        return []
+    if not all(part in callback for part in callback_evidence):
+        return []
+    if "PPC_STORE_U32(ctx.r10.u32 + r11.u32, ctx.r9.u32)" not in callback:
+        return []
+    if "ctx.r3.s64 = r11.s64 + 60;" not in callback:
+        return []
+    six_entry_loop = (
+        "ctx.r27.s64 = 2130706432;" in init
+        and "ctx.r27.s64 = ctx.r27.s64 + 128;" in init
+        and "ctx.r11.u64 = ctx.r11.u64 | 768;" in init
+    )
+    if not six_entry_loop:
+        return []
+    worker_created = (
+        "sub_824580B8(ctx, base)" in init
+        and "ctx.r10.s64 = -2113208320;" in init
+        and "ctx.r5.s64 = ctx.r10.s64 + -27696;" in init
+    )
+    worker_evidence = (
+        "ctx.r27.s64 = ctx.r28.s64 + 60;" in worker
+        and "__imp__KeWaitForSingleObject(ctx, base)" in worker
+        and "sub_820A9110(ctx, base)" in worker
+        and "PPC_LOAD_U32(ctx.r28.u32 + 84)" in worker
+        and "PPC_LOAD_U32(ctx.r28.u32 + 88)" in worker
+    )
+    consumer_evidence = (
+        "PPC_LOAD_U32(ctx.r30.u32 + 84)" in consumer
+        and "PPC_LOAD_U32(ctx.r30.u32 + 88)" in consumer
+        and "PPC_STORE_U32(ctx.r30.u32 + 88, ctx.r8.u32)" in consumer
+        and "PPC_LOAD_U32(ctx.r11.u32 + ctx.r30.u32)" in consumer
+    )
+
+    lines = [
+        "DPC ARRAY CORRELATION (MW3 FUNCTION-SPECIFIC STATIC PATTERN):",
+        "- Initialization and insertion use the same object base and 0x6C-byte entry stride.",
+        "- The initializer loop covers six entries (0x7F000000 through 0x7F000280, stepping by 0x80).",
+        "- Per-entry context begins at object_base + 0x2CC0 + index * 0x6C.",
+        "- The initialized DPC object begins at object_base + 0x2CE0 + index * 0x6C (context + 0x20).",
+        "- The insertion path selects the entry using the object's index field at offset 0x2CBC, then computes the same DPC offset.",
+        "- The callback stores its first system argument into a four-slot ring at context + 0x5C..0x68, reads/increments the ring counter at context + 0x54, and signals an event at context + 0x3C.",
+    ]
+    if ("__imp__VdInitializeEngines" in startup
+            and "__imp__VdSetGraphicsInterruptCallback" in startup
+            and "sub_820A9670(ctx, base)" in startup):
+        lines.append("- The initializer's parent also initializes video engines and registers a graphics interrupt callback.")
+    if ("__imp__KfAcquireSpinLock" in submit
+            and "sub_820A95A0(ctx, base)" in submit):
+        lines.append("- The queue caller acquires the object spin lock before its conditional DPC insertion path.")
+    if worker_created and worker_evidence and consumer_evidence:
+        lines.append("- Each record also creates worker entry sub_820A93D0; the worker waits on the same context event and calls sub_820A9110 to consume completions.")
+        lines.append("- The consumer compares producer/consumer counters at context + 0x54/+0x58, reads the same four-slot ring, and advances the consumer counter.")
+    lines.append(
+        "INTERPRETATION: strong evidence for a graphics-interrupt/completion notification path; "
+        "the exact hardware/fence semantics and Xbox DPC scheduler contract remain unproven."
+    )
+    return lines
+
+
 def self_test() -> None:
     fixture = """
       PPC_FUNC_IMPL(sub_820A9670) {
@@ -172,6 +265,16 @@ def self_test() -> None:
     folded_constants[11] = -2113208320
     callback = abstract_expr("ctx.r11.s64 + -27288", folded_state, folded_constants)
     assert callback.startswith("constant 0x820A9568")
+    correlation = analyze_dpc_array_relationship({
+        "__imp__sub_820A9670": "ctx.r30.u64 = ctx.r3.u64; ctx.r31.s64 = ctx.r30.s64 + 11524; ctx.r31.s64 = ctx.r31.s64 + 108; ctx.r3.s64 = ctx.r31.s64 + -36; ctx.r28.s64 = ctx.r31.s64 + -68; ctx.r27.s64 = 2130706432; ctx.r27.s64 = ctx.r27.s64 + 128; ctx.r11.u64 = ctx.r11.u64 | 768; sub_824580B8(ctx, base); ctx.r10.s64 = -2113208320; ctx.r5.s64 = ctx.r10.s64 + -27696;",
+        "__imp__sub_820A95A0": "ctx.r26.u64 = ctx.r3.u64; PPC_LOAD_U32(ctx.r26.u32 + 11452); ctx.r11.s64 = ctx.r11.s64 * 108; ctx.r11.u64 = ctx.r11.u64 + ctx.r26.u64; ctx.r3.s64 = ctx.r11.s64 + 11488;",
+        "__imp__sub_820A9568": "PPC_LOAD_U32(ctx.r4.u32 + 84); ctx.r10.s64 = ctx.r10.s64 + 23; PPC_STORE_U32(r11.u32 + 84, ctx.r10.u32); PPC_STORE_U32(ctx.r10.u32 + r11.u32, ctx.r9.u32); ctx.r3.s64 = r11.s64 + 60; __imp__KeSetEvent(ctx, base);",
+        "__imp__sub_820A6788": "__imp__VdInitializeEngines(ctx, base); __imp__VdSetGraphicsInterruptCallback(ctx, base); sub_820A9670(ctx, base);",
+        "__imp__sub_8209C588": "__imp__KfAcquireSpinLock(ctx, base); sub_820A95A0(ctx, base);",
+        "__imp__sub_820A93D0": "ctx.r27.s64 = ctx.r28.s64 + 60; __imp__KeWaitForSingleObject(ctx, base); sub_820A9110(ctx, base); PPC_LOAD_U32(ctx.r28.u32 + 84); PPC_LOAD_U32(ctx.r28.u32 + 88);",
+        "__imp__sub_820A9110": "PPC_LOAD_U32(ctx.r30.u32 + 84); PPC_LOAD_U32(ctx.r30.u32 + 88); PPC_STORE_U32(ctx.r30.u32 + 88, ctx.r8.u32); PPC_LOAD_U32(ctx.r11.u32 + ctx.r30.u32);",
+    })
+    assert correlation and any("0x2CE0" in line for line in correlation)
     print("DPC callsite provenance self-test passed")
 
 
@@ -237,6 +340,7 @@ def main() -> int:
                     row["callback_loads"] = sorted(set(LOAD.findall(callback_body)))
                     row["callback_stores"] = sorted(set(STORE.findall(callback_body)))
     rows.sort(key=lambda row: (str(row["target"]), str(row["function"])))
+    correlation_lines = analyze_dpc_array_relationship(functions)
 
     lines = [
         "MW3 SANITIZED DPC CALLSITE / ARGUMENT-PROVENANCE AUDIT",
@@ -244,6 +348,8 @@ def main() -> int:
         "Generated PPC statements and proprietary XEX contents are intentionally omitted.",
         "",
     ]
+    if correlation_lines:
+        lines.extend(correlation_lines + [""])
     for row in rows:
         lines.extend([
             f"CALLER: {row['function']}",
@@ -270,7 +376,7 @@ def main() -> int:
         "- A constant in r4 at KeInitializeDpc is a callback-address candidate, not proof the target is a valid generated function.",
         "- Loads/stores are classified by width and proximity only; exact guest field offsets and aliasing require instruction-level correlation.",
         "- Direct call target names do not include indirect calls through function pointers.",
-        "- No conclusion about audio, graphics, synchronization, or runtime callback behavior is made from proximity alone.",
+        "- Function-specific array correlation can identify matching object offsets/strides, but does not prove callback scheduling or exact hardware/fence semantics.",
     ])
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text("\n".join(lines) + "\n")
