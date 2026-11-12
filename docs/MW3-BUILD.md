@@ -100,11 +100,31 @@ recompile-and-compile job is enabled only when the repository has:
 - Repository secret `MW3_ASSET_REPO_TOKEN`: a fine-grained token with
   read-only Contents access to that private asset repository.
 
-The workflow verifies that `default.xex` has SHA-256
+The private repository should contain the **extracted Xbox 360 MW3 campaign
+game-root contents**, with the supported `default.xex` at the repository root
+and the original relative directory structure preserved. Include the
+game-root fastfiles (including `code_post_gfx.ff` and
+`code_post_gfx.ffm` when present), other `.ff`/`.ffm` files, and any
+additional campaign `.xex` files supplied alongside the disc executable.
+Do not upload an ISO/GOD container, generated PPC sources, build outputs,
+saves, profiles, or unrelated multiplayer/DLC data for this campaign-only
+bring-up. Keep this repository private and use only game files you are
+authorized to use.
+
+The workflow verifies that root-level `default.xex` has SHA-256
 `d90bc8d93b7b8f6001ead8330271196a6ef7a5c2e4a9e9b63118f47d58a05912`
-before copying it into the ignored working tree. A different executable is
-rejected rather than silently generating code for a different image. The XEX
-is deleted from the runner workspace after staging and is never committed.
+before staging. A different executable is rejected rather than silently
+generating code for a different image. It then copies the extracted game-root
+contents (excluding Git checkout metadata) into the ignored
+`mw3/tu0/` working directory, preserving subfolders. The private checkout is
+deleted from the runner workspace after staging; none of these game assets
+are committed or uploaded as workflow artifacts.
+
+The latest first-stage smoke run requested `D:\\code_post_gfx.ff` and
+`D:\\code_post_gfx.ffm`, and both were absent from the current private
+asset repository. Add those files at the game-root level if they exist in
+your extracted campaign data. The inventory step will report filenames and
+sizes only, not file contents.
 
 ### Triggering the build while this PR is still open
 
