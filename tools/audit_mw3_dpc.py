@@ -146,6 +146,8 @@ def analyze_dpc_array_relationship(functions: dict[str, str]) -> list[str]:
     callback = functions.get("__imp__sub_820A9568", "")
     startup = functions.get("__imp__sub_820A6788", "")
     submit = functions.get("__imp__sub_8209C588", "")
+    worker = functions.get("__imp__sub_820A93D0", "")
+    consumer = functions.get("__imp__sub_820A9110", "")
 
     init_evidence = (
         "ctx.r30.u64 = ctx.r3.u64;",
@@ -184,6 +186,24 @@ def analyze_dpc_array_relationship(functions: dict[str, str]) -> list[str]:
     )
     if not six_entry_loop:
         return []
+    worker_created = (
+        "sub_824580B8(ctx, base)" in init
+        and "ctx.r10.s64 = -2113208320;" in init
+        and "ctx.r5.s64 = ctx.r10.s64 + -27696;" in init
+    )
+    worker_evidence = (
+        "ctx.r27.s64 = ctx.r28.s64 + 60;" in worker
+        and "__imp__KeWaitForSingleObject(ctx, base)" in worker
+        and "sub_820A9110(ctx, base)" in worker
+        and "PPC_LOAD_U32(ctx.r28.u32 + 84)" in worker
+        and "PPC_LOAD_U32(ctx.r28.u32 + 88)" in worker
+    )
+    consumer_evidence = (
+        "PPC_LOAD_U32(ctx.r30.u32 + 84)" in consumer
+        and "PPC_LOAD_U32(ctx.r30.u32 + 88)" in consumer
+        and "PPC_STORE_U32(ctx.r30.u32 + 88, ctx.r8.u32)" in consumer
+        and "PPC_LOAD_U32(ctx.r11.u32 + ctx.r30.u32)" in consumer
+    )
 
     lines = [
         "DPC ARRAY CORRELATION (MW3 FUNCTION-SPECIFIC STATIC PATTERN):",
@@ -200,7 +220,10 @@ def analyze_dpc_array_relationship(functions: dict[str, str]) -> list[str]:
         lines.append("- The initializer's parent also initializes video engines and registers a graphics interrupt callback.")
     if ("__imp__KfAcquireSpinLock" in submit
             and "sub_820A95A0(ctx, base)" in submit):
-        lines.append("- The queue caller acquires the object's spin lock before its conditional DPC insertion path.")
+        lines.append("- The queue caller acquires the object spin lock before its conditional DPC insertion path.")
+    if worker_created and worker_evidence and consumer_evidence:
+        lines.append("- Each record also creates worker entry sub_820A93D0; the worker waits on the same context event and calls sub_820A9110 to consume completions.")
+        lines.append("- The consumer compares producer/consumer counters at context + 0x54/+0x58, reads the same four-slot ring, and advances the consumer counter.")
     lines.append(
         "INTERPRETATION: strong evidence for a graphics-interrupt/completion notification path; "
         "the exact hardware/fence semantics and Xbox DPC scheduler contract remain unproven."
@@ -243,11 +266,13 @@ def self_test() -> None:
     callback = abstract_expr("ctx.r11.s64 + -27288", folded_state, folded_constants)
     assert callback.startswith("constant 0x820A9568")
     correlation = analyze_dpc_array_relationship({
-        "__imp__sub_820A9670": "ctx.r30.u64 = ctx.r3.u64; ctx.r31.s64 = ctx.r30.s64 + 11524; ctx.r31.s64 = ctx.r31.s64 + 108; ctx.r3.s64 = ctx.r31.s64 + -36; ctx.r28.s64 = ctx.r31.s64 + -68; ctx.r27.s64 = 2130706432; ctx.r27.s64 = ctx.r27.s64 + 128; ctx.r11.u64 = ctx.r11.u64 | 768;",
+        "__imp__sub_820A9670": "ctx.r30.u64 = ctx.r3.u64; ctx.r31.s64 = ctx.r30.s64 + 11524; ctx.r31.s64 = ctx.r31.s64 + 108; ctx.r3.s64 = ctx.r31.s64 + -36; ctx.r28.s64 = ctx.r31.s64 + -68; ctx.r27.s64 = 2130706432; ctx.r27.s64 = ctx.r27.s64 + 128; ctx.r11.u64 = ctx.r11.u64 | 768; sub_824580B8(ctx, base); ctx.r10.s64 = -2113208320; ctx.r5.s64 = ctx.r10.s64 + -27696;",
         "__imp__sub_820A95A0": "ctx.r26.u64 = ctx.r3.u64; PPC_LOAD_U32(ctx.r26.u32 + 11452); ctx.r11.s64 = ctx.r11.s64 * 108; ctx.r11.u64 = ctx.r11.u64 + ctx.r26.u64; ctx.r3.s64 = ctx.r11.s64 + 11488;",
         "__imp__sub_820A9568": "PPC_LOAD_U32(ctx.r4.u32 + 84); ctx.r10.s64 = ctx.r10.s64 + 23; PPC_STORE_U32(r11.u32 + 84, ctx.r10.u32); PPC_STORE_U32(ctx.r10.u32 + r11.u32, ctx.r9.u32); ctx.r3.s64 = r11.s64 + 60; __imp__KeSetEvent(ctx, base);",
         "__imp__sub_820A6788": "__imp__VdInitializeEngines(ctx, base); __imp__VdSetGraphicsInterruptCallback(ctx, base); sub_820A9670(ctx, base);",
         "__imp__sub_8209C588": "__imp__KfAcquireSpinLock(ctx, base); sub_820A95A0(ctx, base);",
+        "__imp__sub_820A93D0": "ctx.r27.s64 = ctx.r28.s64 + 60; __imp__KeWaitForSingleObject(ctx, base); sub_820A9110(ctx, base); PPC_LOAD_U32(ctx.r28.u32 + 84); PPC_LOAD_U32(ctx.r28.u32 + 88);",
+        "__imp__sub_820A9110": "PPC_LOAD_U32(ctx.r30.u32 + 84); PPC_LOAD_U32(ctx.r30.u32 + 88); PPC_STORE_U32(ctx.r30.u32 + 88, ctx.r8.u32); PPC_LOAD_U32(ctx.r11.u32 + ctx.r30.u32);",
     })
     assert correlation and any("0x2CE0" in line for line in correlation)
     print("DPC callsite provenance self-test passed")
