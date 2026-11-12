@@ -6,7 +6,7 @@ Status: triage plan based on the current `mw3-bringup` source and the sanitized 
 
 Implement low-risk, independently testable RTL/C-runtime compatibility first. A provisional graphics-completion DPC dispatcher now exists, but it is not a verified Xbox scheduler implementation: keep it experimental until callback ordering, execution context, and lifetime requirements are validated. Do not replace diagnostic stubs with guessed zero-return handlers.
 
-The current static audit reports 258 kernel/XAM imports in the image, 188 reachable through its direct-call graph, 161 reachable imports matching an existing runtime `PPC_FUNC` definition, and 27 reachable imports covered only by generated logging stubs. These are name-level coverage counts, not semantic compatibility results.
+The latest CI audit reports 258 kernel/XAM imports in the image, 201 matching existing runtime `PPC_FUNC` definitions across the full image and 57 requiring generated logging stubs. Of the 188 imports reachable through the static direct-call graph, 171 match existing runtime definitions and 17 remain logging stubs. These are name-level coverage counts, not semantic compatibility results. These are name-level coverage counts, not semantic compatibility results.
 
 ## Implementation status
 
