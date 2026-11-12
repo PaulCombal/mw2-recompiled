@@ -251,6 +251,10 @@ def main() -> int:
     logging_stub_imports = reached - runtime_implemented
     unresolved_abi = {name for name in unresolved if ABI_HELPER.match(name)}
     unresolved_other = unresolved - unresolved_abi
+    stub_paths = [
+        f"{name}: " + " -> ".join(import_paths[name])
+        for name in sorted(logging_stub_imports) if name in import_paths
+    ]
 
     lines = [
         "MW3 STARTUP DIRECT-CALL REACHABILITY AUDIT",
@@ -283,10 +287,7 @@ def main() -> int:
         *(sorted(logging_stub_imports) or ["(none)"]),
         "",
         "SHORTEST STATIC CALL PATHS TO REACHABLE LOGGING-STUB IMPORTS:",
-        *(
-            f"{name}: " + " -> ".join(import_paths[name])
-            for name in sorted(logging_stub_imports) if name in import_paths
-        ) or ["(none)"],
+        *(stub_paths or ["(none)"]),
         "",
         "UNRESOLVED POWERPC ABI HELPER TARGETS:",
         *(sorted(unresolved_abi) or ["(none)"]),
