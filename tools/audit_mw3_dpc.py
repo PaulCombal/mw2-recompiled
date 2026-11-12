@@ -193,7 +193,7 @@ def main() -> int:
     address_to_symbol = {
         int(address, 16): symbol
         for address, symbol in re.findall(
-            r"\\{\\s*0x0*([0-9A-Fa-f]{8})\\s*,\\s*([A-Za-z_]\\w*)\\s*\\}",
+            r"\{\s*0x0*([0-9A-Fa-f]{8})\s*,\s*([A-Za-z_]\w*)\s*\}",
             mapping_text,
         )
     }
