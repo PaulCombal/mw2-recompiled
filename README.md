@@ -25,15 +25,14 @@ The first-stage CI smoke test observes 26 GPU draw calls, but GPU device initial
 The local build script currently compiles and audits the generated MW3 code; it does not produce a playable game:
 
 1. Place the supported campaign executable at `mw3/tu0/default.xex`.
-2. Prepare `config/MW3.toml` and the required switch-table configuration.
-3. Install the prerequisites in [docs/building.md](docs/building.md).
-4. Run:
+2. Install CMake, Ninja, Clang 18, Python 3, Git, and the binutils tools (`nm`, `objdump`, `c++filt`).
+3. Run:
 
 ```sh
 bash tools/build_mw3.sh
 ```
 
-The script runs the MW3 extraction/recompilation pipeline, compiles the generated PPC library, runs focused tests, and produces static audit reports. The main output is `build-mw3/libppc_recomp.a`; generated source and build files are kept in ignored local directories.
+The script uses the checked-in `config/MW3.toml` and switch-table configuration, runs the MW3 extraction/recompilation pipeline, compiles the generated PPC library, runs focused tests, and produces static audit reports. The main output is `build-mw3/libppc_recomp.a`; generated source and build files are kept in ignored local directories.
 
 ### CI build
 
