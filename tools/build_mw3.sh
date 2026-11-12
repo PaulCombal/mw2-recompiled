@@ -26,7 +26,7 @@ cmake -S . -B build-mw3 -G Ninja \
     -DMW3_RECOMP_ONLY=ON \
     -DMW2_LTO=OFF
 
-cmake --build build-mw3 --target mw3-recomp-check --parallel "${JOBS:-$(nproc)}"
+cmake --build build-mw3 --target mw3-recomp-check --parallel "\${JOBS:-$(nproc)}"
 
 # Generate the same shared declarations/import inventory used by the MW2
 # executable build, but explicitly route title.py to MW3. These are diagnostic
@@ -36,11 +36,13 @@ export MW2_VERSION=tu0
 python3 tools/genshared.py
 python3 tools/gen_kernel_stubs.py
 
-# Record unresolved archive symbols and host relocations without publishing
-# generated game code or the user's executable.
+# Record metadata only. Generated game code and the user's executable are
+# never included in the uploaded audit artifacts.
 python3 tools/audit_mw3_generated.py build-mw3/libppc_recomp.a build-mw3/mw3-runtime-audit.txt
 python3 tools/audit_mw3_startup.py --report build-mw3/mw3-startup-callgraph.txt
+python3 tools/audit_mw3_dpc.py --report build-mw3/mw3-dpc-callsites.txt
 
 echo "MW3 generated PPC library compiled: build-mw3/libppc_recomp.a"
 echo "MW3 runtime audit metadata: build-mw3/mw3-runtime-audit.txt"
+echo "MW3 sanitized DPC callsite report: build-mw3/mw3-dpc-callsites.txt"
 echo "This is a code-generation/build milestone, not a playable desktop build."
