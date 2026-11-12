@@ -108,7 +108,7 @@ namespace
 
     // The title's image from game/, if the executable there is the one this
     // build was made from.
-    Installed LoadInstalled(std::vector<uint8_t>& image, std::string& error)
+    Installed LoadInstalled(std::vector<uint8_t>& image, std::vector<uint8_t>& xexHeader, std::string& error)
     {
         const fs::path path = fs::path(kGameFolder) / kXex;
         std::vector<uint8_t> file;
@@ -120,7 +120,8 @@ namespace
         install::crypto::Sha256 hash;
         hash.Update(file.data(), file.size());
         if (hash.FinalHex() != kSha256) return Installed::No;
-        if (!install::xex::Image(file, image, error))
+        if (!install::xex::Header(file, xexHeader, error) ||
+            !install::xex::Image(file, image, error))
         {
             error = Utf8(path) + ": " + error;
             return Installed::Unreadable;
@@ -148,7 +149,7 @@ bool install::Prepare(int, char**, Launch& launch, int& exitCode)
     if (const fs::path folder = ExecutableFolder(); !folder.empty()) fs::current_path(folder, ec);
 
     std::string error;
-    switch (LoadInstalled(launch.image, error))
+    switch (LoadInstalled(launch.image, launch.xexHeader, error))
     {
     case Installed::Yes:
         launch.gameRoot = kGameFolder;
@@ -167,7 +168,7 @@ bool install::Prepare(int, char**, Launch& launch, int& exitCode)
     return false;
 }
 
-bool install::LoadImageFile(const fs::path& path, std::vector<uint8_t>& image)
+bool install::LoadImageFile(const fs::path& path, std::vector<uint8_t>& image, std::vector<uint8_t>& xexHeader)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in) { LOGE("cannot open image %s", Utf8(path).c_str()); return false; }
@@ -175,9 +176,14 @@ bool install::LoadImageFile(const fs::path& path, std::vector<uint8_t>& image)
     if (file.size() >= 4 && std::memcmp(file.data(), "XEX2", 4) == 0)
     {
         std::string error;
-        if (!xex::Image(file, image, error)) { LOGE("%s: %s", Utf8(path).c_str(), error.c_str()); return false; }
+        if (!xex::Header(file, xexHeader, error) || !xex::Image(file, image, error))
+        {
+            LOGE("%s: %s", Utf8(path).c_str(), error.c_str());
+            return false;
+        }
         return true;
     }
+    xexHeader.clear();
     image = std::move(file);
     return true;
 }
