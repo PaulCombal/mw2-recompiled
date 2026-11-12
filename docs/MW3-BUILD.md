@@ -93,7 +93,11 @@ Importantly, XenonRecomp emits guest-callable functions as weak alias
 declarations such as `sub_XXXXXXXX` pointing to implementation bodies named
 `__imp__sub_XXXXXXXX`; these aliases are resolved before traversing the
 call graph. The report separately classifies known PowerPC save/restore
-helper references from other unresolved call targets.
+helper references from other unresolved call targets. For every reachable
+import that still has only a generated logging stub, it also records a
+shortest static direct-call path from the entry implementation. These paths
+help prioritize which missing services to investigate first; they are not
+proof that a branch is taken during a normal boot.
 
 This is a static direct-call approximation, not a dynamic execution trace.
 Indirect calls, function pointers, callbacks, data imports, and runtime-selected
