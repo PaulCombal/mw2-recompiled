@@ -310,6 +310,49 @@ PPC_FUNC(__imp__KeReleaseSemaphore)
     ctx.r3.u64 = semaphore ? uint32_t(semaphore->Release(int32_t(ctx.r5.u32))) : 0u;
 }
 
+// NT semaphore handles share the same dispatcher object implementation as
+// KeInitializeSemaphore/KeReleaseSemaphore. Nt* callers address the object by
+// handle, while Ke* callers address its guest dispatcher header.
+PPC_FUNC(__imp__NtCreateSemaphore)
+{
+    // NtCreateSemaphore(Handle*, Access, ObjectAttributes*, InitialCount, MaximumCount)
+    auto* out = GuestPtr<be32>(ctx.r3.u32);
+    const int32_t initialCount = int32_t(ctx.r6.u32);
+    const int32_t maximumCount = int32_t(ctx.r7.u32);
+    if (!out || initialCount < 0 || maximumCount <= 0 || initialCount > maximumCount)
+    {
+        ctx.r3.u64 = X_STATUS_INVALID_PARAMETER;
+        return;
+    }
+
+    auto semaphore = std::make_shared<Semaphore>();
+    semaphore->count = initialCount;
+    semaphore->limit = maximumCount;
+    *out = InsertHandle(semaphore);
+    ctx.r3.u64 = X_STATUS_SUCCESS;
+}
+
+PPC_FUNC(__imp__NtReleaseSemaphore)
+{
+    // NtReleaseSemaphore(Handle, ReleaseCount, PreviousCount*).
+    auto semaphore = LookupHandleAs<Semaphore>(ctx.r3.u32);
+    const int32_t releaseCount = int32_t(ctx.r4.u32);
+    if (!semaphore)
+    {
+        ctx.r3.u64 = X_STATUS_INVALID_HANDLE;
+        return;
+    }
+    if (releaseCount <= 0)
+    {
+        ctx.r3.u64 = X_STATUS_INVALID_PARAMETER;
+        return;
+    }
+
+    const int32_t previousCount = semaphore->Release(releaseCount);
+    if (auto* previous = GuestPtr<be32>(ctx.r5.u32)) *previous = uint32_t(previousCount);
+    ctx.r3.u64 = X_STATUS_SUCCESS;
+}
+
 PPC_FUNC(__imp__NtClose)
 {
     ctx.r3.u64 = CloseHandle(ctx.r3.u32) ? X_STATUS_SUCCESS : X_STATUS_INVALID_HANDLE;
