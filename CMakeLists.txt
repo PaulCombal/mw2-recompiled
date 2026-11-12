@@ -30,6 +30,7 @@ option(MW2_LOGGING "Emit the runtime's log" ON)
 option(MW2_PORTABLE "Link the C++ runtime statically, for a binary that runs on other machines" OFF)
 option(MW2_DIAGNOSTICS "Build the traces, dumps, statistics, reports and test harness (runtime/diagnostics.h)" ON)
 option(MW3_RECOMP_ONLY "Build only the MW3 generated PPC library; runtime hooks are not ready yet" OFF)
+option(MW3_LINK_PROBE "Link a diagnostic MW3 desktop executable after the compile-only checks" OFF)
 
 # The x86-64 level the game is compiled for. The 360's vector unit reads memory
 # big-endian, so nearly every vector load, store and permute of the recompiled
@@ -158,7 +159,7 @@ endif()
 # MW3's generated PPC can be compiled independently before its runtime hook
 # addresses have been identified. This deliberately stops before compiling
 # MW2-specific runtime sources or linking an executable with fabricated hooks.
-if(MW3_RECOMP_ONLY)
+if(MW3_RECOMP_ONLY AND NOT MW3_LINK_PROBE)
     if(NOT MW2_TITLE STREQUAL "mw3")
         message(FATAL_ERROR "MW3_RECOMP_ONLY requires -DMW2_TITLE=mw3")
     endif()
@@ -229,6 +230,10 @@ if(MW3_RECOMP_ONLY)
     return()
 endif()
 
+if(MW3_LINK_PROBE AND NOT MW2_TITLE STREQUAL "mw3")
+    message(FATAL_ERROR "MW3_LINK_PROBE requires -DMW2_TITLE=mw3")
+endif()
+
 # ---- runtime ---------------------------------------------------------------
 file(GLOB RUNTIME_SOURCES CONFIGURE_DEPENDS
      "${CMAKE_SOURCE_DIR}/runtime/*.cpp"
@@ -290,6 +295,9 @@ set(MW2_ONLINE_SOURCES
 add_executable(mw2 ${RUNTIME_SOURCES}
     ${MW2_ONLINE_SOURCES}
     "${MW2_PPC_DIR}/stubs_generated.cpp")
+if(MW2_TITLE STREQUAL "mw3")
+    set_target_properties(mw2 PROPERTIES OUTPUT_NAME "mw3")
+endif()
 target_link_libraries(mw2 PRIVATE ppc_recomp)
 target_compile_options(mw2 PRIVATE -march=${MW2_X86_LEVEL})
 # The one file that must run on any x86-64 processor: it checks for the others.
@@ -335,21 +343,32 @@ function(mw2_sha256 variable path)
     file(SHA256 "${path}" hash)
     set(${variable} "${hash}" PARENT_SCOPE)
 endfunction()
-mw2_sha256(MW2_XEX_SHA256_SP  "${MW2_XEX_DIR}/default.xex")
-mw2_sha256(MW2_XEX_SHA256_MP  "${MW2_XEX_DIR}/default_mp.xex")
-mw2_sha256(MW2_DISC_SHA256_SP "${CMAKE_SOURCE_DIR}/mw2/tu0/default.xex")
-mw2_sha256(MW2_DISC_SHA256_MP "${CMAKE_SOURCE_DIR}/mw2/tu0/default_mp.xex")
-set(MW2_HASH_DEFINITIONS
-    MW2_XEX_SHA256_SP="${MW2_XEX_SHA256_SP}" MW2_XEX_SHA256_MP="${MW2_XEX_SHA256_MP}"
-    MW2_DISC_SHA256_SP="${MW2_DISC_SHA256_SP}" MW2_DISC_SHA256_MP="${MW2_DISC_SHA256_MP}")
-if(NOT MW2_VERSION STREQUAL "tu0")
-    mw2_sha256(MW2_UPDATE_SHA256_PATCH_MP   "${CMAKE_SOURCE_DIR}/mw2/update/patch_mp.ff")
-    mw2_sha256(MW2_UPDATE_SHA256_DLC1_UI_MP "${CMAKE_SOURCE_DIR}/mw2/update/dlc1_ui_mp.ff")
-    mw2_sha256(MW2_UPDATE_SHA256_DLC2_UI_MP "${CMAKE_SOURCE_DIR}/mw2/update/dlc2_ui_mp.ff")
-    list(APPEND MW2_HASH_DEFINITIONS
-        MW2_UPDATE_SHA256_PATCH_MP="${MW2_UPDATE_SHA256_PATCH_MP}"
-        MW2_UPDATE_SHA256_DLC1_UI_MP="${MW2_UPDATE_SHA256_DLC1_UI_MP}"
-        MW2_UPDATE_SHA256_DLC2_UI_MP="${MW2_UPDATE_SHA256_DLC2_UI_MP}")
+if(MW2_TITLE STREQUAL "mw3")
+    # The link probe is a development executable for the one pinned MW3 XEX.
+    # It accepts an explicit XEX/flat-image path; no MW2 disc or update assets
+    # are required, and the launcher/player-install path is not enabled.
+    set(MW2_HASH_DEFINITIONS
+        MW2_XEX_SHA256_SP="d90bc8d93b7b8f6001ead8330271196a6ef7a5c2e4a9e9b63118f47d58a05912"
+        MW2_XEX_SHA256_MP="unsupported"
+        MW2_DISC_SHA256_SP="d90bc8d93b7b8f6001ead8330271196a6ef7a5c2e4a9e9b63118f47d58a05912"
+        MW2_DISC_SHA256_MP="unsupported")
+else()
+    mw2_sha256(MW2_XEX_SHA256_SP  "${MW2_XEX_DIR}/default.xex")
+    mw2_sha256(MW2_XEX_SHA256_MP  "${MW2_XEX_DIR}/default_mp.xex")
+    mw2_sha256(MW2_DISC_SHA256_SP "${CMAKE_SOURCE_DIR}/mw2/tu0/default.xex")
+    mw2_sha256(MW2_DISC_SHA256_MP "${CMAKE_SOURCE_DIR}/mw2/tu0/default_mp.xex")
+    set(MW2_HASH_DEFINITIONS
+        MW2_XEX_SHA256_SP="${MW2_XEX_SHA256_SP}" MW2_XEX_SHA256_MP="${MW2_XEX_SHA256_MP}"
+        MW2_DISC_SHA256_SP="${MW2_DISC_SHA256_SP}" MW2_DISC_SHA256_MP="${MW2_DISC_SHA256_MP}")
+    if(NOT MW2_VERSION STREQUAL "tu0")
+        mw2_sha256(MW2_UPDATE_SHA256_PATCH_MP   "${CMAKE_SOURCE_DIR}/mw2/update/patch_mp.ff")
+        mw2_sha256(MW2_UPDATE_SHA256_DLC1_UI_MP "${CMAKE_SOURCE_DIR}/mw2/update/dlc1_ui_mp.ff")
+        mw2_sha256(MW2_UPDATE_SHA256_DLC2_UI_MP "${CMAKE_SOURCE_DIR}/mw2/update/dlc2_ui_mp.ff")
+        list(APPEND MW2_HASH_DEFINITIONS
+            MW2_UPDATE_SHA256_PATCH_MP="${MW2_UPDATE_SHA256_PATCH_MP}"
+            MW2_UPDATE_SHA256_DLC1_UI_MP="${MW2_UPDATE_SHA256_DLC1_UI_MP}"
+            MW2_UPDATE_SHA256_DLC2_UI_MP="${MW2_UPDATE_SHA256_DLC2_UI_MP}")
+    endif()
 endif()
 target_compile_definitions(mw2 PRIVATE ${MW2_HASH_DEFINITIONS})
 if(WIN32)
