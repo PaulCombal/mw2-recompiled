@@ -1,5 +1,9 @@
 #include "runtime/kernel/xex_header.h"
 
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+
 #include <array>
 #include <cassert>
 #include <cstdint>
