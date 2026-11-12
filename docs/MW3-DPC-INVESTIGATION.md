@@ -32,7 +32,7 @@ The initialization and insertion paths resolve to the same parent object and sam
 
 - `sub_820A6788` passes its object pointer to `sub_820A9670`. The initializer sets up six per-entry records, stepping by `0x6C` bytes.
 - For entry `i`, its deferred context is `object_base + 0x2CC0 + i * 0x6C`, and its DPC object is `object_base + 0x2CE0 + i * 0x6C` (the DPC begins `0x20` bytes into that record).
-- `sub_8209C588` passes the same parent object pointer to `sub_820A95A0`. The insertion function selects the entry from the index field at object offset `0x2CCC`, multiplies the index by `0x6C`, and computes the DPC address at object offset `0x2CE0`. This matches the initializer's DPC array formula.
+- `sub_8209C588` passes the same parent object pointer to `sub_820A95A0`. The insertion function selects the entry from the index field at object offset `0x2CBC`, multiplies the index by `0x6C`, and computes the DPC address at object offset `0x2CE0`. This matches the initializer's DPC array formula.
 - The initialization parent also calls `VdInitializeEngines` and `VdSetGraphicsInterruptCallback`. The insertion caller takes the object's spin lock before its conditional queue path.
 
 **Interpretation:** the matching base, index, offset, and stride, together with video-engine initialization and graphics-interrupt callback registration, are strong evidence that these DPCs implement a graphics-interrupt/completion notification path. The callback's event and four-slot completion ring are consistent with that role. Exact GPU fence semantics, runtime ordering, and Xbox DPC scheduler behavior remain unproven.
