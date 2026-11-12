@@ -36,7 +36,6 @@ jobs:
           python tools/audit_mw3_startup.py --self-test
           python tools/audit_mw3_dpc.py --self-test
           python tools/audit_mw3_xex_module_handle.py --self-test
-          python tools/audit_mw3_xex_module_handle.py --self-test
 
       - name: Test MW2-to-MW3 hook matcher
         run: python tools/port_hooks.py --selftest
@@ -156,7 +155,6 @@ jobs:
           python3 tools/audit_mw3_generated.py build-mw3/libppc_recomp.a build-mw3/mw3-runtime-audit.txt
           python3 tools/audit_mw3_startup.py --report build-mw3/mw3-startup-callgraph.txt
           python3 tools/audit_mw3_dpc.py --report build-mw3/mw3-dpc-callsites.txt
-          python3 tools/audit_mw3_xex_module_handle.py --source-dir ppc_mw3 | tee build-mw3/mw3-xex-module-handle-audit.txt
           python3 tools/audit_mw3_xex_module_handle.py --source-dir ppc_mw3 | tee build-mw3/mw3-xex-module-handle-audit.txt
 
       - name: Upload MW3 runtime audit metadata
