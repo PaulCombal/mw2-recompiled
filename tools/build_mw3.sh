@@ -15,7 +15,7 @@ for tool in cmake ninja clang-18 clang++-18 python3 git; do
 done
 
 # Extract/flatten the user's MW3 XEX, analyse jump tables, and regenerate ppc_mw3/.
-./tools/recomp_mw3.sh
+bash ./tools/recomp_mw3.sh
 
 # Compile the generated PPC code without selecting or linking MW2 runtime hooks.
 cmake -S . -B build-mw3 -G Ninja \
