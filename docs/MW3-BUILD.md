@@ -100,6 +100,28 @@ recompile-and-compile job is enabled only when the repository has:
 - Repository secret `MW3_ASSET_REPO_TOKEN`: a fine-grained token with
   read-only Contents access to that private asset repository.
 
+For fastfiles larger than GitHub's normal browser-upload limit, track the
+`.ff` and `.ffm` files in Git LFS in the private asset repository. The
+workflow's private checkout enables LFS download, so the staged game root
+receives the real files rather than LFS pointer text. A typical repository
+setup is:
+
+```sh
+git lfs install
+git lfs track "*.ff" "*.ffm"
+git add .gitattributes
+git add path/to/your/fastfiles/
+git commit -m "Add MW3 fastfiles with Git LFS"
+git push
+```
+
+GitHub Free currently includes 10 GiB of LFS storage and 10 GiB of monthly
+download bandwidth; Actions downloads count against bandwidth. At about
+1.96 GB per full checkout, repeated CI builds can consume the monthly
+bandwidth quickly (roughly five full downloads, depending on actual byte
+sizes and other LFS usage). Avoid rerunning the full asset build unnecessarily.
+Each LFS object must also remain below the plan's 2 GB per-file limit.
+
 The private repository should contain the **extracted Xbox 360 MW3 campaign
 game-root contents**, with the supported `default.xex` at the repository root
 and the original relative directory structure preserved. Add available
