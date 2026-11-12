@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "xex_module_handle.h"
 #include "title.h"
 #include "../guest.h"
 #include "../diagnostics.h"
@@ -109,6 +110,63 @@ namespace
 
     std::mutex g_unimplLock;
     std::map<std::string, uint64_t> g_unimpl;
+
+    void InstallExecutableModuleHandle(const std::vector<uint8_t>& xexHeader)
+    {
+        if (xexHeader.empty()) return; // Flat-PE development runs have no XEX metadata.
+        if (xexHeader.size() < 0x18 ||
+            std::memcmp(xexHeader.data(), "XEX2", 4) != 0 ||
+            uint32_t(*reinterpret_cast<const be32*>(xexHeader.data() + 8)) != xexHeader.size())
+        {
+            LOGW("XexExecutableModuleHandle: refusing an invalid or incomplete XEX header");
+            return;
+        }
+
+        unsigned matches = 0;
+        const uint32_t importRecord = kernel::xex::FindUniqueDataImportRecord(
+            guest::Base() + PPC_IMAGE_BASE, uint32_t(PPC_IMAGE_SIZE),
+            uint32_t(PPC_IMAGE_BASE), 0x0193, matches);
+        if (!importRecord)
+        {
+            LOGW("XexExecutableModuleHandle: expected one xboxkrnl ordinal 0x193 data import, found %u",
+                 matches);
+            return;
+        }
+
+        // The audited MW3 caller loads this global from 0x82000000 + 0x87C.
+        // A unique marker elsewhere is not sufficient: it would leave the
+        // actual startup pointer unresolved.
+        constexpr uint32_t kModuleHandleGlobal = PPC_IMAGE_BASE + 0x87C;
+        if (importRecord != kModuleHandleGlobal)
+        {
+            LOGW("XexExecutableModuleHandle: ordinal 0x193 is at %08X, MW3 caller reads %08X",
+                 importRecord, kModuleHandleGlobal);
+            return;
+        }
+
+        constexpr uint32_t kLdrEntrySize = 0x64;
+        constexpr uint32_t kXexHeaderBaseOffset = 0x58;
+        const uint32_t headerAddress = kernel::AllocateGuest(uint32_t(xexHeader.size()), 16);
+        const uint32_t ldrAddress = kernel::AllocateGuest(kLdrEntrySize, 16);
+        const uint32_t handleSlot = kernel::AllocateGuest(4, 4);
+        if (!headerAddress || !ldrAddress || !handleSlot)
+        {
+            if (headerAddress) kernel::FreeGuest(headerAddress);
+            if (ldrAddress) kernel::FreeGuest(ldrAddress);
+            if (handleSlot) kernel::FreeGuest(handleSlot);
+            LOGE("XexExecutableModuleHandle: could not allocate guest module metadata");
+            return;
+        }
+
+        std::memcpy(guest::Base() + headerAddress, xexHeader.data(), xexHeader.size());
+        std::memset(guest::Base() + ldrAddress, 0, kLdrEntrySize);
+        *GuestPtr<be32>(ldrAddress + kXexHeaderBaseOffset) = headerAddress;
+        *GuestPtr<be32>(handleSlot) = ldrAddress;
+        *GuestPtr<be32>(importRecord) = handleSlot;
+
+        LOGI("XexExecutableModuleHandle: import %08X -> handle slot %08X -> LDR %08X -> XEX header %08X (%zu bytes)",
+             importRecord, handleSlot, ldrAddress, headerAddress, xexHeader.size());
+    }
 }
 
 namespace
@@ -142,11 +200,12 @@ namespace
 
 const TlsTemplate& ImageTlsTemplate() { return g_tlsTemplate; }
 
-void kernel::Initialise(const std::filesystem::path& gameRoot)
+void kernel::Initialise(const std::filesystem::path& gameRoot, const std::vector<uint8_t>& xexHeader)
 {
     ReadTlsDirectory();
     InstallTimeStampBundle();
     InstallDebugMonitorData();
+    InstallExecutableModuleHandle(xexHeader);
     g_gameRoot = gameRoot;
     LOGI("game root: %s%s", gameRoot.string().c_str(),
          std::filesystem::exists(gameRoot) ? "" : "  (does not exist)");
