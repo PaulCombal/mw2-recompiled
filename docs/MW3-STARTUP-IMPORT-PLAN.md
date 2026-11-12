@@ -8,6 +8,10 @@ Implement low-risk, independently testable RTL/C-runtime compatibility first. Ke
 
 The current static audit reports 258 kernel/XAM imports in the image, 188 reachable through its direct-call graph, 161 reachable imports matching an existing runtime `PPC_FUNC` definition, and 27 reachable imports covered only by generated logging stubs. These are name-level coverage counts, not semantic compatibility results.
 
+## Implementation status
+
+`RtlImageXexHeaderField` is implemented on the review branch `mw3-rtl-xex-header` in `runtime/kernel/xex.cpp`, with a bounded XEX2 optional-header decoder in `runtime/kernel/xex_header.h` and a focused C++ test registered with CTest. The handler follows the Xbox/Xenia contract: inline values are returned directly, type-1 fields return the guest address of the value word, and structured fields return the guest header base plus the stored offset. Missing keys and malformed header/table bounds fail closed with zero. The helper assumes `r3` is already the guest address of a mapped XEX2 header. The MW3 startup callsite's module-handle provisioning must still be traced before this import can be considered boot-ready. This implementation is pending review and has not been validated against a live MW3 boot.
+
 ## Prioritized implementation queue
 
 | Priority | Import(s) | Why it is in this tier | Required investigation before implementation | Acceptance tests |
