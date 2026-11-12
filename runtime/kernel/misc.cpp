@@ -258,7 +258,7 @@ PPC_FUNC(__imp__RtlInitUnicodeString)
     // UNICODE_STRING lengths are byte counts and exclude the terminator.
     // Length fields are USHORTs, so cap the scan before multiplication wraps.
     uint32_t characters = 0;
-    while (characters < 0x7FFF && uint16_t(text[characters]) != 0) ++characters;
+    while (characters < 0x7FFE && uint16_t(text[characters]) != 0) ++characters;
     dest->length = uint16_t(characters * 2);
     dest->maximumLength = uint16_t((characters + 1) * 2);
     dest->pointer = source;
