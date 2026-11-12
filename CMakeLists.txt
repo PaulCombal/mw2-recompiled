@@ -12,6 +12,7 @@ option(MW2_TRACE_INDIRECT "Report indirect calls with no recompiled target inste
 option(MW2_LOGGING "Emit the runtime's log" ON)
 option(MW2_PORTABLE "Link the C++ runtime statically, for a binary that runs on other machines" OFF)
 option(MW2_DIAGNOSTICS "Build the traces, dumps, statistics, reports and test harness (runtime/diagnostics.h)" ON)
+option(MW3_RECOMP_ONLY "Build only the MW3 generated PPC library; runtime hooks are not ready yet" OFF)
 
 # The x86-64 level the game is compiled for. The 360's vector unit reads memory
 # big-endian, so nearly every vector load, store and permute of the recompiled
@@ -27,14 +28,23 @@ set(MW2_X86_LEVEL "x86-64-v2" CACHE STRING "The -march the game is compiled for"
 # default_mp.xex (the multiplayer). Each is recompiled into its own tree by
 # build.sh (TITLE=sp|mp), and the runtime names the title's functions through
 # runtime/title.h, which this definition selects.
-set(MW2_TITLE "sp" CACHE STRING "Which executable to build: sp (default.xex) or mp (default_mp.xex)")
+set(MW2_TITLE "sp" CACHE STRING "Which executable to build: sp, mp, or mw3")
 if(MW2_TITLE STREQUAL "sp")
     set(MW2_PPC_DIR "${CMAKE_SOURCE_DIR}/ppc")
 elseif(MW2_TITLE STREQUAL "mp")
     set(MW2_PPC_DIR "${CMAKE_SOURCE_DIR}/ppc_mp")
     add_compile_definitions(MW2_TITLE_MP=1)
+elseif(MW2_TITLE STREQUAL "mw3")
+    set(MW2_PPC_DIR "${CMAKE_SOURCE_DIR}/ppc_mw3")
+    if(NOT MW3_RECOMP_ONLY)
+        message(FATAL_ERROR "MW3 runtime integration is incomplete; configure with -DMW3_RECOMP_ONLY=ON to validate generated PPC code")
+    endif()
+    if(NOT MW2_VERSION STREQUAL "tu6")
+        message(FATAL_ERROR "MW3 currently uses its disc executable; leave MW2_VERSION at its default")
+    endif()
+    add_compile_definitions(MW3_TITLE=1)
 else()
-    message(FATAL_ERROR "MW2_TITLE must be sp or mp, not '${MW2_TITLE}'")
+    message(FATAL_ERROR "MW2_TITLE must be sp, mp, or mw3, not '${MW2_TITLE}'")
 endif()
 # And which version of it: the one title update 6 makes of the disc's (tu6),
 # or the disc's own (tu0), recompiled into ppc_tu0/ and ppc_mp_tu0/.
@@ -126,6 +136,17 @@ endif()
 
 if(MW2_TRACE_INDIRECT)
     target_compile_definitions(ppc_recomp PUBLIC MW2_TRACE_INDIRECT=1)
+endif()
+
+# MW3's generated PPC can be compiled independently before its runtime hook
+# addresses have been identified. This deliberately stops before compiling
+# MW2-specific runtime sources or linking an executable with fabricated hooks.
+if(MW3_RECOMP_ONLY)
+    if(NOT MW2_TITLE STREQUAL "mw3")
+        message(FATAL_ERROR "MW3_RECOMP_ONLY requires -DMW2_TITLE=mw3")
+    endif()
+    add_custom_target(mw3-recomp-check DEPENDS ppc_recomp)
+    return()
 endif()
 
 # ---- runtime ---------------------------------------------------------------
