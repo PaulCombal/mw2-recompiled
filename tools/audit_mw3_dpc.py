@@ -43,6 +43,8 @@ def abstract_expr(expr: str, state: dict[int, str],
     expr = expr.strip()
     literal = parse_integer(expr)
     if literal is not None:
+        if expr.lower().startswith("0x"):
+            return f"constant 0x{literal & 0xFFFFFFFF:08X}"
         return f"constant {literal} (u32 0x{literal & 0xFFFFFFFF:08X})"
     match = REG_IMMEDIATE.fullmatch(expr)
     if match:
