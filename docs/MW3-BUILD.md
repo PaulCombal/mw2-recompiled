@@ -82,3 +82,21 @@ Generated logging stubs return zero and are temporary diagnostics, not real
 kernel implementations. Review each missing import in the context of the
 MW3 boot path before implementing it. Do not replace the stubs with guessed
 return values or claim runtime compatibility from this report.
+
+
+## Startup call-graph audit
+
+The CI build also runs `tools/audit_mw3_startup.py` after generating MW3 PPC
+sources and kernel import glue. It resolves the XEX entry-point mapping to
+XenonRecomp's `_xstart` symbol, indexes generated implementation/wrapper
+bodies, and follows direct generated calls of the form `function(ctx, base)`.
+It stops at kernel/XAM imports and reports the imports reachable from startup,
+which of those are direct entry-point calls, and which still have only
+diagnostic logging stubs.
+
+This is a static direct-call approximation, not a dynamic execution trace.
+Indirect calls, callbacks, data imports, and runtime-selected thread entry
+points are not resolved. Reachability does not imply that a conditional path
+executes during a normal boot. Existing runtime matches remain macro-level
+only; no kernel import is promoted to verified MW3 compatibility by this
+report. The artifact contains names/counts only, not generated game source.
