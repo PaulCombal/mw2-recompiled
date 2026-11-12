@@ -98,6 +98,7 @@ jobs:
         with:
           repository: ${{ vars.MW3_ASSET_REPO }}
           token: ${{ secrets.MW3_ASSET_REPO_TOKEN }}
+          lfs: true
           path: private
 
       - name: Verify and stage the exact supported executable
@@ -111,7 +112,10 @@ jobs:
           echo "Private XEX/fastfile inventory (names and sizes only):"
           find private -type f \( -iname '*.xex' -o -iname '*.ff' -o -iname '*.ffm' \) -printf '%P %s bytes\n' | sort | head -n 200
           mkdir -p mw3/tu0
-          cp private/default.xex mw3/tu0/default.xex
+          # Preserve the complete extracted game-root layout (fastfiles, subfolders,
+          # and any additional XEX files) while excluding checkout metadata.
+          find private -mindepth 1 -maxdepth 1 ! -name .git -exec cp -a {} mw3/tu0/ \;
+          test -f mw3/tu0/default.xex
           rm -rf private
 
       - name: Install compiler and build tools
