@@ -23,7 +23,7 @@ cmake -S . -B build-mw3 -G Ninja \
     -DCMAKE_C_COMPILER=clang-18 \
     -DCMAKE_CXX_COMPILER=clang++-18 \
     -DMW2_TITLE=mw3 \
-    -DMW3_RECOMP_ONLY=ON \\
+    -DMW3_RECOMP_ONLY=ON \
     -DMW2_LTO=OFF
 
 cmake --build build-mw3 --target mw3-recomp-check --parallel "${JOBS:-$(nproc)}"
