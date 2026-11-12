@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
-"""Metadata-only direct-call reachability audit from the MW3 XEX entry point.
-
-The generated PPC C++ and XEX are inputs only. The report contains function and
-import names/counts, never source bodies or executable bytes.
-"""
+"""Metadata-only direct-call reachability audit from the MW3 XEX entry point."""
 from __future__ import annotations
 
 import argparse
 import re
-import sys
 from collections import deque
 from pathlib import Path
 
@@ -17,9 +12,6 @@ PPC = ROOT / "ppc_mw3"
 ENTRY_POINT = 0x82459E58
 ENTRY_SYMBOL = "_xstart"
 
-# XenonRecomp emits implementation bodies and thin callable wrappers. Imports
-# supplied by the kernel runtime use PPC_FUNC; generated functions use both
-# PPC_FUNC_IMPL and PPC_WEAK_FUNC.
 DEFINITION = re.compile(
     r"\b(PPC_FUNC_IMPL|PPC_FUNC|PPC_WEAK_FUNC)\s*\(\s*([A-Za-z_]\w*)\s*\)\s*\{"
 )
@@ -34,10 +26,9 @@ def function_definitions(source: str) -> dict[str, str]:
         pos = match.end()
         start = pos
         while pos < len(source) and depth:
-            char = source[pos]
-            if char == "{":
+            if source[pos] == "{":
                 depth += 1
-            elif char == "}":
+            elif source[pos] == "}":
                 depth -= 1
             pos += 1
         if depth == 0:
@@ -53,21 +44,28 @@ def parse_mapping(mapping_text: str) -> str:
     return match.group(1)
 
 
-def reachable_graph(functions: dict[str, str], root: str,
-                    imports: set[str]) -> tuple[set[str], set[str], set[str], dict[str, set[str]]]:
+def select_entry_node(functions: dict[str, str], mapped_symbol: str) -> str:
+    """Resolve mapping symbol to a generated body, allowing XenonRecomp's import wrapper name."""
+    candidates = (mapped_symbol, f"__imp__{mapped_symbol}")
+    for candidate in candidates:
+        if candidate in functions:
+            return candidate
+    nearby = sorted(name for name in functions if "xstart" in name.lower())
+    raise ValueError(
+        f"entry mapping symbol {mapped_symbol!r} has no generated body; "
+        f"tried {list(candidates)!r}; indexed xstart-like symbols: {nearby!r}"
+    )
+
+
+def reachable_graph(functions: dict[str, str], root: str, imports: set[str]):
     """Walk generated direct calls; stop at imports and retain call adjacency."""
     if root not in functions:
-        raise ValueError(f"mapped entry wrapper {root!r} has no generated definition")
-
-    adjacency = {
-        name: set(CALL.findall(body))
-        for name, body in functions.items()
-    }
+        raise ValueError(f"selected entry node {root!r} has no generated definition")
+    adjacency = {name: set(CALL.findall(body)) for name, body in functions.items()}
     visited: set[str] = set()
     reached_imports: set[str] = set()
     unresolved: set[str] = set()
     queue = deque([root])
-
     while queue:
         name = queue.popleft()
         if name in visited:
@@ -81,32 +79,45 @@ def reachable_graph(functions: dict[str, str], root: str,
                     queue.append(target)
             else:
                 unresolved.add(target)
-
     return visited, reached_imports, unresolved, adjacency
 
 
 def self_test() -> None:
-    sample = """
-    PPC_WEAK_FUNC(_xstart) { __imp___xstart(ctx, base); }
-    PPC_FUNC_IMPL(__imp___xstart) {
-      sub_100(ctx, base);
-      __imp__NtCreateFile(ctx, base);
-    }
-    PPC_WEAK_FUNC(sub_100) { __imp__sub_100(ctx, base); }
-    PPC_FUNC_IMPL(__imp__sub_100) {
-      __imp__KeWaitForSingleObject(ctx, base);
-      sub_200(ctx, base);
-    }
-    PPC_WEAK_FUNC(sub_200) { __imp__sub_200(ctx, base); }
-    PPC_FUNC_IMPL(__imp__sub_200) { }
-    """
-    functions = function_definitions(sample)
+    # Case A: mapping symbol has a normal generated wrapper.
+    mapping_wrapper = function_definitions(
+        "PPC_WEAK_FUNC(_xstart) { __imp___xstart(ctx, base); }"
+    )
+    generated = function_definitions("""
+      PPC_FUNC_IMPL(__imp___xstart) {
+        sub_100(ctx, base);
+        __imp__NtCreateFile(ctx, base);
+      }
+      PPC_WEAK_FUNC(sub_100) { __imp__sub_100(ctx, base); }
+      PPC_FUNC_IMPL(__imp__sub_100) {
+        __imp__KeWaitForSingleObject(ctx, base);
+        sub_200(ctx, base);
+      }
+      PPC_WEAK_FUNC(sub_200) { __imp__sub_200(ctx, base); }
+      PPC_FUNC_IMPL(__imp__sub_200) { }
+    """)
     imports = {"__imp__NtCreateFile", "__imp__KeWaitForSingleObject"}
-    visited, reached, unresolved, _ = reachable_graph(functions, "_xstart", imports)
-    assert reached == imports, reached
+    funcs = {**mapping_wrapper, **generated}
+    entry = select_entry_node(funcs, "_xstart")
+    visited, reached, unresolved, _ = reachable_graph(funcs, entry, imports)
+    assert reached == imports and not unresolved
     assert {"_xstart", "__imp___xstart", "sub_100", "__imp__sub_100",
             "sub_200", "__imp__sub_200"} <= visited
-    assert not unresolved, unresolved
+
+    # Case B: actual mapping symbol has no body, but its import-style wrapper does.
+    funcs = function_definitions("""
+      PPC_FUNC_IMPL(__imp___xstart) {
+        __imp__NtCreateFile(ctx, base);
+      }
+    """)
+    entry = select_entry_node(funcs, "_xstart")
+    visited, reached, unresolved, _ = reachable_graph(funcs, entry, imports)
+    assert entry == "__imp___xstart"
+    assert reached == {"__imp__NtCreateFile"} and not unresolved
     assert parse_mapping("{{ 0x82459E58, _xstart }},") == "_xstart"
     print("startup call-graph self-test passed")
 
@@ -126,13 +137,21 @@ def main() -> int:
     if not generated or not mapping.is_file() or not imports_file.is_file():
         raise SystemExit("generated MW3 PPC sources, mapping, or kernel import list is missing")
 
-    root = parse_mapping(mapping.read_text(errors="replace"))
-    if root != ENTRY_SYMBOL:
-        raise SystemExit(f"entry point maps to {root!r}, expected XenonRecomp's {ENTRY_SYMBOL!r}")
+    mapping_text = mapping.read_text(errors="replace")
+    mapped_symbol = parse_mapping(mapping_text)
+    if mapped_symbol != ENTRY_SYMBOL:
+        raise SystemExit(f"entry point maps to {mapped_symbol!r}, expected XenonRecomp's {ENTRY_SYMBOL!r}")
 
-    functions: dict[str, str] = {}
+    # Include the mapping file as well as all translation units. The mapping
+    # symbol may be an address-table label rather than a separately emitted body.
+    functions = function_definitions(mapping_text)
     for path in generated:
         functions.update(function_definitions(path.read_text(errors="replace")))
+
+    try:
+        entry_node = select_entry_node(functions, mapped_symbol)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
     imports = {
         line.strip() if line.strip().startswith("__imp__") else "__imp__" + line.strip()
@@ -141,38 +160,37 @@ def main() -> int:
     if not imports:
         raise SystemExit("MW3 kernel import list is empty")
 
-    visited, reached, unresolved, adjacency = reachable_graph(functions, root, imports)
-
-    # Direct imports are those called by the entry wrapper or its implementation.
-    direct = set(adjacency.get(root, set())) & reached
-    direct |= set(adjacency.get(f"__imp__{root}", set())) & reached
+    visited, reached, unresolved, adjacency = reachable_graph(functions, entry_node, imports)
+    direct = set(adjacency.get(entry_node, set())) & reached
+    # If the mapped symbol wrapper exists as a distinct node, include its calls too.
+    if mapped_symbol in functions and mapped_symbol != entry_node:
+        direct |= set(adjacency.get(mapped_symbol, set())) & reached
 
     runtime_implemented: set[str] = set()
     for path in sorted((ROOT / "runtime/kernel").glob("*.cpp")):
         if path.name == "stubs_generated.cpp":
             continue
         runtime_implemented.update(re.findall(
-            r"\bPPC_FUNC\s*\(\s*(__imp__[A-Za-z0-9_]+)\s*\)", 
+            r"\bPPC_FUNC\s*\(\s*(__imp__[A-Za-z0-9_]+)\s*\)",
             path.read_text(errors="replace")))
 
     runtime_imports = reached & runtime_implemented
     logging_stub_imports = reached - runtime_implemented
-    non_import_nodes = visited - reached
     generated_reachable = {
-        name for name in non_import_nodes
-        if name in functions and not name.startswith("__imp__")
+        name for name in visited if name in functions and not name.startswith("__imp__")
     }
 
     lines = [
         "MW3 STARTUP DIRECT-CALL REACHABILITY AUDIT",
         f"entry point: 0x{ENTRY_POINT:08X}",
-        f"entry mapping symbol: {root}",
+        f"entry mapping symbol: {mapped_symbol}",
+        f"selected generated entry node: {entry_node}",
         f"generated function bodies indexed: {len(functions)}",
         f"generated wrapper/implementation nodes reachable: {len(visited)}",
         f"reachable generated wrapper nodes: {len(generated_reachable)}",
         f"kernel/XAM imports in full image: {len(imports)}",
         f"kernel/XAM imports reachable from entry point: {len(reached)}",
-        f"reachable imports called directly by entry wrapper/implementation: {len(direct)}",
+        f"reachable imports called directly by selected entry node: {len(direct)}",
         f"reachable imports matching existing runtime PPC_FUNC definitions: {len(runtime_imports)}",
         f"reachable imports currently covered only by generated logging stubs: {len(logging_stub_imports)}",
         f"unresolved non-import direct-call targets: {len(unresolved)}",
@@ -202,7 +220,7 @@ def main() -> int:
     ]
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text("\n".join(lines) + "\n")
-    print("\n".join(lines[:13]))
+    print("\n".join(lines[:14]))
     print(f"Full startup call-graph report: {args.report}")
     return 0
 
