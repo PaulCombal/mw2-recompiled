@@ -173,14 +173,26 @@ def analyze_dpc_array_relationship(functions: dict[str, str]) -> list[str]:
         return []
     if not all(part in callback for part in callback_evidence):
         return []
+    if "PPC_STORE_U32(ctx.r10.u32 + r11.u32, ctx.r9.u32)" not in callback:
+        return []
+    if "ctx.r3.s64 = r11.s64 + 60;" not in callback:
+        return []
+    six_entry_loop = (
+        "ctx.r27.s64 = 2130706432;" in init
+        and "ctx.r27.s64 = ctx.r27.s64 + 128;" in init
+        and "ctx.r11.u64 = ctx.r11.u64 | 768;" in init
+    )
+    if not six_entry_loop:
+        return []
 
     lines = [
         "DPC ARRAY CORRELATION (MW3 FUNCTION-SPECIFIC STATIC PATTERN):",
         "- Initialization and insertion use the same object base and 0x6C-byte entry stride.",
+        "- The initializer loop covers six entries (0x7F000000 through 0x7F000280, stepping by 0x80).",
         "- Per-entry context begins at object_base + 0x2CC0 + index * 0x6C.",
         "- The initialized DPC object begins at object_base + 0x2CE0 + index * 0x6C (context + 0x20).",
         "- The insertion path selects the entry using the object's index field at offset 0x2CCC, then computes the same DPC offset.",
-        "- The callback reads/increments a counter at context + 0x54, writes a four-slot ring at context + 0x5C..0x68, and signals an event at context + 0x3C.",
+        "- The callback stores its first system argument into a four-slot ring at context + 0x5C..0x68, reads/increments the ring counter at context + 0x54, and signals an event at context + 0x3C.",
     ]
     if ("__imp__VdInitializeEngines" in startup
             and "__imp__VdSetGraphicsInterruptCallback" in startup
