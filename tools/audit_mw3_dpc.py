@@ -148,15 +148,26 @@ def main() -> int:
         functions.update(function_definitions(path.read_text(errors="replace")))
 
     rows = []
-    for name in ("sub_820A9670", "sub_820A95A0"):
-        if name not in functions:
-            raise SystemExit(f"expected DPC caller body not found: {name}")
-        found = inspect_function(name, functions[name])
-        expected = "__imp__KeInitializeDpc" if name == "sub_820A9670" else "__imp__KeInsertQueueDpc"
-        found = [row for row in found if row["target"] == expected]
-        if len(found) != 1:
-            raise SystemExit(f"{name}: expected one {expected} callsite, found {len(found)}")
-        rows.extend(found)
+    # Avoid splitting/tokenizing every generated function body. The import
+    # callsite regex is cheap; detailed provenance is needed only in the one
+    # or two functions that actually invoke a DPC import.
+    for name, body in functions.items():
+        if CALL.search(body):
+            rows.extend(inspect_function(name, body))
+
+    expected_targets = {
+        "__imp__KeInitializeDpc": 1,
+        "__imp__KeInsertQueueDpc": 1,
+    }
+    for target, expected_count in expected_targets.items():
+        found = [row for row in rows if row["target"] == target]
+        if len(found) != expected_count:
+            callers = sorted({str(row["function"]) for row in found})
+            raise SystemExit(
+                f"expected {expected_count} {target} callsite(s), found {len(found)} "
+                f"in callers: {callers or '(none)'}"
+            )
+    rows.sort(key=lambda row: (str(row["target"]), str(row["function"])))
 
     lines = [
         "MW3 SANITIZED DPC CALLSITE / ARGUMENT-PROVENANCE AUDIT",
