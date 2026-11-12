@@ -229,6 +229,41 @@ PPC_FUNC(__imp__RtlInitAnsiString)
 // produced. The title builds Live storage file names with the first.
 //
 // (unicodeOut, maxBytesOut, bytesOut, multiByte, bytesIn)
+// (UNICODE_STRING*, source). The source buffer remains owned by the
+// caller; this routine only records its byte length and pointer.
+PPC_FUNC(__imp__RtlInitUnicodeString)
+{
+    struct XUnicodeString { be16 length; be16 maximumLength; be32 pointer; };
+    auto* dest = GuestPtr<XUnicodeString>(ctx.r3.u32);
+    if (!dest) return;
+
+    const uint32_t source = ctx.r4.u32;
+    if (!source)
+    {
+        dest->length = 0;
+        dest->maximumLength = 0;
+        dest->pointer = 0;
+        return;
+    }
+
+    const auto* text = GuestPtr<const be16>(source);
+    if (!text)
+    {
+        dest->length = 0;
+        dest->maximumLength = 0;
+        dest->pointer = 0;
+        return;
+    }
+
+    // UNICODE_STRING lengths are byte counts and exclude the terminator.
+    // Length fields are USHORTs, so cap the scan before multiplication wraps.
+    uint32_t characters = 0;
+    while (characters < 0x7FFF && uint16_t(text[characters]) != 0) ++characters;
+    dest->length = uint16_t(characters * 2);
+    dest->maximumLength = uint16_t((characters + 1) * 2);
+    dest->pointer = source;
+}
+
 PPC_FUNC(__imp__RtlMultiByteToUnicodeN)
 {
     auto* out = GuestPtr<be16>(ctx.r3.u32);
