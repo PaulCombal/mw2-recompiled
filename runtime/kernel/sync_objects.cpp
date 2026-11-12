@@ -348,7 +348,13 @@ PPC_FUNC(__imp__NtReleaseSemaphore)
         return;
     }
 
-    const int32_t previousCount = semaphore->Release(releaseCount);
+    bool limitExceeded = false;
+    const int32_t previousCount = semaphore->Release(releaseCount, &limitExceeded);
+    if (limitExceeded)
+    {
+        ctx.r3.u64 = 0xC0000047u; // STATUS_SEMAPHORE_LIMIT_EXCEEDED
+        return;
+    }
     if (auto* previous = GuestPtr<be32>(ctx.r5.u32)) *previous = uint32_t(previousCount);
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }
