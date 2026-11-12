@@ -39,6 +39,7 @@ python3 tools/gen_kernel_stubs.py
 # Record unresolved archive symbols and host relocations without publishing
 # generated game code or the user's executable.
 python3 tools/audit_mw3_generated.py build-mw3/libppc_recomp.a build-mw3/mw3-runtime-audit.txt
+python3 tools/audit_mw3_startup.py --report build-mw3/mw3-startup-callgraph.txt
 
 echo "MW3 generated PPC library compiled: build-mw3/libppc_recomp.a"
 echo "MW3 runtime audit metadata: build-mw3/mw3-runtime-audit.txt"

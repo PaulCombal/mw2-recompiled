@@ -28,7 +28,9 @@ jobs:
         run: bash -n tools/build_mw3.sh tools/recomp_mw3.sh
 
       - name: Compile-check Python tooling
-        run: python -m compileall -q tools
+        run: |
+          python -m compileall -q tools
+          python tools/audit_mw3_startup.py --self-test
 
       - name: Test MW2-to-MW3 hook matcher
         run: python tools/port_hooks.py --selftest
@@ -119,6 +121,7 @@ jobs:
           name: mw3-runtime-audit-metadata
           path: |
             build-mw3/mw3-runtime-audit.txt
+            build-mw3/mw3-startup-callgraph.txt
             ppc_mw3/kernel_imports.txt
           if-no-files-found: error
           retention-days: 14
