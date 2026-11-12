@@ -10,7 +10,7 @@ The current static audit reports 258 kernel/XAM imports in the image, 188 reacha
 
 ## Implementation status
 
-`RtlImageXexHeaderField` is implemented on the review branch `mw3-rtl-xex-header` in `runtime/kernel/xex.cpp`, with a bounded XEX2 optional-header decoder in `runtime/kernel/xex_header.h` and a focused C++ test registered with CTest. The handler follows the Xbox/Xenia contract: inline values are returned directly, type-1 fields return the guest address of the value word, and structured fields return the guest header base plus the stored offset. Missing keys and malformed header/table bounds fail closed with zero. This implementation is pending review and has not yet been validated against a live MW3 boot.
+`RtlImageXexHeaderField` is implemented on the review branch `mw3-rtl-xex-header` in `runtime/kernel/xex.cpp`, with a bounded XEX2 optional-header decoder in `runtime/kernel/xex_header.h` and a focused C++ test registered with CTest. The handler follows the Xbox/Xenia contract: inline values are returned directly, type-1 fields return the guest address of the value word, and structured fields return the guest header base plus the stored offset. Missing keys and malformed header/table bounds fail closed with zero. The helper assumes `r3` is already the guest address of a mapped XEX2 header. The MW3 startup callsite's module-handle provisioning must still be traced before this import can be considered boot-ready. This implementation is pending review and has not been validated against a live MW3 boot.
 
 ## Prioritized implementation queue
 
