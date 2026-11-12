@@ -95,9 +95,10 @@ declarations such as `sub_XXXXXXXX` pointing to implementation bodies named
 call graph. The report separately classifies known PowerPC save/restore
 helper references from other unresolved call targets. For every reachable
 import that still has only a generated logging stub, it also records a
-shortest static direct-call path from the entry implementation. These paths
-help prioritize which missing services to investigate first; they are not
-proof that a branch is taken during a normal boot.
+shortest static direct-call path from the entry implementation, plus the
+number of reachable call sites and distinct generated callers. This helps
+separate widely referenced stubs from isolated ones and prioritize further
+inspection; it is not proof that a branch is taken during a normal boot.
 
 This is a static direct-call approximation, not a dynamic execution trace.
 Indirect calls, function pointers, callbacks, data imports, and runtime-selected
