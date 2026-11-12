@@ -1,132 +1,101 @@
-<p align="center">
-  <img src="docs/images/readme/hero.svg" width="100%" alt="Modern Warfare 2, recompiled">
-</p>
+# mw3recomp
 
-<p align="center">
-  <b>Call of Duty: Modern Warfare 3 (2011) for the Xbox 360, running natively on PS4.</b><br>
-  Not an emulator: the game's executables are recompiled ahead of time.<br>
-  No game files are included. You need your own disc.
-</p>
+**Call of Duty: Modern Warfare 3 (2011), Xbox 360 → PS4, by static recompilation.**
 
-<p align="center">
-  <a href="../../releases/latest"><img src="docs/images/readme/download.svg" alt="Download the latest release"></a>
-</p>
+The game's PowerPC executable is converted ahead of time to C++ with [XenonRecomp](https://github.com/hedge-dev/XenonRecomp), then linked against a host runtime that stands in for the Xbox 360's kernel, GPU and audio hardware. It is not an emulator. No game files are included: you need your own disc.
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/images/readme/multiplayer-menu.jpg" alt="The multiplayer menu"></td>
-    <td width="50%"><img src="docs/images/readme/split-screen.jpg" alt="Four players in split screen on Afghan"></td>
-  </tr>
-</table>
+> **Status: early bring-up. Nothing here runs MW3 yet, on PC or on PS4.**
+> The runtime in this tree is inherited from a working Modern Warfare 2 port. The MW3 steps are written down, but none has been run against an MW3 executable. See [Status](#status).
 
-<a id="features" href="#features"><img src="docs/images/readme/h-features.svg" alt="Features" height="56"></a>
+## Contents
 
-<img src="docs/images/readme/features.svg" width="100%" alt="60 fps or more; up to 4K, 16:9, 16:10 or 4:3; 1 to 4 players in split screen; Steam invites; LAN system link; PC custom maps (beta)">
+- [Plan](#plan)
+- [Status](#status)
+- [Why PS4 is hard](#why-ps4-is-hard)
+- [Repository layout](#repository-layout)
+- [Building (MW2 today)](#building-mw2-today)
+- [Contributing](#contributing)
+- [Credits](#credits)
+- [License](#license)
 
-- **Campaign and multiplayer**, with split screen for up to four controllers.
-- **Online with friends**: private matches and system link, through Steam invites or on your local network.
-- **Sharper than the console**: any window size or fullscreen; drawn at 720p, 1080p, 1440p or 4K, in 16:9, 16:10 or 4:3 (down to 640x480 for a CRT TV); antialiasing up to 8x; 16x texture filtering; sharper shadows; wider field of view.
-- **Your profiles**: set your rank and prestige, unlock everything, open any mission.
-- **Custom maps (beta)**: maps made for the PC game, converted by the launcher.
-- **Xbox 360-style controllers**, with rumble.
+## Plan
 
-Not supported: ranked playlists, matchmaking without a [server](#online), and keeping a match going when its host crashes or loses the connection.
+The work goes in this order, and each stage has to pass its check before the next begins.
 
-<a id="requirements" href="#requirements"><img src="docs/images/readme/h-requirements.svg" alt="Requirements" height="56"></a>
+1. **Desktop first.** Recompile MW3's campaign, boot it on Linux with the existing Vulkan runtime, and get the first mission to play at a stable frame rate.
+2. **Measure.** Record the per-frame CPU cost on the desktop build. That number decides whether a PS4 build is worth starting.
+3. **PS4 port.** Follow the approach of [gta4-ps4](https://github.com/plastikman/gta4-ps4): an OpenOrbis build with Mesa's RADV for Vulkan, plus audio and memory layers for the console, on a jailbroken PS4.
 
-| You need | |
+Scope for now is **the campaign, offline**. Multiplayer needs online services, and Special Ops comes after the campaign boots.
+
+## Status
+
+| Stage | State |
 |---|---|
-| **Game** | an ISO of the Xbox 360 disc, version 1.0.557 (USA/Europe). The launcher checks it and downloads title update 6 itself. |
-| **System** | Linux or Windows, 64-bit, with a processor that has SSE4.2 (Intel since 2008, AMD since 2011) |
-| **Graphics** | Vulkan 1.2 |
-| **Disk** | 8 GB |
-| **Controller** | required to play; the keyboard covers the menus |
+| Fork of [mw2-recompiled](https://github.com/PaulCombal/mw2-recompiled) (runtime, tools, launcher) | Done. MW2 builds and runs on PC upstream |
+| Recompiler config for MW3 | Template only: [`config/MW3.toml.in`](config/MW3.toml.in), every address still `<FILL>` |
+| Finding MW2's hooks in MW3's executable | Tooling exists (`tools/port_hooks.py`); not run |
+| Recompiling MW3 | Not started |
+| Booting MW3 on the desktop | Not started |
+| PS4 build | Not started |
 
-<a id="install" href="#install"><img src="docs/images/readme/h-install.svg" alt="Install" height="56"></a>
+Open questions, such as which executable is the baseline (the disc's or the title-updated one) and whether MW3 needs the same fastfile-signing handling as MW2, are listed at the end of [docs/MW3-BRINGUP.md](docs/MW3-BRINGUP.md).
 
-1. **Download** it for your system from the [releases](../../releases/latest), and extract it anywhere.
-2. **Install**: start `mw2-launcher`, choose INSTALL GAME and pick your ISO. The game is copied into `game/` and updated to title update 6.
-3. **Play**: PLAY CAMPAIGN or PLAY MULTIPLAYER. (`mw2-sp` and `mw2-mp` start the game directly.)
+## Why PS4 is hard
 
-<a id="launcher" href="#launcher"><img src="docs/images/readme/h-launcher.svg" alt="The launcher" height="56"></a>
+Two problems to settle before anything else, and neither is known to work on the console:
 
-| Screen | |
+- **Address space.** The runtime reserves 4 GiB of address space and maps the 512 MB of guest physical memory at two windows ([docs/runtime.md](docs/runtime.md#guest-address-space)).
+- **GPU write-watch.** It is built on page-protection faults.
+
+CPU speed is the other risk. gta4-ps4 reports GTA IV at about 20-25 FPS on a PS4 Pro, limited by the console's Jaguar cores, while MW3 targets 60 FPS on the Xbox 360. Hence the measuring stage above.
+
+## Repository layout
+
+| Path | What it is |
 |---|---|
-| **PROFILES** | rename yourself or switch profile; set the multiplayer rank and prestige; unlock everything; open the campaign's and Special Ops' missions |
-| **GRAPHICS** | fullscreen, aspect ratio, resolution, stretching, antialiasing, texture filtering, shadows, frame rate limit and field of view (below) |
-| **NETWORK** | how the multiplayer reaches other players: NONE (this PC only), LAN, SERVER or STEAM ([below](#online)) |
-| **MAPS** *(beta)* | ADD MAP converts a map made for the PC game (IW4x). It then shows in a private match under BONUS MAPS. PC GAME points at your copy of the PC game, which such maps borrow pictures and sounds from; it is found on Steam by itself. Some maps don't convert yet, and some that do don't play. |
-| **CHECK FOR UPDATES** | installs a newer release over this one |
-| **REPORT A BUG** | runs the game once with its log kept, writes a report and opens a new issue with your system filled in |
+| `runtime/` | The host runtime: guest memory, threads, kernel and XAM stubs, GPU through Vulkan, audio |
+| `launcher/` | Installer and settings UI, inherited from the MW2 port |
+| `tools/` | Python and C++ helpers: XEX inspection and dumping, hook porting, shader and texture extraction, STFS unpacking |
+| `config/` | Recompiler configs. `MW3.toml.in` is the MW3 template; the rest are MW2's |
+| `patches/` | Local changes to XenonRecomp |
+| `relay/` | MW2 multiplayer relay server (not used for MW3 yet) |
+| `docs/` | Design notes. Start with [MW3-BRINGUP.md](docs/MW3-BRINGUP.md) |
+| `pgo/` | Recorded compiler profiles for the MW2 builds |
 
-| Graphics | As on the console | Also |
-|---|---|---|
-| FULLSCREEN | | `F8` in the game |
-| ASPECT RATIO | 16:9 | 16:10, 4:3 |
-| RESOLUTION | 720p | 1080p, 1440p, 4K, or their 16:10 sizes (faster graphics cards); 640x480 to 2880x2160 in 4:3 |
-| STRETCH | off, black bars on a screen of another shape | on, the picture fills it (for a CRT TV) |
-| ANTIALIASING | 2x | 4x, 8x, off |
-| ANISOTROPY | 1x to 4x | 2x to 16x at least (sharper ground and walls at a slant) |
-| SHADOWS | console | 2x, 3x, 4x (smoother shadow edges; faster graphics cards) |
-| FPS LIMIT | 60 | higher, or none |
-| FOV | 65 | up to 120 |
+## Building (MW2 today)
 
-<a id="keyboard" href="#keyboard"><img src="docs/images/readme/h-keyboard.svg" alt="Keyboard" height="56"></a>
+`./build.sh` runs the full pipeline for **Modern Warfare 2**: it fetches and patches XenonRecomp, extracts the executables and game data from your ISO, recompiles, and builds the runtime and launcher. There is no MW3 title in the build script yet; adding one is step 3 of the bring-up guide.
 
-| Key | Does |
-|---|---|
-| arrows, `Enter`, `Esc` | d-pad, Start, Back |
-| `Z` `X` `C` `V` | A B X Y |
-| `Q` `E` | bumpers |
-| `F8` | fullscreen |
-| `F6` | invite friends |
-| `Home` | the guide (the controller's Guide button): what you are playing, friends, quit |
+You need `cmake`, `ninja-build`, `clang-18`, `lld-18`, `python3`, `git`, the Vulkan headers and loader, and your own legally obtained disc image. The full list of requirements, variables and layout is in [docs/building.md](docs/building.md).
 
-<a id="online" href="#online"><img src="docs/images/readme/h-online.svg" alt="Online" height="56"></a>
+For the MW3 work, follow [docs/MW3-BRINGUP.md](docs/MW3-BRINGUP.md):
 
-Everyone runs `mw2-mp` from the same release, with the same NETWORK chosen in the launcher.
+1. Put your disc's `default.xex` and game files under `mw3/` (git-ignored; never commit anything from the disc).
+2. Dump the executable to a flat image with `tools/xexdump.py`.
+3. Find MW2's hooks in MW3 with `tools/port_hooks.py`.
+4. Fill in `config/MW3.toml`, recompile, then try to boot.
 
-**Steam.** With Steam running, the game shows as *Spacewar*. SYSTEM LINK lists the games every Steam player hosts, worldwide, and anyone can join yours. For a game among friends, host PLAY ONLINE → PRIVATE MATCH and choose *Invite friends* (or press `F6`): it lists your Steam friends who are playing. Your friend accepts in Steam's chat while their game is running. Other players see your Steam name. Without Steam running, it plays as LAN.
+## Contributing
 
-**Server.** Everyone on the same server sees each other's games in SYSTEM LINK, can join each other's private matches, and finds games together with FIND GAME, from anywhere. Whoever hosts a match plays in it. Enter the server's address and password under NETWORK; nobody but the server's owner needs to open a port. To run one, see [docs/relay.md](docs/relay.md).
+Help is most useful on the bring-up steps above, and on the PS4 memory and GPU questions. Docs worth reading first:
 
-**LAN.** SYSTEM LINK finds games on the network by itself. In a private match, the lobby's *Invite friends* invites everyone on the network; start the others with `MW2_LAN_ACCEPT=1`. Two copies of `mw2-mp` on one PC can play a system link match, each with the controller that chose SYSTEM LINK in it.
+- [docs/MW3-BRINGUP.md](docs/MW3-BRINGUP.md): the step-by-step plan, with a check after each step
+- [docs/runtime.md](docs/runtime.md): how the runtime works
+- [docs/d3d9-seam.md](docs/d3d9-seam.md): the D3D9 ring buffer and flip handshake, a likely early failure point
+- [docs/switches.md](docs/switches.md), [docs/rendering.md](docs/rendering.md), [docs/audio.md](docs/audio.md): subsystem notes
 
-Everyone must have the same release: the launcher updates it. Another release's games don't show in SYSTEM LINK, and joining one says *Server is a different version*.
+Crash, glitch and performance reports for the MW2 build go through the launcher's REPORT A BUG button, as described in the issue template.
 
-<a id="safety" href="#safety"><img src="docs/images/readme/h-safety.svg" alt="Playing online safely" height="56"></a>
+## Credits
 
-The known security bugs in the game's 2009 network code are fixed ([docs/security.md](docs/security.md)). It is still old code: play online only with people you trust.
+- [PaulCombal/mw2-recompiled](https://github.com/PaulCombal/mw2-recompiled): the Modern Warfare 2 recompilation this project is forked from
+- [hedge-dev/XenonRecomp](https://github.com/hedge-dev/XenonRecomp): the PowerPC-to-C++ recompiler
+- [OZORDI/LibertyRecomp](https://github.com/OZORDI/LibertyRecomp) and [plastikman/gta4-ps4](https://github.com/plastikman/gta4-ps4): the GTA IV recompilation and its PS4 port, which this project's PS4 plan follows
+- [Xenia](https://github.com/xenia-project/xenia): the XMA decoder branch of FFmpeg used for audio
 
-- **Steam**: anyone on Steam can join a SYSTEM LINK game you host, and can reach your game while you host one. While you look for games in SYSTEM LINK, any game listed there can answer. Otherwise the game ignores traffic from anyone not in your lobby, and a private match is always among friends.
-- **Server**: anyone on the server can join your games. The server sees all the traffic; the other players don't see your address.
-- **LAN**: anyone on the same network can reach the game.
+## License
 
-<a id="settings" href="#settings"><img src="docs/images/readme/h-settings.svg" alt="Settings" height="56"></a>
+[GPL-3.0-only](LICENSE). It covers this project's own code: the runtime, tools, patches and build files. It grants nothing for the game: Activision's code and data, and the C++ generated from the game's executables, are not part of this repository and not under this license.
 
-What the launcher sets is kept in a file named `.env` beside the executables, one setting per line. Environment variables work too.
-
-| Setting | |
-|---|---|
-| `MW2_FULLSCREEN=1` | FULLSCREEN |
-| `MW2_RENDER=<w>x<h>`, `MW2_SCALE=<2 or 3>` | ASPECT RATIO and RESOLUTION |
-| `MW2_STRETCH=1` | STRETCH |
-| `MW2_MSAA=<n>`, `MW2_NO_MSAA=1` | ANTIALIASING |
-| `MW2_ANISOTROPY=<2 to 16>` | ANISOTROPY |
-| `MW2_SHADOW_SCALE=<2 to 4>` | SHADOWS |
-| `MW2_FPS_LIMIT=<n>` | FPS LIMIT; 0 is no limit |
-| `MW2_FOV=<65 to 120>` | FOV |
-| `MW2_NO_AUDIO=1` | no sound |
-| `MW2_LOG_FILE=mw2.log` | keeps the log, to attach to a bug report |
-
-Saves are in `saves/` beside the executables.
-
-<a id="developers" href="#developers"><img src="docs/images/readme/h-developers.svg" alt="Developers" height="56"></a>
-
-Building, the source layout and how the runtime works: [docs/building.md](docs/building.md), [docs/runtime.md](docs/runtime.md), [docs/switches.md](docs/switches.md) and the rest of [docs/](docs/).
-
-<a id="license" href="#license"><img src="docs/images/readme/h-license.svg" alt="License" height="56"></a>
-
-[GPL-3.0-only](LICENSE) (`SPDX-License-Identifier: GPL-3.0-only`). It covers this project's own code: the runtime, tools, patches and build files. It grants nothing for the game: Activision's code and data, and the C++ generated from the game's executables, are not part of this repository and not under this license.
-
-No game code or data is included; the builds only run with files from your own disc. Not affiliated with Activision, Infinity Ward, Microsoft or Valve.
+No game code or data is included; builds only run with files from your own disc. Not affiliated with Activision, Infinity Ward, Sledgehammer Games, Microsoft, Sony or Valve.
