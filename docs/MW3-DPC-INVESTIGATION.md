@@ -14,17 +14,30 @@ Shortest static paths from the XEX entry point (0x82459E58):
 - Initialize: `__imp___xstart -> sub_8232E988 -> sub_8229DF30 -> sub_8229DA48 -> sub_823D7470 -> sub_823D71A0 -> sub_82090510 -> sub_820A6788 -> sub_820A9670 -> KeInitializeDpc`
 - Insert: `__imp___xstart -> sub_8232E988 -> sub_8229E3F8 -> sub_823D7D70 -> sub_8209CDA0 -> sub_8209C898 -> sub_8209C588 -> sub_820A95A0 -> KeInsertQueueDpc`
 
-This establishes startup reachability and one direct static callsite apiece. It does not establish runtime execution order, the guest addresses passed as arguments, the DPC's callback target, or what work the callback performs. The two callers are nearby in the MW3 image, but proximity alone does not prove they belong to the same subsystem.
+This establishes startup reachability and one direct static callsite apiece. The callback target is now resolved below. The two imports are in different functions, but further object-offset analysis establishes a strong relationship between their DPC records.
 
-## Newly recovered callsite and callback evidence
+## Recovered callback and DPC-array relationship
 
-The generated-code CI artifact for the validated build was inspected locally. The proprietary generated PPC source was not copied into the repository or included in the report. The following findings are now reproducible through the sanitized DPC audit:
+The generated-code CI artifacts for the validated private MW3 XEX were inspected locally. Proprietary generated PPC statements and XEX bytes are not committed or emitted in the report. The sanitized audit now verifies the key address/stride patterns.
 
-- At the `KeInitializeDpc` callsite, r3 is a stack-local DPC-object address (`r31 - 0x24`), r4 resolves by constant folding to guest address `0x820A9568`, and r5 is another stack-local pointer (`r31 - 0x44`).
-- The XEX function map resolves `0x820A9568` to `sub_820A9568`. Its generated body directly calls `KeSetEvent`. Static memory-access analysis shows a U32 value being stored through an index derived from a field at context offset `0x54`, that field being incremented, and the event at context offset `0x3C` being signalled. This is consistent with a completion/counter notification callback, but the complete owning structure and higher-level subsystem are not yet identified.
-- At the separate `KeInsertQueueDpc` callsite, r3 is computed as `base + index * 0x6C + 0x2CE0` within another structure, r4 is a computed guest address, and r5 is zero. The callsite is in a different generated function. We have not established that this is the same DPC object initialized above, nor that the two callsites participate in one operation.
+### Callback
 
-The first DPC object is visibly stack-local at the initialization call. That raises a lifetime question which must be resolved by tracing the containing function and any dispatch timing; it is not safe to assume that the object remains valid after the initializer returns. The callback's `KeSetEvent` behavior is useful evidence, but does not by itself establish whether this is audio, graphics, I/O completion, or another synchronization path.
+- `KeInitializeDpc` receives callback guest address `0x820A9568`, mapped to `sub_820A9568`, and a per-entry deferred-context pointer.
+- The callback treats r4 as its deferred context and r5 as a completion value. It reads a counter at context offset `0x54`, writes the value into one of four 32-bit ring slots at offsets `0x5C` through `0x68`, increments the counter, and signals a `KeSetEvent` event at context offset `0x3C`.
+- This is a completion/counter notification callback, not an arbitrary worker routine.
+
+### Matching initialized and queued DPC records
+
+The initialization and insertion paths resolve to the same parent object and same entry stride:
+
+- `sub_820A6788` passes its object pointer to `sub_820A9670`. The initializer sets up six per-entry records, stepping by `0x6C` bytes.
+- For entry `i`, its deferred context is `object_base + 0x2CC0 + i * 0x6C`, and its DPC object is `object_base + 0x2CE0 + i * 0x6C` (the DPC begins `0x20` bytes into that record).
+- `sub_8209C588` passes the same parent object pointer to `sub_820A95A0`. The insertion function selects the entry from the index field at object offset `0x2CCC`, multiplies the index by `0x6C`, and computes the DPC address at object offset `0x2CE0`. This matches the initializer's DPC array formula.
+- The initialization parent also calls `VdInitializeEngines` and `VdSetGraphicsInterruptCallback`. The insertion caller takes the object's spin lock before its conditional queue path.
+
+**Interpretation:** the matching base, index, offset, and stride, together with video-engine initialization and graphics-interrupt callback registration, are strong evidence that these DPCs implement a graphics-interrupt/completion notification path. The callback's event and four-slot completion ring are consistent with that role. Exact GPU fence semantics, runtime ordering, and Xbox DPC scheduler behavior remain unproven.
+
+The DPC object is therefore not shown to be stack-local: its address is derived from the persistent parent object and indexed record array. The earlier stack-local interpretation was incorrect; it confused saved register provenance with the actual guest object base.
 
 ## API contract supported by reference material
 
@@ -66,13 +79,13 @@ The existing timer thread is not a DPC scheduler. Timer-to-DPC delivery would ne
 
 ## Decision
 
-Do not implement these imports yet. The API-level contract is clear enough to define tests, but the Xbox-specific object layout and MW3's actual callback use are not yet proven. A guessed structure size or a synchronous callback shortcut risks memory corruption, wrong callback arguments, or startup deadlock.
+Do not implement these imports yet. The MW3 object relationship and callback role are now substantially better understood, but the Xbox-specific KDPC layout and dispatch contract are still not proven. A guessed structure size or synchronous callback shortcut risks memory corruption, wrong callback arguments, or startup deadlock.
 
 ## Required evidence before implementation
 
 1. Obtain authoritative Xbox 360 KDPC layout evidence (XDK headers, symbols, validated emulator implementation, or direct guest access patterns); reconcile the 0x18 versus 0x1C discrepancy in the tentative Xenia representation.
-2. Inspect the generated MW3 caller bodies at `sub_820A9670` and `sub_820A95A0` in CI without publishing generated proprietary source. Emit a sanitized report of the values/provenance assigned to r3-r5 at each import call and any subsequent accesses to the DPC object.
-3. Resolve the callback address and inspect its direct/indirect call graph. Determine whether it signals an event, schedules work, touches graphics/audio state, or depends on a particular thread/IRQL.
+2. Verify the six-entry record array, per-entry context/DPC offsets, and ring/event behavior against independent XEX disassembly or symbols where available; confirm whether all six entries are active on target hardware.
+3. Trace the graphics interrupt producer and consumer, including how the completion value passed as system argument 1 is generated and interpreted, and determine the required thread/IRQL/dispatch timing.
 4. Design a real queued-dispatch mechanism with duplicate suppression, argument capture, callback lifetime, guest stack/KPCR/TLS, synchronization, shutdown behavior, and a defined dispatch boundary.
 5. Add synthetic tests for initialization, invalid callback handling, queue success, duplicate insertion, argument delivery, requeue during callback, and safe callback failure. Only then wire the handlers and run CI.
 
