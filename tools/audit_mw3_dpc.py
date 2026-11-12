@@ -148,8 +148,12 @@ def main() -> int:
         functions.update(function_definitions(path.read_text(errors="replace")))
 
     rows = []
+    # Avoid splitting/tokenizing every generated function body. The import
+    # callsite regex is cheap; detailed provenance is needed only in the one
+    # or two functions that actually invoke a DPC import.
     for name, body in functions.items():
-        rows.extend(inspect_function(name, body))
+        if CALL.search(body):
+            rows.extend(inspect_function(name, body))
 
     expected_targets = {
         "__imp__KeInitializeDpc": 1,
