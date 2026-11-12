@@ -30,6 +30,9 @@ jobs:
       - name: Compile-check Python tooling
         run: python -m compileall -q tools
 
+      - name: Test MW2-to-MW3 hook matcher
+        run: python tools/port_hooks.py --selftest
+
       - name: Validate MW3 recompiler configuration and title routing
         run: |
           python - <<'PY'
@@ -74,3 +77,38 @@ jobs:
           echo "$output"
           grep -F "MW3 runtime integration is incomplete" <<< "$output"
 
+
+  generated-code-build:
+    # Configure this repository variable and secret to enable a real MW3 XEX build.
+    if: ${{ vars.MW3_ASSET_REPO != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check out private MW3 executable
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ vars.MW3_ASSET_REPO }}
+          token: ${{ secrets.MW3_ASSET_REPO_TOKEN }}
+          path: private
+
+      - name: Verify and stage the exact supported executable
+        run: |
+          set -euo pipefail
+          test -f private/default.xex || { echo "Private asset repository must contain default.xex at its root"; exit 1; }
+          actual=$(sha256sum private/default.xex | cut -d' ' -f1)
+          expected=d90bc8d93b7b8f6001ead8330271196a6ef7a5c2e4a9e9b63118f47d58a05912
+          echo "MW3 XEX SHA-256: $actual"
+          test "$actual" = "$expected" || { echo "Unexpected MW3 executable; refusing to build against an unverified image"; exit 1; }
+          mkdir -p mw3/tu0
+          cp private/default.xex mw3/tu0/default.xex
+          rm -rf private
+
+      - name: Install compiler and build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 lld-18 ninja-build python3 cmake git
+
+      - name: Recompile MW3 and compile generated PPC
+        run: bash tools/build_mw3.sh
