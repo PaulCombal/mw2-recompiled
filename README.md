@@ -25,7 +25,7 @@ No game executable or game data is included. You must supply your own legally ob
 | Startup call-graph audit | **Pass:** entry-point mapping, weak aliases and reachable direct-call paths are analyzed |
 | DPC investigation | **Provisional implementation present:** queue bookkeeping and a guest-context worker; graphics-interrupt ordering and Xbox scheduler semantics remain unverified |
 | Diagnostic desktop executable | **Pass:** host runtime and generated PPC library link into a headless `mw3` executable; no game execution proven yet |
-| First runtime execution / boot | **Next:** controlled CI smoke test against the private XEX; main-menu boot not established |
+| First runtime execution / boot | **Pass, first stage:** guest entry executes, initializes kernel/thread/audio/GPU command paths, submits 26 draws, then requests `XamLoaderLaunchTitle("default.xex")`. The development runner intentionally stops at this handoff; the next executable has not yet been loaded. Main-menu boot is not established |
 | Playable desktop campaign | **Not started** |
 | PS4 build, package and runtime testing | **Not started** |
 
