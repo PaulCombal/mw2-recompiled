@@ -1,0 +1,76 @@
+# MW3 campaign (iw5sp_ship.exe) recompiler config, from config/MW3.toml.in.
+# Addresses come from tools/port_hooks.py against MW2 (title update 6). Bytes were
+# compared with MW2's: the save/restore helpers are identical; setjmp and longjmp
+# differ only in linker-filled immediates and branch targets.
+# Executable SHA-256: d90bc8d93b7b8f6001ead8330271196a6ef7a5c2e4a9e9b63118f47d58a05912
+
+[main]
+file_path = "../mw3/tu0/default.xex"
+out_directory_path = "../ppc_mw3"
+switch_table_file_path = "mw3_switch_tables.toml"
+
+skip_lr = false
+skip_msr = false
+ctr_as_local = true
+xer_as_local = true
+reserved_as_local = true
+cr_as_local = true
+non_argument_as_local = true
+non_volatile_as_local = true
+
+# The C runtime's register save/restore helpers. Same compiler as MW2's, so
+# port_hooks.py should find them by their instructions.
+restgprlr_14_address = 0x824BED50
+savegprlr_14_address = 0x824BED00
+restfpr_14_address   = 0x824BEDFC
+savefpr_14_address   = 0x824BEDB0
+restvmx_14_address   = 0x824C01D8
+savevmx_14_address   = 0x824BFF40
+restvmx_64_address   = 0x824C026C
+savevmx_64_address   = 0x824BFFD4
+
+# The C runtime's setjmp and longjmp (Com_Error leaves an error by longjmp).
+setjmp_address  = 0x824C0AF0
+longjmp_address = 0x824C1590
+
+# Leaf functions (no stack frame, hence absent from .pdata) that contain jump
+# tables. The analyser ends them early because a table dispatch looks like a
+# tail call. Extents derived by tools/fixbounds.py (MW2_TITLE=mw3) from bl
+# targets, padding runs and the tables' own case labels.
+functions = [
+{ address = 0x820B95B8, size = 0xA8 },
+    { address = 0x820D8B40, size = 0xA0 },
+    { address = 0x82134C38, size = 0x118 },
+    { address = 0x82134D78, size = 0x114 },
+    { address = 0x82134F18, size = 0x3B8 },
+    { address = 0x8224B350, size = 0x94 },
+    { address = 0x822D7F80, size = 0x88 },
+    { address = 0x822DC128, size = 0xD4 },
+    { address = 0x822E2BB0, size = 0xE0 },
+    { address = 0x822E48B0, size = 0x94 },
+    { address = 0x822F1518, size = 0xD0 },
+    { address = 0x822F19E8, size = 0x64 },
+    { address = 0x822F1A50, size = 0x64 },
+    { address = 0x822F1AB8, size = 0x74 },
+    { address = 0x822F1B38, size = 0x60 },
+    { address = 0x822F1B98, size = 0x78 },
+    { address = 0x822FB5F0, size = 0x11C },
+    { address = 0x822FDAA8, size = 0x20C },
+    { address = 0x822FDCB8, size = 0x1E8 },
+    { address = 0x82300ED8, size = 0x1B0 },
+    { address = 0x823A2028, size = 0x80 },
+    { address = 0x823F8E08, size = 0x14C },
+    { address = 0x82451140, size = 0x98 },
+    { address = 0x824A84C8, size = 0xC04 },
+    { address = 0x824D5850, size = 0x4D8 },
+    { address = 0x824E0140, size = 0x4E8 },
+
+    # The 8 bytes of exception-handler data (a pointer to 0x824C4B40 and one to
+    # the function's own record) ahead of three large functions. The analyser reads
+    # them as instructions, starts a function there and runs it on through the
+    # real one, so that function's jump-table cases land "outside" it. Giving them
+    # their own 8-byte extent leaves the real functions (from .pdata) whole.
+    { address = 0x824A84C0, size = 0x8 },
+    { address = 0x824D5848, size = 0x8 },
+    { address = 0x824E0138, size = 0x8 },
+]

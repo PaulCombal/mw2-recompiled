@@ -2,7 +2,8 @@
 """Which of the disc's two executables the tools work on.
 
 MW2_TITLE=sp (the default) is default.xex, the campaign and special ops;
-MW2_TITLE=mp is default_mp.xex, the multiplayer. Everything derived from one
+MW2_TITLE=mp is default_mp.xex, the multiplayer; MW2_TITLE=mw3 is Modern Warfare
+3's campaign. Everything derived from one
 of them -- the flat image, the recompiled C++, the switch tables, the build
 directory -- lives beside the other's under its own name, so both builds can
 exist at once.
@@ -28,6 +29,13 @@ TITLES = {
                syms="config/mw2mp_symbols.txt"),
 }
 
+# Modern Warfare 3's campaign (iw5sp_ship.exe), the disc's executable
+# (docs/MW3-BRINGUP.md). Added after the MW2 version renaming below: MW2_VERSION
+# does not apply to it.
+MW3 = dict(xex="mw3/tu0/default.xex", image="mw3/tu0/default.pe", ppc="ppc_mw3",
+           toml="config/MW3.toml", tables="config/mw3_switch_tables.toml", build="build-mw3",
+           syms="config/mw3_symbols.txt")
+
 VERSIONS = ("tu6", "tu0")
 VERSION = os.environ.get("MW2_VERSION", "tu6")
 if VERSION not in VERSIONS:
@@ -41,6 +49,8 @@ if VERSION != "tu6":
                          build=f"{t['build']}-{VERSION}",
                          syms=t["syms"].replace(".txt", f".{VERSION}.txt"))
               for name, t in TITLES.items()}
+
+TITLES["mw3"] = MW3
 
 NAME = os.environ.get("MW2_TITLE", "sp")
 if NAME not in TITLES:

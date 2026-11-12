@@ -70,6 +70,8 @@ quietly.
 1. Copy `config/MW3.toml.in` to `config/MW3.toml` and fill in the addresses.
 2. Teach `build.sh` and `tools/title.py` an `mw3` title (the MW2 `sp`/`mp` and
    `tu6`/`tu0` machinery is the pattern; MW3 has one executable to start with).
+   `tools/title.py` has it (`MW2_TITLE=mw3`); `build.sh` does not yet, and
+   `tools/recomp_mw3.sh` stands in for it.
 3. Run XenonAnalyse for the switch tables, then XenonRecomp, as `build.sh` does
    for MW2.
 
@@ -102,6 +104,37 @@ Audio, input, saves. Movies are not supported by the MW2 recompilation either
 Check: the first mission plays through at a stable frame rate. **This is the
 point to decide whether a PS4 build is worth starting**, from the measured
 per-frame cost, not from a guess.
+
+## Progress
+
+Steps 0 to 3 have been run once, on one executable. `tools/recomp_mw3.sh`
+repeats steps 1 and 3 from `mw3/tu0/default.xex` in about 15 seconds.
+
+- **Executable:** `iw5sp_ship.exe`, title id `0x415608CB`, XEX version `0x16`,
+  SHA-256 `d90bc8d93b7b8f6001ead8330271196a6ef7a5c2e4a9e9b63118f47d58a05912`.
+  Image base `0x82000000`, entry `0x82459E58`, `.text` at `0x82090000`
+  (`0x4566BC` bytes). Whether this is the disc's own build or an updated one is
+  still open (see [Title update](#title-update)).
+- **Step 2, hooks:** of MW2's 49 lookups, 23 were found, 26 unresolved. All 10
+  recompiler helpers (`savegprlr_14` ... `longjmp`) were found once each; their
+  bytes equal MW2's, except `setjmp` and `longjmp`, which differ only in
+  linker-filled immediates and branch targets. Of the engine hooks, 13 of 39 were
+  found (`Cbuf_AddText`, `Dvar_SetString`, `MSG_Read*`, `R_SetVidConfig`,
+  `R_VideoSizes`, the D3D `ArenaWait` and `InitPixelShader`, ...). The other 26,
+  among them `Com_Error`, `Com_Printf`, `D3D_Present`, `CG_ViewFov` and
+  `Dvar_RegisterInt`, need the string and xref search, and the 8 `T_DATA_*`
+  globals are by hand. These are step 4's work, not step 3's.
+- **Step 3, recompile:** XenonAnalyse finds 128 jump tables. The first run gave
+  377 "switch case outside function" lines at 27 sites; `tools/fixbounds.py`
+  (`MW2_TITLE=mw3`) derived 26 leaf-function extents for `config/MW3.toml`, and the
+  last three sites came from 8 bytes of exception-handler data ahead of three
+  large functions, which the analyser read as code and made a function of. Each
+  has its own 8-byte entry now. Result: 0 errors and 142 source files plus
+  `ppc_func_mapping.cpp`, all of which `clang++-18 -fsyntax-only` accepts with the
+  runtime's flags. They have not been compiled to objects or linked: that needs
+  an `mw3` block in `runtime/title.h` and in `CMakeLists.txt` (step 4).
+- **Gotcha:** XenonRecomp crashes with a null `FILE*` and no message when its
+  output directory (`ppc_mw3/`) does not exist.
 
 ## Title update
 

@@ -33,9 +33,9 @@ Scope for now is **the campaign, offline**. Multiplayer needs online services, a
 | Stage | State |
 |---|---|
 | Fork of [mw2-recompiled](https://github.com/PaulCombal/mw2-recompiled) (runtime, tools, launcher) | Done. MW2 builds and runs on PC upstream |
-| Recompiler config for MW3 | Template only: [`config/MW3.toml.in`](config/MW3.toml.in), every address still `<FILL>` |
-| Finding MW2's hooks in MW3's executable | Tooling exists (`tools/port_hooks.py`); not run |
-| Recompiling MW3 | Not started |
+| Recompiler config for MW3 | Done for the disc's `iw5sp_ship.exe`: [`config/MW3.toml`](config/MW3.toml) |
+| Finding MW2's hooks in MW3's executable | Run. All 10 recompiler helpers found; 13 of 39 engine hooks found, 26 need hand work |
+| Recompiling MW3 | Done: `tools/recomp_mw3.sh` gives 142 C++ files with no switch-case errors, all passing a syntax check. Not linked or run yet |
 | Booting MW3 on the desktop | Not started |
 | PS4 build | Not started |
 
