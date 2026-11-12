@@ -16,6 +16,16 @@ Shortest static paths from the XEX entry point (0x82459E58):
 
 This establishes startup reachability and one direct static callsite apiece. It does not establish runtime execution order, the guest addresses passed as arguments, the DPC's callback target, or what work the callback performs. The two callers are nearby in the MW3 image, but proximity alone does not prove they belong to the same subsystem.
 
+## Newly recovered callsite and callback evidence
+
+The generated-code CI artifact for the validated build was inspected locally. The proprietary generated PPC source was not copied into the repository or included in the report. The following findings are now reproducible through the sanitized DPC audit:
+
+- At the `KeInitializeDpc` callsite, r3 is a stack-local DPC-object address (`r31 - 0x24`), r4 resolves by constant folding to guest address `0x820A9568`, and r5 is another stack-local pointer (`r31 - 0x44`).
+- The XEX function map resolves `0x820A9568` to `sub_820A9568`. Its generated body directly calls `KeSetEvent`. Static memory-access analysis shows a U32 value being stored through an index derived from a field at context offset `0x54`, that field being incremented, and the event at context offset `0x3C` being signalled. This is consistent with a completion/counter notification callback, but the complete owning structure and higher-level subsystem are not yet identified.
+- At the separate `KeInsertQueueDpc` callsite, r3 is computed as `base + index * 0x6C + 0x2CE0` within another structure, r4 is a computed guest address, and r5 is zero. The callsite is in a different generated function. We have not established that this is the same DPC object initialized above, nor that the two callsites participate in one operation.
+
+The first DPC object is visibly stack-local at the initialization call. That raises a lifetime question which must be resolved by tracing the containing function and any dispatch timing; it is not safe to assume that the object remains valid after the initializer returns. The callback's `KeSetEvent` behavior is useful evidence, but does not by itself establish whether this is audio, graphics, I/O completion, or another synchronization path.
+
 ## API contract supported by reference material
 
 The conventional DPC contract is:
