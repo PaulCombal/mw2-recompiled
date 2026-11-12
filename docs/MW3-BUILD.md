@@ -21,9 +21,9 @@ compiles the generated PPC translation units into
 Equivalent CMake commands, after `ppc_mw3/` has been generated:
 
 ```sh
-cmake -S . -B build-mw3 -G Ninja \\
-  -DCMAKE_C_COMPILER=clang-18 \\
-  -DCMAKE_CXX_COMPILER=clang++-18 \\
+cmake -S . -B build-mw3 -G Ninja \
+  -DCMAKE_C_COMPILER=clang-18 \
+  -DCMAKE_CXX_COMPILER=clang++-18 \
   -DMW2_TITLE=mw3 -DMW3_RECOMP_ONLY=ON
 cmake --build build-mw3 --target mw3-recomp-check --parallel
 ```
@@ -56,10 +56,10 @@ is deleted from the runner workspace after staging and is never committed.
 
 ### Triggering the build while this PR is still open
 
-GitHub only exposes the manual **Run workflow** control after a workflow with
-`workflow_dispatch` is present on the repository's default branch. While this
-draft PR remains unmerged, a new commit to a path watched by the
-`pull_request` trigger (including this document) will rerun the PR workflow.
+GitHub's manual **Run workflow** control requires the workflow file to exist
+on the repository's default branch. While this draft PR remains unmerged, a
+new commit to a path watched by the `pull_request` trigger (including this
+document) will rerun the PR workflow.
 
 ## Generated runtime audit
 
@@ -69,8 +69,8 @@ then runs `tools/audit_mw3_generated.py`. The audit artifact contains symbol
 names and counts only; it does not contain the XEX or generated PPC source.
 
 The report checks whether the XEX entry point recorded for this supported
-image (`0x82459E58`) appears in `ppc_func_mapping.cpp`, compares the 258-style
-MW3 import inventory with the existing `runtime/kernel/*.cpp` macro
+image (`0x82459E58`) appears in `ppc_func_mapping.cpp`, compares the MW3
+import inventory with the existing `runtime/kernel/*.cpp` macro
 implementations, lists imports that would receive diagnostic logging stubs,
 and separates unresolved kernel-import wrappers from other host link symbols.
 It also records host-object relocation types. Those relocations describe the
@@ -83,14 +83,15 @@ kernel implementations. Review each missing import in the context of the
 MW3 boot path before implementing it. Do not replace the stubs with guessed
 return values or claim runtime compatibility from this report.
 
-
 ## Startup call-graph audit
 
 The CI build also runs `tools/audit_mw3_startup.py` after generating MW3 PPC
 sources and kernel import glue. It resolves the XEX entry-point mapping to
 XenonRecomp's `_xstart` symbol, indexes generated implementation/wrapper
-bodies, and follows direct generated calls of the form `function(ctx, base)`.
-It stops at kernel/XAM imports and reports the imports reachable from startup,
+bodies from both `ppc_recomp.*.cpp` and `ppc_func_mapping.cpp`, and follows
+direct generated calls of the form `function(ctx, base)`. The mapping file
+must be indexed because XenonRecomp emits the entry wrapper there. The audit
+stops at kernel/XAM imports and reports the imports reachable from startup,
 which of those are direct entry-point calls, and which still have only
 diagnostic logging stubs.
 
