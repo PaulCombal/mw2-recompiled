@@ -102,10 +102,14 @@ recompile-and-compile job is enabled only when the repository has:
 
 The private repository should contain the **extracted Xbox 360 MW3 campaign
 game-root contents**, with the supported `default.xex` at the repository root
-and the original relative directory structure preserved. Include the
-game-root fastfiles (including `code_post_gfx.ff` and
-`code_post_gfx.ffm` when present), other `.ff`/`.ffm` files, and any
-additional campaign `.xex` files supplied alongside the disc executable.
+and the original relative directory structure preserved. Add available
+game-root fastfiles such as `code_post_gfx.ff`, `code_post_gfx.ffm`,
+`code_post_gfx_mp.ff`, and other `.ff`/`.ffm` files. Include additional
+campaign `.xex` files only if they actually exist in your dump; none of the
+example filenames are mandatory. Do not create placeholder files or rename
+different files to imitate missing ones. Preserve the original names and
+subdirectories.
+
 Do not upload an ISO/GOD container, generated PPC sources, build outputs,
 saves, profiles, or unrelated multiplayer/DLC data for this campaign-only
 bring-up. Keep this repository private and use only game files you are
@@ -120,11 +124,12 @@ contents (excluding Git checkout metadata) into the ignored
 deleted from the runner workspace after staging; none of these game assets
 are committed or uploaded as workflow artifacts.
 
-The latest first-stage smoke run requested `D:\\code_post_gfx.ff` and
-`D:\\code_post_gfx.ffm`, and both were absent from the current private
-asset repository. Add those files at the game-root level if they exist in
-your extracted campaign data. The inventory step will report filenames and
-sizes only, not file contents.
+The first-stage smoke log previously requested `D:\\code_post_gfx.ff` and
+`D:\\code_post_gfx.ffm`. The user has since located and uploaded
+`code_post_gfx.ff` and `code_post_gfx_mp.ff`; the latter is a distinct
+filename and does not substitute for `code_post_gfx.ffm`. If the exact
+`.ffm` file is not present in the extracted campaign data, do not fabricate
+it. The inventory step reports filenames and sizes only, not file contents.
 
 ### Triggering the build while this PR is still open
 
