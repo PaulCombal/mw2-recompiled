@@ -145,8 +145,25 @@ if(MW3_RECOMP_ONLY)
     if(NOT MW2_TITLE STREQUAL "mw3")
         message(FATAL_ERROR "MW3_RECOMP_ONLY requires -DMW2_TITLE=mw3")
     endif()
+
+    # Compile the shared kernel implementation as object files against the
+    # generated MW3 headers. This catches C++ integration errors in import
+    # handlers without linking an executable or claiming MW2 semantics are
+    # compatible with MW3. MW3-specific hooks and title globals remain gated.
+    file(GLOB MW3_KERNEL_SOURCES CONFIGURE_DEPENDS
+         "${CMAKE_SOURCE_DIR}/runtime/kernel/*.cpp")
+    add_library(mw3-runtime-compile-check OBJECT ${MW3_KERNEL_SOURCES})
+    target_include_directories(mw3-runtime-compile-check PRIVATE
+        "${MW2_PPC_DIR}"
+        "${CMAKE_SOURCE_DIR}/runtime"
+        "${CMAKE_SOURCE_DIR}/XenonRecomp/thirdparty/simde")
+    target_compile_options(mw3-runtime-compile-check PRIVATE
+        -march=${MW2_X86_LEVEL} -fwrapv)
+    target_compile_definitions(mw3-runtime-compile-check PRIVATE
+        MW3_TITLE=1 MW2_DIAGNOSTICS=0)
+
     add_custom_target(mw3-recomp-check)
-    add_dependencies(mw3-recomp-check ppc_recomp)
+    add_dependencies(mw3-recomp-check ppc_recomp mw3-runtime-compile-check)
     return()
 endif()
 
