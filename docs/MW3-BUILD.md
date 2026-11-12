@@ -21,9 +21,9 @@ compiles the generated PPC translation units into
 Equivalent CMake commands, after `ppc_mw3/` has been generated:
 
 ```sh
-cmake -S . -B build-mw3 -G Ninja \
-  -DCMAKE_C_COMPILER=clang-18 \
-  -DCMAKE_CXX_COMPILER=clang++-18 \
+cmake -S . -B build-mw3 -G Ninja \\
+  -DCMAKE_C_COMPILER=clang-18 \\
+  -DCMAKE_CXX_COMPILER=clang++-18 \\
   -DMW2_TITLE=mw3 -DMW3_RECOMP_ONLY=ON
 cmake --build build-mw3 --target mw3-recomp-check --parallel
 ```
@@ -37,7 +37,6 @@ cmake --build build-mw3 --target mw3-recomp-check --parallel
   are added. Unknown hooks stay undefined rather than inheriting MW2 addresses.
 - The generated `ppc_mw3/` directory and extracted game executable are local
   inputs/artifacts and are not committed.
-
 
 ## Optional GitHub Actions build with a private executable
 
@@ -54,3 +53,10 @@ The workflow verifies that `default.xex` has SHA-256
 before copying it into the ignored working tree. A different executable is
 rejected rather than silently generating code for a different image. The XEX
 is deleted from the runner workspace after staging and is never committed.
+
+### Triggering the build while this PR is still open
+
+GitHub only exposes the manual **Run workflow** control after a workflow with
+`workflow_dispatch` is present on the repository's default branch. While this
+draft PR remains unmerged, a new commit to a path watched by the
+`pull_request` trigger (including this document) will rerun the PR workflow.
