@@ -13,15 +13,15 @@ ENTRY_POINT = 0x82459E58
 ENTRY_SYMBOL = "_xstart"
 
 DEFINITION = re.compile(
-    r"\\b(PPC_FUNC_IMPL|PPC_FUNC|PPC_WEAK_FUNC)\\s*\\(\\s*([A-Za-z_]\\w*)\\s*\\)\\s*\\{"
+    r"\b(PPC_FUNC_IMPL|PPC_FUNC|PPC_WEAK_FUNC)\s*\(\s*([A-Za-z_]\w*)\s*\)\s*\{"
 )
-CALL = re.compile(r"\\b([A-Za-z_]\\w*)\\s*\\(\\s*ctx\\s*,\\s*base\\s*\\)\\s*;")
+CALL = re.compile(r"\b([A-Za-z_]\w*)\s*\(\s*ctx\s*,\s*base\s*\)\s*;")
 # XenonRecomp emits guest-callable weak aliases as declarations, not bodies:
 # __attribute__((alias("__imp__sub_..."))) PPC_WEAK_FUNC(sub_...);
 ALIAS = re.compile(
-    r"""__attribute__\\s*\\(\\s*\\(\\s*alias\\s*\\(\\s*["']([^"']+)["']\\s*\\)\\s*\\)\\s*\\)\\s*PPC_WEAK_FUNC\\s*\\(\\s*([A-Za-z_]\\w*)\\s*\\)"""
+    r"""__attribute__\s*\(\s*\(\s*alias\s*\(\s*["']([^"']+)["']\s*\)\s*\)\s*\)\s*PPC_WEAK_FUNC\s*\(\s*([A-Za-z_]\w*)\s*\)"""
 )
-ABI_HELPER = re.compile(r"^__(?:save|rest)gprlr_\\d+$")
+ABI_HELPER = re.compile(r"^__(?:save|rest)gprlr_\d+$")
 
 
 def function_definitions(source: str) -> dict[str, str]:
@@ -54,7 +54,7 @@ def function_aliases(source: str) -> dict[str, str]:
 
 
 def parse_mapping(mapping_text: str) -> str:
-    pattern = rf"\\{{\\s*0x0*{ENTRY_POINT:08X}\\s*,\\s*([A-Za-z_]\\w*)\\s*\\}}"
+    pattern = rf"\{{\s*0x0*{ENTRY_POINT:08X}\s*,\s*([A-Za-z_]\w*)\s*\}}"
     match = re.search(pattern, mapping_text, re.IGNORECASE)
     if not match:
         raise ValueError(f"entry point 0x{ENTRY_POINT:08X} has no function mapping")
@@ -227,7 +227,7 @@ def main() -> int:
         if path.name == "stubs_generated.cpp":
             continue
         runtime_implemented.update(re.findall(
-            r"\\bPPC_FUNC\\s*\\(\\s*(__imp__[A-Za-z0-9_]+)\\s*\\)",
+            r"\bPPC_FUNC\s*\(\s*(__imp__[A-Za-z0-9_]+)\s*\)",
             path.read_text(errors="replace")))
 
     runtime_imports = reached & runtime_implemented
@@ -285,8 +285,8 @@ def main() -> int:
         "- The report contains metadata only; generated PPC source and the proprietary XEX are not included.",
     ]
     args.report.parent.mkdir(parents=True, exist_ok=True)
-    args.report.write_text("\\n".join(lines) + "\\n")
-    print("\\n".join(lines[:18]))
+    args.report.write_text("\n".join(lines) + "\n")
+    print("\n".join(lines[:18]))
     print(f"Full startup call-graph report: {args.report}")
     return 0
 
