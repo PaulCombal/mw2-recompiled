@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import re
-import sys
 from collections import deque
 from pathlib import Path
 
@@ -86,8 +85,10 @@ def reachable_graph(functions: dict[str, str], root: str,
 
 
 def self_test() -> None:
-    sample = """
-    PPC_WEAK_FUNC(_xstart) { __imp___xstart(ctx, base); }
+    # Model the actual layout: the entry wrapper lives in the mapping file,
+    # while the implementation and normal functions live in translation units.
+    mapping_source = "PPC_WEAK_FUNC(_xstart) { __imp___xstart(ctx, base); }"
+    generated_source = """
     PPC_FUNC_IMPL(__imp___xstart) {
       sub_100(ctx, base);
       __imp__NtCreateFile(ctx, base);
@@ -100,7 +101,8 @@ def self_test() -> None:
     PPC_WEAK_FUNC(sub_200) { __imp__sub_200(ctx, base); }
     PPC_FUNC_IMPL(__imp__sub_200) { }
     """
-    functions = function_definitions(sample)
+    functions = function_definitions(mapping_source)
+    functions.update(function_definitions(generated_source))
     imports = {"__imp__NtCreateFile", "__imp__KeWaitForSingleObject"}
     visited, reached, unresolved, _ = reachable_graph(functions, "_xstart", imports)
     assert reached == imports, reached
@@ -126,11 +128,14 @@ def main() -> int:
     if not generated or not mapping.is_file() or not imports_file.is_file():
         raise SystemExit("generated MW3 PPC sources, mapping, or kernel import list is missing")
 
-    root = parse_mapping(mapping.read_text(errors="replace"))
+    mapping_text = mapping.read_text(errors="replace")
+    root = parse_mapping(mapping_text)
     if root != ENTRY_SYMBOL:
         raise SystemExit(f"entry point maps to {root!r}, expected XenonRecomp's {ENTRY_SYMBOL!r}")
 
-    functions: dict[str, str] = {}
+    # The entry-point wrapper is emitted into ppc_func_mapping.cpp rather than
+    # one of ppc_recomp.*.cpp. Include it in the function index as well.
+    functions = function_definitions(mapping_text)
     for path in generated:
         functions.update(function_definitions(path.read_text(errors="replace")))
 
@@ -152,7 +157,7 @@ def main() -> int:
         if path.name == "stubs_generated.cpp":
             continue
         runtime_implemented.update(re.findall(
-            r"\bPPC_FUNC\s*\(\s*(__imp__[A-Za-z0-9_]+)\s*\)", 
+            r"\bPPC_FUNC\s*\(\s*(__imp__[A-Za-z0-9_]+)\s*\)",
             path.read_text(errors="replace")))
 
     runtime_imports = reached & runtime_implemented
