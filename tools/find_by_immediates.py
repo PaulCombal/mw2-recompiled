@@ -26,8 +26,15 @@ def functions(tree):
         if cur: out[cur] = "".join(body)
     return out
 
+def is_address_part(v):
+    # The high half of a data or code address (lis 0x82xx..0x84xx) and the low
+    # half added to it: these are placed differently in each build.
+    u = v & 0xFFFFFFFF
+    return (u >> 24) in (0x82, 0x83, 0x84) or (-0x7E000000 <= v <= -0x7C000000)
+
 def immediates(text, lo):
-    return {int(v) for v in re.findall(r"s64 = (-?\d+);", text) if abs(int(v)) >= lo}
+    return {int(v) for v in re.findall(r"s64 = (-?\d+);", text)
+            if abs(int(v)) >= lo and not is_address_part(int(v))}
 
 def accesses(text):
     return [m for m in re.findall(r"PPC_(?:LOAD|STORE)_U(?:8|16|32|64)\([a-z0-9.]+ \+ (\d+)", text)]
