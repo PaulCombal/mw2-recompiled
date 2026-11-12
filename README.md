@@ -73,7 +73,7 @@ See [MW3-BUILD.md](docs/MW3-BUILD.md) for the precise scope, CI asset setup and 
 The next engineering milestone is **runtime integration and a first desktop boot**:
 
 1. Resolve MW3-specific engine hooks and globals against the exact supported XEX; do not reuse MW2 addresses by assumption.
-2. Review reachable imports currently represented by diagnostic stubs and implement only those required by the MW3 startup path, with tests.
+2. Review reachable imports currently represented by diagnostic stubs and implement only those required by the MW3 startup path, with tests. See the [prioritized startup-import implementation plan](docs/MW3-STARTUP-IMPORT-PLAN.md).
 3. Establish safe guest callback/thread behavior and a verified DPC dispatch design before implementing the graphics-completion DPC imports.
 4. Add an MW3-specific title/runtime configuration and link the generated PPC code against the compatible runtime.
 5. Produce a desktop executable and debug startup until the main menu renders; then work toward loading and playing the first campaign mission.
@@ -85,6 +85,7 @@ The intended first PS4 milestone is an installable package that launches to the 
 
 - [MW3 bring-up notes](docs/MW3-BRINGUP.md) — executable identity, hook findings, recompiler work and open questions.
 - [MW3 generated-code build](docs/MW3-BUILD.md) — build commands, CI asset handling and audit interpretation.
+- [MW3 startup-import implementation plan](docs/MW3-STARTUP-IMPORT-PLAN.md) — prioritized import triage, evidence requirements and acceptance tests.
 - [MW3 DPC investigation](docs/MW3-DPC-INVESTIGATION.md) — callback, record-array and completion-worker analysis; implementation decision.
 - [Runtime architecture](docs/runtime.md)
 - [Build prerequisites and pipeline](docs/building.md)
