@@ -16,6 +16,35 @@ DEFINITION = re.compile(
     r"\b(PPC_FUNC_IMPL|PPC_FUNC|PPC_WEAK_FUNC)\s*\(\s*([A-Za-z_]\w*)\s*\)\s*\{"
 )
 CALL = re.compile(r"\b([A-Za-z_]\w*)\s*\(\s*ctx\s*,\s*base\s*\)\s*;")
+# XenonRecomp emits guest-callable weak aliases as declarations, not bodies:
+# __attribute__((alias("__imp__sub_..."))) PPC_WEAK_FUNC(sub_...);
+ALIAS = re.compile(
+    r"""__attribute__\s*\(\s*\(\s*alias\s*\(\s*["']([^"']+)["']\s*\)\s*\)\s*\)\s*PPC_WEAK_FUNC\s*\(\s*([A-Za-z_]\w*)\s*\)"""
+)
+ABI_HELPER = re.compile(r"^__(?:save|rest)gprlr_\d+$")
+
+
+def import_family(name: str) -> str:
+    symbol = name.removeprefix("__imp__")
+    families = (
+        ("NetDll_", "Networking"),
+        ("Nt", "NT kernel"),
+        ("Ke", "Kernel executive"),
+        ("Kf", "Kernel spinlocks"),
+        ("Rtl", "RTL runtime"),
+        ("Vd", "Video/display"),
+        ("Xam", "XAM services"),
+        ("XGet", "XDK system/AV"),
+        ("XMsg", "Messaging"),
+        ("Xe", "Cryptography/security"),
+        ("Stfs", "Storage"),
+    )
+    for prefix, family in families:
+        if symbol.startswith(prefix):
+            return family
+    if symbol.startswith("_") or symbol in {"sprintf", "vswprintf"}:
+        return "C runtime"
+    return "Other"
 
 
 def function_definitions(source: str) -> dict[str, str]:
@@ -36,6 +65,17 @@ def function_definitions(source: str) -> dict[str, str]:
     return found
 
 
+def function_aliases(source: str) -> dict[str, str]:
+    """Read XenonRecomp's weak guest-function aliases without treating them as bodies."""
+    aliases: dict[str, str] = {}
+    for target, name in ALIAS.findall(source):
+        previous = aliases.get(name)
+        if previous is not None and previous != target:
+            raise ValueError(f"conflicting generated aliases for {name}: {previous} and {target}")
+        aliases[name] = target
+    return aliases
+
+
 def parse_mapping(mapping_text: str) -> str:
     pattern = rf"\{{\s*0x0*{ENTRY_POINT:08X}\s*,\s*([A-Za-z_]\w*)\s*\}}"
     match = re.search(pattern, mapping_text, re.IGNORECASE)
@@ -44,82 +84,134 @@ def parse_mapping(mapping_text: str) -> str:
     return match.group(1)
 
 
-def select_entry_node(functions: dict[str, str], mapped_symbol: str) -> str:
-    """Resolve mapping symbol to a generated body, allowing XenonRecomp's import wrapper name."""
-    candidates = (mapped_symbol, f"__imp__{mapped_symbol}")
+def select_entry_node(functions: dict[str, str], aliases: dict[str, str],
+                      mapped_symbol: str) -> str:
+    """Resolve the XEX mapping symbol to its implementation body."""
+    candidates = [mapped_symbol, f"__imp__{mapped_symbol}"]
+    if mapped_symbol in aliases:
+        candidates.insert(0, aliases[mapped_symbol])
     for candidate in candidates:
         if candidate in functions:
             return candidate
     nearby = sorted(name for name in functions if "xstart" in name.lower())
     raise ValueError(
         f"entry mapping symbol {mapped_symbol!r} has no generated body; "
-        f"tried {list(candidates)!r}; indexed xstart-like symbols: {nearby!r}"
+        f"tried {candidates!r}; indexed xstart-like symbols: {nearby!r}"
     )
 
 
-def reachable_graph(functions: dict[str, str], root: str, imports: set[str]):
-    """Walk generated direct calls; stop at imports and retain call adjacency."""
+def resolve_alias(name: str, aliases: dict[str, str]) -> tuple[str, tuple[str, ...]]:
+    """Follow alias chains, returning the final target and traversed alias names."""
+    seen: set[str] = set()
+    chain: list[str] = []
+    current = name
+    while current in aliases:
+        if current in seen:
+            raise ValueError(f"generated alias cycle detected at {current!r}")
+        seen.add(current)
+        chain.append(current)
+        current = aliases[current]
+    return current, tuple(chain)
+
+
+def reachable_graph(functions: dict[str, str], aliases: dict[str, str],
+                    root: str, imports: set[str]):
+    """Walk direct generated calls, resolving weak aliases to implementation bodies."""
     if root not in functions:
         raise ValueError(f"selected entry node {root!r} has no generated definition")
     adjacency = {name: set(CALL.findall(body)) for name, body in functions.items()}
     visited: set[str] = set()
     reached_imports: set[str] = set()
     unresolved: set[str] = set()
+    aliases_followed: set[str] = set()
+    parents: dict[str, tuple[str, str] | None] = {root: None}
+    import_paths: dict[str, list[str]] = {}
+    import_callsite_counts: dict[str, int] = {}
+    import_callers: dict[str, set[str]] = {}
     queue = deque([root])
     while queue:
         name = queue.popleft()
         if name in visited:
             continue
         visited.add(name)
-        for target in adjacency.get(name, set()):
+        for raw_target in CALL.findall(functions[name]):
+            target, chain = resolve_alias(raw_target, aliases)
+            aliases_followed.update(chain)
             if target in imports:
                 reached_imports.add(target)
+                import_callsite_counts[target] = import_callsite_counts.get(target, 0) + 1
+                import_callers.setdefault(target, set()).add(name)
+                segments: list[str] = []
+                cursor = name
+                while parents[cursor] is not None:
+                    parent, edge_label = parents[cursor]
+                    segments.append(edge_label)
+                    cursor = parent
+                path = [root, *reversed(segments)]
+                alias_label = " => ".join((raw_target, *chain[1:], target)) if chain else target
+                candidate = path + [alias_label]
+                if target not in import_paths or len(candidate) < len(import_paths[target]):
+                    import_paths[target] = candidate
             elif target in functions:
-                if target not in visited:
+                if target not in parents:
+                    alias_label = " => ".join((raw_target, *chain[1:], target)) if chain else target
+                    parents[target] = (name, alias_label)
                     queue.append(target)
             else:
-                unresolved.add(target)
-    return visited, reached_imports, unresolved, adjacency
+                unresolved.add(raw_target)
+    return (visited, reached_imports, unresolved, adjacency, aliases_followed,
+            import_paths, import_callsite_counts, import_callers)
 
 
 def self_test() -> None:
-    # Case A: mapping symbol has a normal generated wrapper.
-    mapping_wrapper = function_definitions(
-        "PPC_WEAK_FUNC(_xstart) { __imp___xstart(ctx, base); }"
-    )
+    # Simulate the actual XenonRecomp output shape: weak aliases are declarations
+    # and implementation bodies are emitted under __imp__ names.
+    alias_source = """
+      __attribute__((alias("__imp___xstart"))) PPC_WEAK_FUNC(_xstart);
+      __attribute__((alias("__imp__sub_100"))) PPC_WEAK_FUNC(sub_100);
+      __attribute__((alias("__imp__sub_200"))) PPC_WEAK_FUNC(sub_200);
+    """
+    aliases = function_aliases(alias_source)
     generated = function_definitions("""
       PPC_FUNC_IMPL(__imp___xstart) {
         sub_100(ctx, base);
         __imp__NtCreateFile(ctx, base);
       }
-      PPC_WEAK_FUNC(sub_100) { __imp__sub_100(ctx, base); }
       PPC_FUNC_IMPL(__imp__sub_100) {
         __imp__KeWaitForSingleObject(ctx, base);
         sub_200(ctx, base);
       }
-      PPC_WEAK_FUNC(sub_200) { __imp__sub_200(ctx, base); }
       PPC_FUNC_IMPL(__imp__sub_200) { }
     """)
     imports = {"__imp__NtCreateFile", "__imp__KeWaitForSingleObject"}
-    funcs = {**mapping_wrapper, **generated}
-    entry = select_entry_node(funcs, "_xstart")
-    visited, reached, unresolved, _ = reachable_graph(funcs, entry, imports)
-    assert reached == imports and not unresolved
-    assert {"_xstart", "__imp___xstart", "sub_100", "__imp__sub_100",
-            "sub_200", "__imp__sub_200"} <= visited
-
-    # Case B: actual mapping symbol has no body, but its import-style wrapper does.
-    funcs = function_definitions("""
-      PPC_FUNC_IMPL(__imp___xstart) {
-        __imp__NtCreateFile(ctx, base);
-      }
-    """)
-    entry = select_entry_node(funcs, "_xstart")
-    visited, reached, unresolved, _ = reachable_graph(funcs, entry, imports)
+    entry = select_entry_node(generated, aliases, "_xstart")
+    visited, reached, unresolved, _, followed, paths, callsites, callers = reachable_graph(
+        generated, aliases, entry, imports
+    )
     assert entry == "__imp___xstart"
-    assert reached == {"__imp__NtCreateFile"} and not unresolved
+    assert reached == imports and not unresolved
+    assert {"__imp___xstart", "__imp__sub_100", "__imp__sub_200"} <= visited
+    assert {"sub_100", "sub_200"} <= followed
+    assert paths["__imp__NtCreateFile"] == ["__imp___xstart", "__imp__NtCreateFile"]
+    assert callsites["__imp__NtCreateFile"] == 1
+    assert callers["__imp__NtCreateFile"] == {"__imp___xstart"}
+    assert paths["__imp__KeWaitForSingleObject"] == [
+        "__imp___xstart", "sub_100 => __imp__sub_100", "__imp__KeWaitForSingleObject"
+    ]
+
+    # Alias chains are legal to resolve; cycles must fail closed.
+    chained = {"sub_a": "sub_b", "sub_b": "__imp__sub_b"}
+    assert resolve_alias("sub_a", chained) == ("__imp__sub_b", ("sub_a", "sub_b"))
+    try:
+        resolve_alias("cycle_a", {"cycle_a": "cycle_b", "cycle_b": "cycle_a"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("alias cycle was not rejected")
+
     assert parse_mapping("{{ 0x82459E58, _xstart }},") == "_xstart"
-    print("startup call-graph self-test passed")
+    assert ABI_HELPER.match("__savegprlr_28")
+    print("startup alias-resolution self-test passed")
 
 
 def main() -> int:
@@ -142,14 +234,19 @@ def main() -> int:
     if mapped_symbol != ENTRY_SYMBOL:
         raise SystemExit(f"entry point maps to {mapped_symbol!r}, expected XenonRecomp's {ENTRY_SYMBOL!r}")
 
-    # Include the mapping file as well as all translation units. The mapping
-    # symbol may be an address-table label rather than a separately emitted body.
     functions = function_definitions(mapping_text)
+    aliases = function_aliases(mapping_text)
     for path in generated:
-        functions.update(function_definitions(path.read_text(errors="replace")))
+        source = path.read_text(errors="replace")
+        functions.update(function_definitions(source))
+        for name, target in function_aliases(source).items():
+            previous = aliases.get(name)
+            if previous is not None and previous != target:
+                raise SystemExit(f"conflicting generated aliases for {name}: {previous} and {target}")
+            aliases[name] = target
 
     try:
-        entry_node = select_entry_node(functions, mapped_symbol)
+        entry_node = select_entry_node(functions, aliases, mapped_symbol)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
@@ -160,11 +257,20 @@ def main() -> int:
     if not imports:
         raise SystemExit("MW3 kernel import list is empty")
 
-    visited, reached, unresolved, adjacency = reachable_graph(functions, entry_node, imports)
-    direct = set(adjacency.get(entry_node, set())) & reached
-    # If the mapped symbol wrapper exists as a distinct node, include its calls too.
-    if mapped_symbol in functions and mapped_symbol != entry_node:
-        direct |= set(adjacency.get(mapped_symbol, set())) & reached
+    try:
+        (visited, reached, unresolved, adjacency, aliases_followed, import_paths,
+         import_callsite_counts, import_callers) = reachable_graph(
+            functions, aliases, entry_node, imports
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    direct_raw = set(adjacency.get(entry_node, set()))
+    direct: set[str] = set()
+    for target in direct_raw:
+        resolved, _ = resolve_alias(target, aliases)
+        if resolved in imports:
+            direct.add(resolved)
 
     runtime_implemented: set[str] = set()
     for path in sorted((ROOT / "runtime/kernel").glob("*.cpp")):
@@ -176,9 +282,17 @@ def main() -> int:
 
     runtime_imports = reached & runtime_implemented
     logging_stub_imports = reached - runtime_implemented
-    generated_reachable = {
-        name for name in visited if name in functions and not name.startswith("__imp__")
-    }
+    unresolved_abi = {name for name in unresolved if ABI_HELPER.match(name)}
+    unresolved_other = unresolved - unresolved_abi
+    stub_paths = [
+        f"{name}: " + " -> ".join(import_paths[name])
+        for name in sorted(logging_stub_imports) if name in import_paths
+    ]
+    stub_callsite_summary = [
+        f"{name} [{import_family(name)}]: {import_callsite_counts.get(name, 0)} callsite(s) "
+        f"across {len(import_callers.get(name, set()))} generated function(s)"
+        for name in sorted(logging_stub_imports)
+    ]
 
     lines = [
         "MW3 STARTUP DIRECT-CALL REACHABILITY AUDIT",
@@ -186,14 +300,17 @@ def main() -> int:
         f"entry mapping symbol: {mapped_symbol}",
         f"selected generated entry node: {entry_node}",
         f"generated function bodies indexed: {len(functions)}",
-        f"generated wrapper/implementation nodes reachable: {len(visited)}",
-        f"reachable generated wrapper nodes: {len(generated_reachable)}",
+        f"generated weak aliases indexed: {len(aliases)}",
+        f"generated implementation nodes reachable: {len(visited)}",
+        f"reachable weak aliases followed: {len(aliases_followed)}",
         f"kernel/XAM imports in full image: {len(imports)}",
         f"kernel/XAM imports reachable from entry point: {len(reached)}",
         f"reachable imports called directly by selected entry node: {len(direct)}",
         f"reachable imports matching existing runtime PPC_FUNC definitions: {len(runtime_imports)}",
         f"reachable imports currently covered only by generated logging stubs: {len(logging_stub_imports)}",
-        f"unresolved non-import direct-call targets: {len(unresolved)}",
+        f"unresolved direct-call targets: {len(unresolved)}",
+        f"unresolved PowerPC ABI helper targets: {len(unresolved_abi)}",
+        f"other unresolved direct-call targets: {len(unresolved_other)}",
         "",
         "DIRECT ENTRY-POINT IMPORTS:",
         *(sorted(direct) or ["(none)"]),
@@ -207,12 +324,23 @@ def main() -> int:
         "REACHABLE IMPORTS STILL COVERED ONLY BY LOGGING STUBS:",
         *(sorted(logging_stub_imports) or ["(none)"]),
         "",
-        "UNRESOLVED NON-IMPORT CALL TARGETS:",
-        *(sorted(unresolved) or ["(none)"]),
+        "REACHABLE LOGGING-STUB IMPORT CALLSITE COUNTS:",
+        *(stub_callsite_summary or ["(none)"]),
+        "",
+        "SHORTEST STATIC CALL PATHS TO REACHABLE LOGGING-STUB IMPORTS:",
+        *(stub_paths or ["(none)"]),
+        "",
+        "UNRESOLVED POWERPC ABI HELPER TARGETS:",
+        *(sorted(unresolved_abi) or ["(none)"]),
+        "",
+        "OTHER UNRESOLVED DIRECT-CALL TARGETS:",
+        *(sorted(unresolved_other) or ["(none)"]),
         "",
         "LIMITS:",
         "- This is a static direct-call graph over XenonRecomp-emitted function(ctx, base) calls.",
+        "- XenonRecomp weak guest-function aliases are followed to their __imp__ implementation bodies.",
         "- Indirect calls, function pointers, callbacks, data imports, and dynamically selected thread entry points are not resolved.",
+        "- Reported import paths are shortest static direct-call paths, not observed execution traces.",
         "- Reachability is not execution order: a reachable call may be conditional or occur only on an error path.",
         "- Runtime import classification is a PPC_FUNC macro-name match, not proof of MW3 semantic compatibility.",
         "- Logging stubs are diagnostic placeholders and do not implement kernel behavior.",
@@ -220,7 +348,7 @@ def main() -> int:
     ]
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text("\n".join(lines) + "\n")
-    print("\n".join(lines[:14]))
+    print("\n".join(lines[:18]))
     print(f"Full startup call-graph report: {args.report}")
     return 0
 

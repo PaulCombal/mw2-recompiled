@@ -206,11 +206,25 @@ bool kernel::Event::Reset()
     return was;
 }
 
-int32_t kernel::Semaphore::Release(int32_t delta)
+int32_t kernel::Semaphore::Release(int32_t delta, bool* limitExceeded)
 {
     std::lock_guard held(g_dispatcher);
     const int32_t previous = count;
-    count = int32_t(std::min<int64_t>(int64_t(count) + delta, limit));
+    const int64_t next = int64_t(count) + delta;
+    const bool exceeded = next > limit;
+    if (limitExceeded) *limitExceeded = exceeded;
+    if (exceeded)
+    {
+        // NT's NtReleaseSemaphore fails atomically when the limit would be
+        // exceeded. The older KeReleaseSemaphore path retains its historical
+        // saturating behavior when it does not request the status.
+        if (limitExceeded) return previous;
+        count = limit;
+    }
+    else
+    {
+        count = int32_t(next);
+    }
     Wake();
     return previous;
 }
