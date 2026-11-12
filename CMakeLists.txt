@@ -199,6 +199,7 @@ if(MW3_RECOMP_ONLY)
         string(APPEND MW3_OPTIONAL_NOTES " xma")
     endif()
     message(STATUS "MW3 compile check: optional sources:${MW3_OPTIONAL_NOTES}")
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/mw3-check-generated")
     file(WRITE "${CMAKE_BINARY_DIR}/mw3-check-generated/playlists_data.h"
          "// Placeholder for the MW3 compile check only.\nstatic const unsigned char kPlaylists[] = { 0 };\nstatic constexpr unsigned kPlaylistsSize = 1;\n")
     add_library(mw3-runtime-compile-check OBJECT ${MW3_KERNEL_SOURCES} ${MW3_TITLE_SOURCES})
@@ -222,6 +223,9 @@ if(MW3_RECOMP_ONLY)
 
     add_custom_target(mw3-recomp-check)
     add_dependencies(mw3-recomp-check ppc_recomp mw3-runtime-compile-check)
+    if(BUILD_TESTING)
+        add_dependencies(mw3-recomp-check xex-header-test guest-format-test dpc-queue-test)
+    endif()
     return()
 endif()
 
