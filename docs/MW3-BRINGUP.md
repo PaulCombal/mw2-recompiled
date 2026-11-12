@@ -115,15 +115,39 @@ repeats steps 1 and 3 from `mw3/tu0/default.xex` in about 15 seconds.
   Image base `0x82000000`, entry `0x82459E58`, `.text` at `0x82090000`
   (`0x4566BC` bytes). Whether this is the disc's own build or an updated one is
   still open (see [Title update](#title-update)).
-- **Step 2, hooks:** of MW2's 49 lookups, 23 were found, 26 unresolved. All 10
-  recompiler helpers (`savegprlr_14` ... `longjmp`) were found once each; their
-  bytes equal MW2's, except `setjmp` and `longjmp`, which differ only in
-  linker-filled immediates and branch targets. Of the engine hooks, 13 of 39 were
-  found (`Cbuf_AddText`, `Dvar_SetString`, `MSG_Read*`, `R_SetVidConfig`,
-  `R_VideoSizes`, the D3D `ArenaWait` and `InitPixelShader`, ...). The other 26,
-  among them `Com_Error`, `Com_Printf`, `D3D_Present`, `CG_ViewFov` and
-  `Dvar_RegisterInt`, need the string and xref search, and the 8 `T_DATA_*`
-  globals are by hand. These are step 4's work, not step 3's.
+- **Step 2, hooks:** the MW2 image the hook addresses are taken from has to be
+  the one `runtime/title.h` has a block for. A `default.xex` from the disc is the
+  `tu0` layout, where many functions start eight bytes before the update's, so
+  run `tools/port_hooks.py --version tu0`. Without it every address is eight
+  bytes off and most hooks come back unresolved. With it, all 10 recompiler
+  helpers are found once each; their bytes equal MW2's, except `setjmp` and
+  `longjmp`, which differ only in linker-filled immediates and branch targets.
+  The engine functions, MW2's disc address and MW3's (each a function start in
+  both images and in the generated function map):
+
+  | Hook | MW2 | MW3 | Found by |
+  |---|---|---|---|
+  | `T_D3D_Present` | `820C3390` | `820A16E8` | The one caller of `VdSwap` in each image, with the same chain of calls and imports (1988 and 1972 bytes) |
+  | `T_D3D_ArenaWait` | `820B9800` | `8209B5E8` | Instruction signature |
+  | `T_D3D_InitPixelShader` | `820B8B58` | `820984F0` | Instruction signature |
+  | `T_Com_Error` | `822830E8` | `8229D688` | Same structure: error-depth counter, code 7 check, 4096-byte `vsnprintf` buffer |
+  | `T_Cbuf_AddText` | `8227CF18` | `8228CA48` | Signature, reported as "verify" |
+  | `T_Memcard_InitializeSystem` | `8230DF88` | `8232EC08` | Instruction signature |
+  | `T_Image_FlushMove` | `823A52F8` | `823D4398` | Instruction signature |
+  | `T_CG_CullZoom` | `8210FF80` | `821067A8` | Instruction signature |
+
+  Also located, though the disc block does not hook them: `R_VideoSizes`
+  `8238E5D0` -> `823D7320` and `R_SetVidConfig` `8238DDC8` -> `823D6B00`.
+
+  Not found: `T_D3D_ReplayRecording`, `T_D3D_PatchVertexFetches`,
+  `T_Job_WaitPredicate`, `T_CG_ViewFov`, `T_Dvar_RegisterInt`, and
+  `T_DB_MissingAsset`, whose two strings MW3's ship build no longer has. MW2's
+  `Com_Printf` and the print functions beside it have no counterpart: MW3 has
+  no function with their shape (a varargs spill and a 4 KB frame), so printing
+  looks to be compiled out of the ship build. The 8 `T_DATA_*` globals are by hand.
+  D3D's device structure moved: the field `D3D_ArenaWait` reads at `[r3+10896]`
+  in MW2 is at `[r3+11024]` in MW3, and `21628` is `21908`, so offsets the
+  runtime reads from it must be found again, not carried over.
 - **Step 3, recompile:** XenonAnalyse finds 128 jump tables. The first run gave
   377 "switch case outside function" lines at 27 sites; `tools/fixbounds.py`
   (`MW2_TITLE=mw3`) derived 26 leaf-function extents for `config/MW3.toml`, and the

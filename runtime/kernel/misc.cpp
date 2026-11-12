@@ -318,11 +318,6 @@ PPC_FUNC(__imp__RtlInitAnsiString)
     dest->pointer = source;
 }
 
-// The kernel's code page is Latin-1 as far as the title's text goes: each byte
-// is one UTF-16 unit. Both take byte counts and write back how many bytes they
-// produced. The title builds Live storage file names with the first.
-//
-// (unicodeOut, maxBytesOut, bytesOut, multiByte, bytesIn)
 // (UNICODE_STRING*, source). The source buffer remains owned by the
 // caller; this routine only records its byte length and pointer.
 PPC_FUNC(__imp__RtlInitUnicodeString)
@@ -358,6 +353,11 @@ PPC_FUNC(__imp__RtlInitUnicodeString)
     dest->pointer = source;
 }
 
+// The kernel's code page is Latin-1 as far as the title's text goes: each byte
+// is one UTF-16 unit. Both take byte counts and write back how many bytes they
+// produced. The title builds Live storage file names with the first.
+//
+// (unicodeOut, maxBytesOut, bytesOut, multiByte, bytesIn)
 PPC_FUNC(__imp__RtlMultiByteToUnicodeN)
 {
     auto* out = GuestPtr<be16>(ctx.r3.u32);

@@ -14,7 +14,10 @@ images of any two titles.
     tools/port_hooks.py --src mw2/default.pe --dst mw3/default.pe --emit mw3_candidates.h
     tools/port_hooks.py --selftest
 
-Both images are the flat PEs tools/xexdump.py writes. The functions to look
+Both images are the flat PEs tools/xexdump.py writes. --version tu0 reads the
+disc version's blocks of runtime/title.h and config/MW2.tu0.toml, for a source
+image that is the disc's executable, whose functions start eight bytes before the
+update's: use the version the --src image is, or every address is off by eight. The functions to look
 for are every T_ function entry in runtime/title.h's campaign block, and the
 `*_address` keys of the campaign's recompiler config.
 
@@ -43,12 +46,13 @@ ESCALATE = (2, 4, 8)
 TOML_KEYS = re.compile(r"^(\w+_address)\s*=\s*(0x[0-9A-Fa-f]+)", re.M)
 
 
-def parse_title_h(path, block):
+def parse_title_h(path, block, version="tu6"):
     """([(name, address)] functions, [(name, value)] data) of one block of
-    runtime/title.h: 'mp' or 'sp' of the title update's version."""
+    runtime/title.h: 'mp' or 'sp', of the title update's version (tu6) or the
+    disc's (tu0)."""
     text = open(path).read()
     blocks = re.split(r"^#(?:if|elif|else|endif)\b.*$", text, flags=re.M)[1:5]
-    mp, sp = blocks[:2]
+    mp, sp = blocks[:2] if version == "tu6" else blocks[2:4]
     body = sp if block == "sp" else mp
     funcs = [(n, int(a, 16)) for n, a in
              re.findall(r"#define (T_\w+)\s+([0-9A-F]{8})\b", body)]
@@ -169,14 +173,13 @@ def selftest():
 
 def main():
     args = sys.argv[1:]
-    opts = dict(src=None, dst=None, block="sp", words=24, emit=None,
-                title_h=os.path.join(ROOT, "runtime/title.h"),
-                toml=os.path.join(ROOT, "config/MW2.toml"))
+    opts = dict(src=None, dst=None, block="sp", words=24, emit=None, version="tu6",
+                title_h=os.path.join(ROOT, "runtime/title.h"), toml=None)
     while args:
         a = args.pop(0)
         if a == "--selftest":
             return selftest()
-        if a in ("--src", "--dst", "--block", "--emit", "--title-h", "--toml"):
+        if a in ("--src", "--dst", "--block", "--emit", "--title-h", "--toml", "--version"):
             opts[a[2:].replace("-", "_")] = args.pop(0)
         elif a == "--words":
             opts["words"] = int(args.pop(0))
@@ -186,10 +189,15 @@ def main():
         raise SystemExit("--src and --dst are required (flat PE images)")
     if opts["block"] not in ("sp", "mp"):
         raise SystemExit("--block is sp or mp")
+    if opts["version"] not in ("tu6", "tu0"):
+        raise SystemExit("--version is tu6 or tu0")
+    if not opts["toml"]:
+        opts["toml"] = os.path.join(ROOT, "config/MW2.toml" if opts["version"] == "tu6"
+                                    else "config/MW2.tu0.toml")
     import find_in_title as fit
     src = fit.Image(opts["src"])
     dst = fit.Image(opts["dst"])
-    funcs, data = parse_title_h(opts["title_h"], opts["block"])
+    funcs, data = parse_title_h(opts["title_h"], opts["block"], opts["version"])
     keys = parse_toml(opts["toml"])
     rows = report(src, dst, funcs, keys, data, opts["words"])
     if opts["emit"]:
