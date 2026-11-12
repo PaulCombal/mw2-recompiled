@@ -24,6 +24,29 @@ ALIAS = re.compile(
 ABI_HELPER = re.compile(r"^__(?:save|rest)gprlr_\d+$")
 
 
+def import_family(name: str) -> str:
+    symbol = name.removeprefix("__imp__")
+    families = (
+        ("NetDll_", "Networking"),
+        ("Nt", "NT kernel"),
+        ("Ke", "Kernel executive"),
+        ("Kf", "Kernel spinlocks"),
+        ("Rtl", "RTL runtime"),
+        ("Vd", "Video/display"),
+        ("Xam", "XAM services"),
+        ("XGet", "XDK system/AV"),
+        ("XMsg", "Messaging"),
+        ("Xe", "Cryptography/security"),
+        ("Stfs", "Storage"),
+    )
+    for prefix, family in families:
+        if symbol.startswith(prefix):
+            return family
+    if symbol.startswith("_") or symbol in {"sprintf", "vswprintf"}:
+        return "C runtime"
+    return "Other"
+
+
 def function_definitions(source: str) -> dict[str, str]:
     """Return macro-defined function bodies using brace-balanced extraction."""
     found: dict[str, str] = {}
@@ -103,17 +126,21 @@ def reachable_graph(functions: dict[str, str], aliases: dict[str, str],
     aliases_followed: set[str] = set()
     parents: dict[str, tuple[str, str] | None] = {root: None}
     import_paths: dict[str, list[str]] = {}
+    import_callsite_counts: dict[str, int] = {}
+    import_callers: dict[str, set[str]] = {}
     queue = deque([root])
     while queue:
         name = queue.popleft()
         if name in visited:
             continue
         visited.add(name)
-        for raw_target in adjacency.get(name, set()):
+        for raw_target in CALL.findall(functions[name]):
             target, chain = resolve_alias(raw_target, aliases)
             aliases_followed.update(chain)
             if target in imports:
                 reached_imports.add(target)
+                import_callsite_counts[target] = import_callsite_counts.get(target, 0) + 1
+                import_callers.setdefault(target, set()).add(name)
                 segments: list[str] = []
                 cursor = name
                 while parents[cursor] is not None:
@@ -132,7 +159,8 @@ def reachable_graph(functions: dict[str, str], aliases: dict[str, str],
                     queue.append(target)
             else:
                 unresolved.add(raw_target)
-    return visited, reached_imports, unresolved, adjacency, aliases_followed, import_paths
+    return (visited, reached_imports, unresolved, adjacency, aliases_followed,
+            import_paths, import_callsite_counts, import_callers)
 
 
 def self_test() -> None:
@@ -157,7 +185,7 @@ def self_test() -> None:
     """)
     imports = {"__imp__NtCreateFile", "__imp__KeWaitForSingleObject"}
     entry = select_entry_node(generated, aliases, "_xstart")
-    visited, reached, unresolved, _, followed, paths = reachable_graph(
+    visited, reached, unresolved, _, followed, paths, callsites, callers = reachable_graph(
         generated, aliases, entry, imports
     )
     assert entry == "__imp___xstart"
@@ -165,6 +193,8 @@ def self_test() -> None:
     assert {"__imp___xstart", "__imp__sub_100", "__imp__sub_200"} <= visited
     assert {"sub_100", "sub_200"} <= followed
     assert paths["__imp__NtCreateFile"] == ["__imp___xstart", "__imp__NtCreateFile"]
+    assert callsites["__imp__NtCreateFile"] == 1
+    assert callers["__imp__NtCreateFile"] == {"__imp___xstart"}
     assert paths["__imp__KeWaitForSingleObject"] == [
         "__imp___xstart", "sub_100 => __imp__sub_100", "__imp__KeWaitForSingleObject"
     ]
@@ -228,7 +258,8 @@ def main() -> int:
         raise SystemExit("MW3 kernel import list is empty")
 
     try:
-        visited, reached, unresolved, adjacency, aliases_followed, import_paths = reachable_graph(
+        (visited, reached, unresolved, adjacency, aliases_followed, import_paths,
+         import_callsite_counts, import_callers) = reachable_graph(
             functions, aliases, entry_node, imports
         )
     except ValueError as exc:
@@ -256,6 +287,11 @@ def main() -> int:
     stub_paths = [
         f"{name}: " + " -> ".join(import_paths[name])
         for name in sorted(logging_stub_imports) if name in import_paths
+    ]
+    stub_callsite_summary = [
+        f"{name} [{import_family(name)}]: {import_callsite_counts.get(name, 0)} callsite(s) "
+        f"across {len(import_callers.get(name, set()))} generated function(s)"
+        for name in sorted(logging_stub_imports)
     ]
 
     lines = [
@@ -287,6 +323,9 @@ def main() -> int:
         "",
         "REACHABLE IMPORTS STILL COVERED ONLY BY LOGGING STUBS:",
         *(sorted(logging_stub_imports) or ["(none)"]),
+        "",
+        "REACHABLE LOGGING-STUB IMPORT CALLSITE COUNTS:",
+        *(stub_callsite_summary or ["(none)"]),
         "",
         "SHORTEST STATIC CALL PATHS TO REACHABLE LOGGING-STUB IMPORTS:",
         *(stub_paths or ["(none)"]),
