@@ -20,18 +20,38 @@ CALL = re.compile(r"\b(__imp__Ke(?:InitializeDpc|InsertQueueDpc))\s*\(\s*ctx\s*,
 ASSIGN = re.compile(r"\bctx\.r(\d+)\.(?:u64|s64|u32|s32|u16|u8)\s*=\s*(.*)")
 REG = re.compile(r"\bctx\.r(\d+)\.(?:u64|s64|u32|s32|u16|u8)\b")
 HEX = re.compile(r"0x[0-9A-Fa-f]+")
+SIGNED_INT = re.compile(r"^[+-]?(?:0x[0-9A-Fa-f]+|\\d+)$")
+REG_IMMEDIATE = re.compile(r"ctx\\.r(\\d+)\\.(?:u64|s64|u32|s32|u16|u8)\\s*([+-])\\s*([+-]?(?:0x[0-9A-Fa-f]+|\\d+))")
 CALL_TARGET = re.compile(r"\b((?:__imp__)?[A-Za-z_]\w*)\s*\(\s*ctx\s*,\s*base\s*\)")
 LOAD = re.compile(r"\bPPC_LOAD_([A-Za-z0-9_]+)\s*\(")
 STORE = re.compile(r"\bPPC_STORE_([A-Za-z0-9_]+)\s*\(")
 
 
-def abstract_expr(expr: str, state: dict[int, str], depth: int = 0) -> str:
-    """Summarize an expression without emitting generated source text."""
+def parse_integer(expr: str) -> int | None:
     expr = expr.strip()
-    if depth > 3:
-        return "expression (provenance depth limit)"
-    if re.fullmatch(r"(?:0x[0-9A-Fa-f]+|\d+)", expr):
-        return f"constant {expr}"
+    if not SIGNED_INT.fullmatch(expr):
+        return None
+    try:
+        return int(expr, 0)
+    except ValueError:
+        return None
+
+
+def abstract_expr(expr: str, state: dict[int, str],
+                  constants_by_register: dict[int, int]) -> str:
+    """Summarize expressions and fold simple PPC register-plus-immediate chains."""
+    expr = expr.strip()
+    literal = parse_integer(expr)
+    if literal is not None:
+        return f"constant {literal} (u32 0x{literal & 0xFFFFFFFF:08X})"
+    match = REG_IMMEDIATE.fullmatch(expr)
+    if match:
+        reg, operator, immediate = match.groups()
+        base = constants_by_register.get(int(reg))
+        imm = parse_integer(immediate)
+        if base is not None and imm is not None:
+            value = base + imm if operator == "+" else base - imm
+            return f"constant 0x{value & 0xFFFFFFFF:08X} (guest-address candidate)"
     loads = LOAD.findall(expr)
     stores = STORE.findall(expr)
     targets = [m.group(1) for m in CALL_TARGET.finditer(expr)]
@@ -73,6 +93,7 @@ def split_statements(body: str) -> list[str]:
 def inspect_function(name: str, body: str) -> list[dict[str, object]]:
     statements = split_statements(body)
     state: dict[int, str] = {}
+    constants_by_register: dict[int, int] = {}
     rows: list[dict[str, object]] = []
     for index, statement in enumerate(statements):
         call = CALL.search(statement)
@@ -94,7 +115,24 @@ def inspect_function(name: str, body: str) -> list[dict[str, object]]:
         assignment = ASSIGN.search(statement)
         if assignment:
             reg = int(assignment.group(1))
-            state[reg] = abstract_expr(assignment.group(2), state)
+            rhs = assignment.group(2)
+            state[reg] = abstract_expr(rhs, state, constants_by_register)
+            literal = parse_integer(rhs)
+            if literal is not None:
+                constants_by_register[reg] = literal
+            else:
+                folded = REG_IMMEDIATE.fullmatch(rhs.strip())
+                if folded and int(folded.group(1)) in constants_by_register:
+                    base = constants_by_register[int(folded.group(1))]
+                    imm = parse_integer(folded.group(3))
+                    if imm is not None:
+                        constants_by_register[reg] = (
+                            base + imm if folded.group(2) == "+" else base - imm
+                        )
+                    else:
+                        constants_by_register.pop(reg, None)
+                else:
+                    constants_by_register.pop(reg, None)
     return rows
 
 
@@ -119,12 +157,19 @@ def self_test() -> None:
     funcs = function_definitions(fixture)
     init = inspect_function("sub_820A9670", funcs["sub_820A9670"])[0]
     assert init["args"]["r3"] == "r31 (constant 0x82001000)"
-    assert init["args"]["r4"] == "constant 0x82002000"
+    assert init["args"]["r4"].startswith("constant 0x82002000")
     assert init["args"]["r5"] == "constant 0x82003000"
     assert init["nearby_following_stores"] == ["U32"]
     insert = inspect_function("sub_820A95A0", funcs["sub_820A95A0"])[0]
     assert "guest load U32" in insert["args"]["r4"]
-    assert insert["args"]["r5"] == "constant 7"
+    assert insert["args"]["r5"].startswith("constant 7")
+    folded_state: dict[int, str] = {}
+    folded_constants: dict[int, int] = {}
+    assert parse_integer("-2113208320") == -2113208320
+    folded_state[11] = abstract_expr("-2113208320", folded_state, folded_constants)
+    folded_constants[11] = -2113208320
+    callback = abstract_expr("ctx.r11.s64 + -27288", folded_state, folded_constants)
+    assert callback.startswith("constant 0x820A9568")
     print("DPC callsite provenance self-test passed")
 
 
@@ -143,7 +188,15 @@ def main() -> int:
     if not generated or not mapping.is_file():
         raise SystemExit("generated MW3 PPC sources or mapping are missing")
 
-    functions = function_definitions(mapping.read_text(errors="replace"))
+    mapping_text = mapping.read_text(errors="replace")
+    functions = function_definitions(mapping_text)
+    address_to_symbol = {
+        int(address, 16): symbol
+        for address, symbol in re.findall(
+            r"\\{\\s*0x0*([0-9A-Fa-f]{8})\\s*,\\s*([A-Za-z_]\\w*)\\s*\\}",
+            mapping_text,
+        )
+    }
     for path in generated:
         functions.update(function_definitions(path.read_text(errors="replace")))
 
@@ -167,6 +220,20 @@ def main() -> int:
                 f"expected {expected_count} {target} callsite(s), found {len(found)} "
                 f"in callers: {callers or '(none)'}"
             )
+    for row in rows:
+        candidate_match = re.search(r"constant 0x([0-9A-Fa-f]{8})", str(row["args"]["r4"]))
+        if row["target"] == "__imp__KeInitializeDpc" and candidate_match:
+            address = int(candidate_match.group(1), 16)
+            symbol = address_to_symbol.get(address)
+            if symbol:
+                implementation = symbol if symbol in functions else "__imp__" + symbol
+                callback_body = functions.get(implementation)
+                if callback_body is not None:
+                    row["callback_address"] = f"0x{address:08X}"
+                    row["callback_symbol"] = symbol
+                    row["callback_calls"] = sorted(set(CALL_TARGET.findall(callback_body)))
+                    row["callback_loads"] = sorted(set(LOAD.findall(callback_body)))
+                    row["callback_stores"] = sorted(set(STORE.findall(callback_body)))
     rows.sort(key=lambda row: (str(row["target"]), str(row["function"])))
 
     lines = [
@@ -181,6 +248,11 @@ def main() -> int:
             f"IMPORT: {row['target']}",
             "ARGUMENT REGISTER SNAPSHOT (Xbox PPC ABI: r3-r5):",
             *(f"  {reg}: {value}" for reg, value in row["args"].items()),
+            *( [f"CALLBACK ADDRESS CANDIDATE: {row['callback_address']}",
+                 f"CALLBACK MAPPED SYMBOL: {row['callback_symbol']}",
+                 f"CALLBACK DIRECT CALL TARGETS: {', '.join(row['callback_calls']) or '(none detected)'}",
+                 f"CALLBACK MEMORY ACCESS SHAPES: loads={', '.join(row['callback_loads']) or '(none detected)'}, stores={', '.join(row['callback_stores']) or '(none detected)'}"]
+               if "callback_address" in row else [] ),
             "DIRECT CALL TARGET NAMES IN CALLER:",
             *(f"  {target}" for target in row["nearby_calls"]),
             "NEAR-CALL MEMORY ACCESS SHAPES:",
