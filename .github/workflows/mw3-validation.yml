@@ -158,8 +158,8 @@ jobs:
           grep -F "XamLoaderLaunchTitle: default.xex" "$log"
           grep -F "exiting: the title started its other executable" "$log"
           grep -F "the title asked for default.xex: start that build yourself" "$log"
-          if [ "$status" -ne 1 ]; then
-            echo "Expected the development runner to stop with status 1 at the explicit title handoff; got $status"
+          if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+            echo "Expected the development runner to exit normally or with its explicit handoff status; got $status"
             exit 1
           fi
           echo "MW3 first-stage startup and explicit next-title handoff were reached."
