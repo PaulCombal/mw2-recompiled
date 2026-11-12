@@ -114,7 +114,43 @@ jobs:
           sudo apt-get install -y clang-18 lld-18 ninja-build python3 cmake git binutils
 
       - name: Recompile MW3 and compile generated PPC
-        run: bash tools/build_mw3.sh
+        run: bash tools/build_mw3.sh --compile-only
+
+      - name: Upload generated PPC inputs for isolated audits
+        uses: actions/upload-artifact@v4
+        with:
+          name: mw3-generated-audit-inputs
+          path: |
+            build-mw3/libppc_recomp.a
+            ppc_mw3/ppc_recomp.*.cpp
+            ppc_mw3/ppc_func_mapping.cpp
+            ppc_mw3/kernel_imports.txt
+          if-no-files-found: error
+          retention-days: 2
+
+  generated-code-audit:
+    needs: generated-code-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download generated PPC audit inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: mw3-generated-audit-inputs
+
+      - name: Install audit tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 binutils
+
+      - name: Run isolated MW3 metadata audits
+        run: |
+          set -euo pipefail
+          python3 tools/audit_mw3_generated.py build-mw3/libppc_recomp.a build-mw3/mw3-runtime-audit.txt
+          python3 tools/audit_mw3_startup.py --report build-mw3/mw3-startup-callgraph.txt
+          python3 tools/audit_mw3_dpc.py --report build-mw3/mw3-dpc-callsites.txt
 
       - name: Upload MW3 runtime audit metadata
         uses: actions/upload-artifact@v4
