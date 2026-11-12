@@ -1,101 +1,108 @@
 # mw3recomp
 
-**Call of Duty: Modern Warfare 3 (2011), Xbox 360 → PS4, by static recompilation.**
+**Call of Duty: Modern Warfare 3 (2011, Xbox 360) → PS4, via static recompilation.**
 
-The game's PowerPC executable is converted ahead of time to C++ with [XenonRecomp](https://github.com/hedge-dev/XenonRecomp), then linked against a host runtime that stands in for the Xbox 360's kernel, GPU and audio hardware. It is not an emulator. No game files are included: you need your own disc.
+This project adapts the [MW2-recompiled](https://github.com/PaulCombal/mw2-recompiled) codebase to bring up the MW3 single-player campaign. The Xbox 360 PowerPC executable is translated ahead of time into C++ with [XenonRecomp](https://github.com/hedge-dev/XenonRecomp), then progressively integrated with a host runtime. This is static recompilation, not an Xbox 360 emulator.
 
-> **Status: early bring-up. Nothing here runs MW3 yet, on PC or on PS4.**
-> The runtime in this tree is inherited from a working Modern Warfare 2 port. The MW3 steps are written down, but none has been run against an MW3 executable. See [Status](#status).
+> **Current status: generated-code build and static audits pass. MW3 does not boot yet.**
+>
+> The MW3 executable has been recompiled into 142 generated C++ translation units. CI successfully builds the generated PPC library and compile-checks the MW3 runtime/import glue. Startup, kernel-import and DPC investigations have advanced, but there is no linked desktop game executable, playable build, PS4 ELF or FPKG yet.
 
-## Contents
+No game executable or game data is included. You must supply your own legally obtained copy. Do not commit XEX files, extracted game data, or generated proprietary game code.
 
-- [Plan](#plan)
-- [Status](#status)
-- [Why PS4 is hard](#why-ps4-is-hard)
-- [Repository layout](#repository-layout)
-- [Building (MW2 today)](#building-mw2-today)
-- [Contributing](#contributing)
-- [Credits](#credits)
-- [License](#license)
+## Project status
 
-## Plan
-
-The work goes in this order, and each stage has to pass its check before the next begins.
-
-1. **Desktop first.** Recompile MW3's campaign, boot it on Linux with the existing Vulkan runtime, and get the first mission to play at a stable frame rate.
-2. **Measure.** Record the per-frame CPU cost on the desktop build. That number decides whether a PS4 build is worth starting.
-3. **PS4 port.** Follow the approach of [gta4-ps4](https://github.com/plastikman/gta4-ps4): an OpenOrbis build with Mesa's RADV for Vulkan, plus audio and memory layers for the console, on a jailbroken PS4.
-
-Scope for now is **the campaign, offline**. Multiplayer needs online services, and Special Ops comes after the campaign boots.
-
-## Status
-
-| Stage | State |
+| Area | Current status |
 |---|---|
-| Fork of [mw2-recompiled](https://github.com/PaulCombal/mw2-recompiled) (runtime, tools, launcher) | Done. MW2 builds and runs on PC upstream |
-| Recompiler config for MW3 | Done for the disc's `iw5sp_ship.exe`: [`config/MW3.toml`](config/MW3.toml) |
-| Finding MW2's hooks in MW3's executable | Run. All 10 recompiler helpers and 8 engine hooks found, including `D3D_Present` and `Com_Error`; 7 not found. Details in [docs/MW3-BRINGUP.md](docs/MW3-BRINGUP.md#progress) |
-| Recompiling MW3 | Done: `tools/recomp_mw3.sh` gives 142 C++ files with no switch-case errors, all passing a syntax check. Not linked or run yet |
-| Booting MW3 on the desktop | Not started |
-| PS4 build | Not started |
+| MW2-derived project/runtime foundation | Present; MW2 remains the existing working title |
+| MW3 executable identification | Supported image identified and SHA-256 pinned; see [bring-up notes](docs/MW3-BRINGUP.md) |
+| MW3 hook discovery | Static comparison against MW2 completed for the current image; candidates and unresolved hooks documented |
+| MW3 recompilation | **Pass:** 128 jump tables; 142 generated PPC translation units plus function mapping; no remaining switch-case-bound errors in the validated output |
+| Generated PPC compilation | **Pass:** CI compiles the generated code into `libppc_recomp.a` |
+| Runtime/import compile validation | **Pass:** MW3-generated declarations and import glue are generated and compile-checked; this is not proof of MW3 runtime compatibility |
+| Generated symbol/import audit | **Pass:** metadata-only audit inventories generated symbols and runtime/import coverage |
+| Startup call-graph audit | **Pass:** entry-point mapping, weak aliases and reachable direct-call paths are analyzed |
+| DPC investigation | **Research complete for the current callsites; implementation deliberately deferred** |
+| Linked desktop executable / first boot | **Not started** |
+| Playable desktop campaign | **Not started** |
+| PS4 build, package and runtime testing | **Not started** |
 
-Open questions, such as which executable is the baseline (the disc's or the title-updated one) and whether MW3 needs the same fastfile-signing handling as MW2, are listed at the end of [docs/MW3-BRINGUP.md](docs/MW3-BRINGUP.md).
+### What the static audits established
 
-## Why PS4 is hard
+The current validated executable produces the following audit results:
 
-Two problems to settle before anything else, and neither is known to work on the console:
+- 142 generated PPC translation units and 36,235 generated function definitions.
+- 36,493 function references.
+- 9,964 generated implementation nodes reachable from the startup entry point through the audited direct-call graph.
+- 258 kernel/XAM imports: 191 match existing runtime implementation macros and 67 are diagnostic logging stubs.
+- 27 reachable imports are covered only by logging stubs.
+- The DPC audit identifies one reachable direct callsite each for `KeInitializeDpc` and `KeInsertQueueDpc`.
 
-- **Address space.** The runtime reserves 4 GiB of address space and maps the 512 MB of guest physical memory at two windows ([docs/runtime.md](docs/runtime.md#guest-address-space)).
-- **GPU write-watch.** It is built on page-protection faults.
+These are static-analysis and compilation results, not evidence that the game executes those paths successfully. A macro-level runtime match does not establish semantic compatibility with MW3. Logging stubs are placeholders, not implementations.
 
-CPU speed is the other risk. gta4-ps4 reports GTA IV at about 20-25 FPS on a PS4 Pro, limited by the console's Jaguar cores, while MW3 targets 60 FPS on the Xbox 360. Hence the measuring stage above.
+The DPC investigation traced a graphics-completion notification path involving a six-entry DPC record array, a four-slot completion ring, an event, and a guest worker thread. The Xbox-specific KDPC layout and dispatch semantics are not sufficiently verified, so no speculative DPC handlers have been added. See [MW3 DPC investigation](docs/MW3-DPC-INVESTIGATION.md).
 
-## Repository layout
+## Build the current MW3 milestone
 
-| Path | What it is |
-|---|---|
-| `runtime/` | The host runtime: guest memory, threads, kernel and XAM stubs, GPU through Vulkan, audio |
-| `launcher/` | Installer and settings UI, inherited from the MW2 port |
-| `tools/` | Python and C++ helpers: XEX inspection and dumping, hook porting, shader and texture extraction, STFS unpacking |
-| `config/` | Recompiler configs. `MW3.toml.in` is the MW3 template; the rest are MW2's |
-| `patches/` | Local changes to XenonRecomp |
-| `relay/` | MW2 multiplayer relay server (not used for MW3 yet) |
-| `docs/` | Design notes. Start with [MW3-BRINGUP.md](docs/MW3-BRINGUP.md) |
-| `pgo/` | Recorded compiler profiles for the MW2 builds |
+The current supported build validates generated MW3 code; it does **not** produce a game executable.
 
-## Building (MW2 today)
+1. Prepare your own MW3 campaign XEX at `mw3/tu0/default.xex`.
+2. Prepare the matching `config/MW3.toml` from the template and the documented address/configuration work.
+3. Install the prerequisites listed in [building.md](docs/building.md), including CMake, Ninja, Clang 18, Python 3 and Git.
+4. Run:
 
-`./build.sh` runs the full pipeline for **Modern Warfare 2**: it fetches and patches XenonRecomp, extracts the executables and game data from your ISO, recompiles, and builds the runtime and launcher. There is no MW3 title in the build script yet; adding one is step 3 of the bring-up guide.
+```sh
+bash tools/build_mw3.sh
+```
 
-You need `cmake`, `ninja-build`, `clang-18`, `lld-18`, `python3`, `git`, the Vulkan headers and loader, and your own legally obtained disc image. The full list of requirements, variables and layout is in [docs/building.md](docs/building.md).
+The script runs the MW3 extraction/recompilation pipeline, configures CMake in generated-code-only mode, compiles the generated PPC library, generates shared declarations and kernel-import diagnostics, and runs the metadata audits.
 
-For the MW3 work, follow [docs/MW3-BRINGUP.md](docs/MW3-BRINGUP.md):
+Key outputs include:
 
-1. Put your disc's `default.xex` and game files under `mw3/` (git-ignored; never commit anything from the disc).
-2. Dump the executable to a flat image with `tools/xexdump.py`.
-3. Find MW2's hooks in MW3 with `tools/port_hooks.py`.
-4. Fill in `config/MW3.toml`, recompile, then try to boot.
+- `ppc_mw3/` — generated PPC C++ source (local build output; do not commit).
+- `build-mw3/libppc_recomp.a` — compiled generated PPC static library.
+- `build-mw3/mw3-runtime-audit.txt` — generated symbol/import audit.
+- `build-mw3/mw3-startup-callgraph.txt` — static startup reachability report.
+- `build-mw3/mw3-dpc-callsites.txt` — sanitized DPC callsite report.
 
-## Contributing
+See [MW3-BUILD.md](docs/MW3-BUILD.md) for the precise scope, CI asset setup and limitations. The full MW2 build pipeline in `build.sh` is not yet an MW3 executable build path.
 
-Help is most useful on the bring-up steps above, and on the PS4 memory and GPU questions. Docs worth reading first:
+## Development roadmap
 
-- [docs/MW3-BRINGUP.md](docs/MW3-BRINGUP.md): the step-by-step plan, with a check after each step
-- [docs/runtime.md](docs/runtime.md): how the runtime works
-- [docs/d3d9-seam.md](docs/d3d9-seam.md): the D3D9 ring buffer and flip handshake, a likely early failure point
-- [docs/switches.md](docs/switches.md), [docs/rendering.md](docs/rendering.md), [docs/audio.md](docs/audio.md): subsystem notes
+The next engineering milestone is **runtime integration and a first desktop boot**:
 
-Crash, glitch and performance reports for the MW2 build go through the launcher's REPORT A BUG button, as described in the issue template.
+1. Resolve MW3-specific engine hooks and globals against the exact supported XEX; do not reuse MW2 addresses by assumption.
+2. Review reachable imports currently represented by diagnostic stubs and implement only those required by the MW3 startup path, with tests.
+3. Establish safe guest callback/thread behavior and a verified DPC dispatch design before implementing the graphics-completion DPC imports.
+4. Add an MW3-specific title/runtime configuration and link the generated PPC code against the compatible runtime.
+5. Produce a desktop executable and debug startup until the main menu renders; then work toward loading and playing the first campaign mission.
+6. Measure desktop CPU cost and validate memory/GPU assumptions before investing in PS4-specific runtime and packaging work.
+
+The intended first PS4 milestone is an installable package that launches to the MW3 main menu. A package build alone is not proof of a working port.
+
+## Documentation
+
+- [MW3 bring-up notes](docs/MW3-BRINGUP.md) — executable identity, hook findings, recompiler work and open questions.
+- [MW3 generated-code build](docs/MW3-BUILD.md) — build commands, CI asset handling and audit interpretation.
+- [MW3 DPC investigation](docs/MW3-DPC-INVESTIGATION.md) — callback, record-array and completion-worker analysis; implementation decision.
+- [Runtime architecture](docs/runtime.md)
+- [Build prerequisites and pipeline](docs/building.md)
+- [D3D9 integration seam](docs/d3d9-seam.md)
+- [Rendering](docs/rendering.md), [audio](docs/audio.md), [switches](docs/switches.md)
+
+## Scope
+
+The initial target is the **offline single-player campaign**. Multiplayer services and Special Ops are outside the current bring-up milestone.
+
+The PS4 direction is informed by [LibertyRecomp](https://github.com/OZORDI/LibertyRecomp) and [gta4-ps4](https://github.com/plastikman/gta4-ps4), but no PS4-specific MW3 build has been validated. Address-space reservation, guest-memory mapping, GPU write-watch behavior, graphics integration and Jaguar CPU performance remain major risks.
 
 ## Credits
 
-- [PaulCombal/mw2-recompiled](https://github.com/PaulCombal/mw2-recompiled): the Modern Warfare 2 recompilation this project is forked from
-- [hedge-dev/XenonRecomp](https://github.com/hedge-dev/XenonRecomp): the PowerPC-to-C++ recompiler
-- [OZORDI/LibertyRecomp](https://github.com/OZORDI/LibertyRecomp) and [plastikman/gta4-ps4](https://github.com/plastikman/gta4-ps4): the GTA IV recompilation and its PS4 port, which this project's PS4 plan follows
-- [Xenia](https://github.com/xenia-project/xenia): the XMA decoder branch of FFmpeg used for audio
+- [PaulCombal/mw2-recompiled](https://github.com/PaulCombal/mw2-recompiled) — MW2 recompilation foundation and runtime.
+- [hedge-dev/XenonRecomp](https://github.com/hedge-dev/XenonRecomp) — Xbox 360 PowerPC-to-C++ static recompiler.
+- [OZORDI/LibertyRecomp](https://github.com/OZORDI/LibertyRecomp) and [plastikman/gta4-ps4](https://github.com/plastikman/gta4-ps4) — related recompilation and PS4 porting references.
+- [Xenia](https://github.com/xenia-project/xenia) — Xbox 360 reverse-engineering reference material.
 
 ## License
 
-[GPL-3.0-only](LICENSE). It covers this project's own code: the runtime, tools, patches and build files. It grants nothing for the game: Activision's code and data, and the C++ generated from the game's executables, are not part of this repository and not under this license.
-
-No game code or data is included; builds only run with files from your own disc. Not affiliated with Activision, Infinity Ward, Sledgehammer Games, Microsoft, Sony or Valve.
+[GPL-3.0-only](LICENSE) applies to this project's own code. It does not grant rights to Activision's game code or data, or to generated code derived from proprietary game executables. Not affiliated with Activision, Infinity Ward, Sledgehammer Games, Microsoft or Sony.
