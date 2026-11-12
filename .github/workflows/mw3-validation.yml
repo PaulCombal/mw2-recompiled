@@ -108,6 +108,8 @@ jobs:
           expected=d90bc8d93b7b8f6001ead8330271196a6ef7a5c2e4a9e9b63118f47d58a05912
           echo "MW3 XEX SHA-256: $actual"
           test "$actual" = "$expected" || { echo "Unexpected MW3 executable; refusing to build against an unverified image"; exit 1; }
+          echo "Private XEX/fastfile inventory (names and sizes only):"
+          find private -type f \( -iname '*.xex' -o -iname '*.ff' -o -iname '*.ffm' \) -printf '%P %s bytes\n' | sort | head -n 200
           mkdir -p mw3/tu0
           cp private/default.xex mw3/tu0/default.xex
           rm -rf private
@@ -132,6 +134,35 @@ jobs:
             -DMW2_USE_SDL=OFF \
             -DMW2_LTO=OFF
           cmake --build build-mw3 --target mw2 --parallel
+
+      - name: Smoke-test MW3 runtime with the private XEX
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/mw3-runtime-smoke.log"
+          set +e
+          timeout --signal=TERM --kill-after=5s 35s env \
+            MW2_RUN_SECONDS=12 \
+            MW2_LOG_FILE="$log" \
+            ./build-mw3/mw3 mw3/tu0/default.xex mw3/tu0
+          status=$?
+          set -e
+          if [ -f "$log" ]; then
+            echo "----- MW3 runtime smoke log -----"
+            tail -n 160 "$log"
+            echo "----- end runtime smoke log -----"
+          else
+            echo "Runtime did not create its diagnostic log."
+          fi
+          grep -F "function table:" "$log"
+          grep -F "entering guest at" "$log"
+          grep -F "XamLoaderLaunchTitle: default.xex" "$log"
+          grep -F "exiting: the title started its other executable" "$log"
+          grep -F "the title asked for default.xex: start that build yourself" "$log"
+          if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+            echo "Expected the development runner to exit normally or with its explicit handoff status; got $status"
+            exit 1
+          fi
+          echo "MW3 first-stage startup and explicit next-title handoff were reached."
 
       - name: Upload generated PPC inputs for isolated audits
         uses: actions/upload-artifact@v4
