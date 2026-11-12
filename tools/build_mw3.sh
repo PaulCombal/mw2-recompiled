@@ -36,6 +36,11 @@ export MW2_VERSION=tu0
 python3 tools/genshared.py
 python3 tools/gen_kernel_stubs.py
 
+if [[ "${1:-}" == "--compile-only" ]]; then
+    echo "MW3 PPC compilation complete; audit phase deferred to a separate job."
+    exit 0
+fi
+
 # Record metadata only. Generated game code and the user's executable are
 # never included in the uploaded audit artifacts.
 python3 tools/audit_mw3_generated.py build-mw3/libppc_recomp.a build-mw3/mw3-runtime-audit.txt
