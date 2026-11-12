@@ -1,6 +1,9 @@
 name: MW3 validation
 
 on:
+  push:
+    branches:
+      - mw3-bringup
   pull_request:
     paths:
       - "CMakeLists.txt"
