@@ -83,7 +83,7 @@ jobs:
 
   generated-code-build:
     # Configure this repository variable and secret to enable a real MW3 XEX build.
-    if: \${{ vars.MW3_ASSET_REPO != '' }}
+    if: ${{ vars.MW3_ASSET_REPO != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -92,8 +92,8 @@ jobs:
       - name: Check out private MW3 executable
         uses: actions/checkout@v6
         with:
-          repository: \${{ vars.MW3_ASSET_REPO }}
-          token: \${{ secrets.MW3_ASSET_REPO_TOKEN }}
+          repository: ${{ vars.MW3_ASSET_REPO }}
+          token: ${{ secrets.MW3_ASSET_REPO_TOKEN }}
           path: private
 
       - name: Verify and stage the exact supported executable
