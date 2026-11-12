@@ -120,6 +120,19 @@ jobs:
       - name: Recompile MW3 and compile generated PPC
         run: bash tools/build_mw3.sh --compile-only
 
+      - name: Link MW3 diagnostic desktop executable
+        run: |
+          cmake -S . -B build-mw3 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang-18 \
+            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DMW2_TITLE=mw3 \
+            -DMW3_RECOMP_ONLY=ON \
+            -DMW3_LINK_PROBE=ON \
+            -DMW2_USE_SDL=OFF \
+            -DMW2_LTO=OFF
+          cmake --build build-mw3 --target mw2 --parallel
+
       - name: Upload generated PPC inputs for isolated audits
         uses: actions/upload-artifact@v4
         with:
