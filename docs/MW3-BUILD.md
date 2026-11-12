@@ -16,7 +16,11 @@ bash tools/build_mw3.sh
 The script runs the existing MW3 XEX/recompiler pipeline and then configures
 CMake with `MW2_TITLE=mw3` and `MW3_RECOMP_ONLY=ON`. The resulting target
 compiles the generated PPC translation units into
-`build-mw3/libppc_recomp.a` without compiling or linking MW2 runtime sources.
+`build-mw3/libppc_recomp.a` and compiles the shared
+`runtime/kernel/*.cpp` handlers as object files against the generated MW3
+headers. The kernel object target is compile-only: it does not link an
+executable or establish that MW2-derived handlers are semantically correct
+for MW3. Title-specific hooks, globals and full runtime linking remain gated.
 
 Equivalent CMake commands, after `ppc_mw3/` has been generated:
 
