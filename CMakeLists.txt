@@ -171,19 +171,54 @@ if(MW3_RECOMP_ONLY)
          "${CMAKE_SOURCE_DIR}/runtime/kernel/*.cpp")
     # The runtime's own sources, which name the title through runtime/title.h:
     # compiling them against MW3's block checks that every entry the code needs
-    # is there or compiled out. Not gpu/, apu/, online/ or install/, which need
-    # Vulkan, FFmpeg, generated data or the title's hashes.
+    # is there or compiled out. gpu/, apu/, install/ and online/ come too, with
+    # placeholder hashes and playlist data (nothing is linked, so the values are
+    # never used). The Vulkan renderer and the XMA decoder are added only where
+    # their headers are installed, so a machine with them checks more.
     file(GLOB MW3_TITLE_SOURCES CONFIGURE_DEPENDS
-         "${CMAKE_SOURCE_DIR}/runtime/*.cpp")
+         "${CMAKE_SOURCE_DIR}/runtime/*.cpp"
+         "${CMAKE_SOURCE_DIR}/runtime/gpu/*.cpp"
+         "${CMAKE_SOURCE_DIR}/runtime/apu/*.cpp"
+         "${CMAKE_SOURCE_DIR}/runtime/install/*.cpp"
+         "${CMAKE_SOURCE_DIR}/runtime/online/*.cpp")
+    list(REMOVE_ITEM MW3_TITLE_SOURCES "${CMAKE_SOURCE_DIR}/runtime/apu/xma.cpp")
+    set(MW3_OPTIONAL_NOTES "")
+    find_package(Vulkan QUIET)
+    if(Vulkan_FOUND)
+        file(GLOB MW3_VULKAN_SOURCES CONFIGURE_DEPENDS
+             "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/*.cpp")
+        list(REMOVE_ITEM MW3_VULKAN_SOURCES
+             "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_build.cpp")
+        list(APPEND MW3_TITLE_SOURCES ${MW3_VULKAN_SOURCES})
+        string(APPEND MW3_OPTIONAL_NOTES " vulkan")
+    endif()
+    find_path(MW3_AVCODEC_DIR libavcodec/avcodec.h
+              HINTS "${CMAKE_SOURCE_DIR}/third_party/ffmpeg-xenia")
+    if(MW3_AVCODEC_DIR)
+        list(APPEND MW3_TITLE_SOURCES "${CMAKE_SOURCE_DIR}/runtime/apu/xma.cpp")
+        string(APPEND MW3_OPTIONAL_NOTES " xma")
+    endif()
+    message(STATUS "MW3 compile check: optional sources:${MW3_OPTIONAL_NOTES}")
+    file(WRITE "${CMAKE_BINARY_DIR}/mw3-check-generated/playlists_data.h"
+         "// Placeholder for the MW3 compile check only.\nstatic const unsigned char kPlaylists[] = { 0 };\nstatic constexpr unsigned kPlaylistsSize = 1;\n")
     add_library(mw3-runtime-compile-check OBJECT ${MW3_KERNEL_SOURCES} ${MW3_TITLE_SOURCES})
     target_include_directories(mw3-runtime-compile-check PRIVATE
         "${MW2_PPC_DIR}"
         "${CMAKE_SOURCE_DIR}/runtime"
+        "${CMAKE_BINARY_DIR}/mw3-check-generated"
         "${CMAKE_SOURCE_DIR}/XenonRecomp/thirdparty/simde")
+    if(MW3_AVCODEC_DIR)
+        target_include_directories(mw3-runtime-compile-check PRIVATE "${MW3_AVCODEC_DIR}")
+    endif()
+    if(Vulkan_FOUND)
+        target_link_libraries(mw3-runtime-compile-check PRIVATE Vulkan::Headers)
+    endif()
     target_compile_options(mw3-runtime-compile-check PRIVATE
         -march=${MW2_X86_LEVEL} -fwrapv)
     target_compile_definitions(mw3-runtime-compile-check PRIVATE
-        MW3_TITLE=1 MW2_DIAGNOSTICS=0)
+        MW3_TITLE=1 MW2_DIAGNOSTICS=0
+        MW2_XEX_SHA256_SP="compile-check" MW2_XEX_SHA256_MP="compile-check"
+        MW2_DISC_SHA256_SP="compile-check" MW2_DISC_SHA256_MP="compile-check")
 
     add_custom_target(mw3-recomp-check)
     add_dependencies(mw3-recomp-check ppc_recomp mw3-runtime-compile-check)

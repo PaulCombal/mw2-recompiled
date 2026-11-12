@@ -22,6 +22,19 @@ headers. The kernel object target is compile-only: it does not link an
 executable or establish that MW2-derived handlers are semantically correct
 for MW3. Title-specific hooks, globals and full runtime linking remain gated.
 
+The object target `mw3-runtime-compile-check` covers the whole runtime tree that
+can be compiled without a GPU or decoder library: `runtime/*.cpp`, `kernel/`,
+`gpu/`, `apu/`, `install/` and `online/` (88 sources at the time of writing).
+Title hashes and the playlist data are placeholders, since nothing is linked.
+The Vulkan renderer (`gpu/vulkan/`, minus `shader_build.cpp`, which needs
+CMake's shader hash) and `apu/xma.cpp` are added only when CMake finds the
+Vulkan headers or `libavcodec/avcodec.h`; the configure step prints which
+optional sources were included. A machine without them still verifies every
+other file, and a CI image with `libvulkan-dev` checks the renderer too. What is
+still missing for a linked MW3 executable: MW3 values for the D3D device offsets
+and the seven hooks not yet found, the title's real hashes and launcher
+plumbing, and the SDL/Vulkan/FFmpeg dependencies on the build machine.
+
 Equivalent CMake commands, after `ppc_mw3/` has been generated:
 
 ```sh
