@@ -26,7 +26,7 @@ cmake -S . -B build-mw3 -G Ninja \
     -DMW3_RECOMP_ONLY=ON \
     -DMW2_LTO=OFF
 
-cmake --build build-mw3 --target mw3-recomp-check --parallel "\${JOBS:-$(nproc)}"
+cmake --build build-mw3 --target mw3-recomp-check --parallel "${JOBS:-$(nproc)}"
 
 # Generate the same shared declarations/import inventory used by the MW2
 # executable build, but explicitly route title.py to MW3. These are diagnostic
