@@ -25,6 +25,8 @@ The generated-code CI artifacts for the validated private MW3 XEX were inspected
 - `KeInitializeDpc` receives callback guest address `0x820A9568`, mapped to `sub_820A9568`, and a per-entry deferred-context pointer.
 - The callback treats r4 as its deferred context and r5 as a completion value. It reads a counter at context offset `0x54`, writes the value into one of four 32-bit ring slots at offsets `0x5C` through `0x68`, increments the counter, and signals a `KeSetEvent` event at context offset `0x3C`.
 - This is a completion/counter notification callback, not an arbitrary worker routine.
+- The initializer also invokes a thread-creation helper with guest entry point `0x820A93D0` and the same per-entry context. The mapped worker `sub_820A93D0` waits on the event at context offset `0x3C` and calls `sub_820A9110` to consume completion records.
+- The consumer compares producer and consumer counters at context offsets `0x54` and `0x58`, reads the same four-slot ring at `0x5C` through `0x68`, and advances the consumer counter. The callback is therefore a short DPC-level producer; the guest worker performs the downstream completion handling.
 
 ### Matching initialized and queued DPC records
 
@@ -35,7 +37,7 @@ The initialization and insertion paths resolve to the same parent object and sam
 - `sub_8209C588` passes the same parent object pointer to `sub_820A95A0`. The insertion function selects the entry from the index field at object offset `0x2CBC`, multiplies the index by `0x6C`, and computes the DPC address at object offset `0x2CE0`. This matches the initializer's DPC array formula.
 - The initialization parent also calls `VdInitializeEngines` and `VdSetGraphicsInterruptCallback`. The insertion caller takes the object's spin lock before its conditional queue path.
 
-**Interpretation:** the matching base, index, offset, and stride, together with video-engine initialization and graphics-interrupt callback registration, are strong evidence that these DPCs implement a graphics-interrupt/completion notification path. The callback's event and four-slot completion ring are consistent with that role. Exact GPU fence semantics, runtime ordering, and Xbox DPC scheduler behavior remain unproven.
+**Interpretation:** the matching base, index, offset, and stride, together with video-engine initialization and graphics-interrupt callback registration, are strong evidence that these DPCs implement a graphics-interrupt/completion notification path. The callback's event and four-slot completion ring, plus the worker's producer/consumer loop, are consistent with that role. Exact GPU fence semantics, runtime ordering, and Xbox DPC scheduler behavior remain unproven.
 
 The DPC object is therefore not shown to be stack-local: its address is derived from the persistent parent object and indexed record array. The earlier stack-local interpretation was incorrect; it confused saved register provenance with the actual guest object base.
 
@@ -85,7 +87,7 @@ Do not implement these imports yet. The MW3 object relationship and callback rol
 
 1. Obtain authoritative Xbox 360 KDPC layout evidence (XDK headers, symbols, validated emulator implementation, or direct guest access patterns); reconcile the 0x18 versus 0x1C discrepancy in the tentative Xenia representation.
 2. Verify the six-entry record array, per-entry context/DPC offsets, and ring/event behavior against independent XEX disassembly or symbols where available; confirm whether all six entries are active on target hardware.
-3. Trace the graphics interrupt producer and consumer, including how the completion value passed as system argument 1 is generated and interpreted, and determine the required thread/IRQL/dispatch timing.
+3. Trace the graphics interrupt producer and consumer further, including how the completion value passed as system argument 1 is generated and interpreted, and determine the required thread/IRQL/dispatch timing.
 4. Design a real queued-dispatch mechanism with duplicate suppression, argument capture, callback lifetime, guest stack/KPCR/TLS, synchronization, shutdown behavior, and a defined dispatch boundary.
 5. Add synthetic tests for initialization, invalid callback handling, queue success, duplicate insertion, argument delivery, requeue during callback, and safe callback failure. Only then wire the handlers and run CI.
 
