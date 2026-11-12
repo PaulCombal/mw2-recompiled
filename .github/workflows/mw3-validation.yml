@@ -133,6 +133,33 @@ jobs:
             -DMW2_LTO=OFF
           cmake --build build-mw3 --target mw2 --parallel
 
+      - name: Smoke-test MW3 runtime with the private XEX
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/mw3-runtime-smoke.log"
+          set +e
+          timeout --signal=TERM --kill-after=5s 35s env \
+            MW2_RUN_SECONDS=12 \
+            MW2_LOG_FILE="$log" \
+            ./build-mw3/mw3 mw3/tu0/default.xex mw3/tu0
+          status=$?
+          set -e
+          if [ -f "$log" ]; then
+            echo "----- MW3 runtime smoke log -----"
+            tail -n 160 "$log"
+            echo "----- end runtime smoke log -----"
+          else
+            echo "Runtime did not create its diagnostic log."
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "MW3 runtime smoke test exited with status $status"
+            exit "$status"
+          fi
+          grep -F "function table:" "$log"
+          grep -F "entering guest at" "$log"
+          grep -F "run deadline: reporting and exiting after 12 seconds" "$log"
+          grep -F "exiting: the run deadline was reached" "$log"
+
       - name: Upload generated PPC inputs for isolated audits
         uses: actions/upload-artifact@v4
         with:
