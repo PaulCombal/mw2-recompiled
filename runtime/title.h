@@ -46,12 +46,20 @@
 // the engine
 #define T_Com_Error            8229D688   // logs the error and who raised it; takes (code, format, ...) as MW2's does
 
-// Located, not enabled. Each reads a field of D3D's device (D3D9's present, the
-// arena wait) or of the title's own structures at an MW2 offset, and the device
-// moved: [r3+10896] in MW2 is [r3+11024] here, +21628 is +21908. Each hook has to
-// be given the MW3 offset before its entry goes in.
-//   T_D3D_Present                820A16E8
-//   T_D3D_ArenaWait              8209B5E8
+// D3D9's device structure moved between the games; the two offsets the runtime
+// reads (gpu/d3d_hooks.cpp) were found by laying sub_820A11B8 (the flip packet
+// writer, MW2's sub_820C2E60) beside its MW2 counterpart: the same code, every
+// large offset shifted (10900 -> 11028, 13596 -> 13872, 11860 -> 12156,
+// 10941 -> 11069), and by the arena wait's own first load.
+#define T_DEV_PresentInterval  13872u   // D3DRS_PRESENTINTERVAL (MW2: 13596)
+#define T_DEV_ProgressBlock    11024u   // the arena progress block (MW2: 10896)
+
+// the D3D9 library's hooks, found by call structure (docs/MW3-BRINGUP.md)
+#define T_D3D_Present          820A16E8   // takes the device in r3 and writes its flip
+#define T_D3D_ArenaWait        8209B5E8   // first instruction loads [r3+11024]
+
+// Located, not enabled: each reads fields of the title's own structures at MW2
+// offsets, which have not been re-derived (MW2's +21628 is +21908 on the device).
 //   T_D3D_InitPixelShader        820984F0
 //   T_Cbuf_AddText               8228CA48
 //   T_Memcard_InitializeSystem   8232EC08
@@ -585,6 +593,14 @@
 #define T_DATA_Spa                0x83E60000u
 #define T_DATA_SpaSize            625298u
 
+#endif
+
+// The device offsets of MW2's D3D9 (docs/d3d9-seam.md); MW3's block above has its own.
+#ifndef T_DEV_PresentInterval
+#define T_DEV_PresentInterval  13596u
+#endif
+#ifndef T_DEV_ProgressBlock
+#define T_DEV_ProgressBlock    10896u
 #endif
 
 // The macros that turn a table entry into the symbols the recompiled code uses.

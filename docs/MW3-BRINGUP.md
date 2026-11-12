@@ -181,6 +181,22 @@ repeats steps 1 and 3 from `mw3/tu0/default.xex` in about 15 seconds.
 - **Gotcha:** XenonRecomp crashes with a null `FILE*` and no message when its
   output directory (`ppc_mw3/`) does not exist.
 
+### D3D9 device offsets and the first two hooks
+
+The two hooks that carry the frame loop, `T_D3D_Present` and `T_D3D_ArenaWait`, are enabled in the MW3 title block. Their bodies read two fields of D3D9's device structure, which moved. Both are now table entries (`T_DEV_PresentInterval`, `T_DEV_ProgressBlock`) instead of constants in `gpu/d3d_hooks.cpp`; MW2's blocks keep 13596 and 10896.
+
+How the MW3 values were found: `sub_820A11B8` writes the flip packet (the immediates 1401 and 15360 appear in it and in MW2's `sub_820C2E60`) and has the same sequence of device accesses in the same order, every large offset shifted:
+
+| Field | MW2 | MW3 |
+|---|---|---|
+| ring position (read twice around the packet) | 10900 | 11028 |
+| `D3DRS_PRESENTINTERVAL` | 13596 | 13872 |
+| a field read after it | 11860 | 12156 |
+| a flag byte | 10941 | 11069 |
+| arena progress block (first load of `sub_8209B5E8`) | 10896 | 11024 |
+
+The shift is not uniform (+128, +276, +296), so none of these can be derived from another by adding a constant. `sub_820A16E8` takes the device in `r3` and uses 11024 and 21908 on it, consistent with the table. Not yet checked on a live boot: that the interval field is read by the flip handler the way MW2's is, and the remaining device offsets in `docs/d3d9-seam.md` (command buffer base, cursor and end), which the runtime does not read from the guest today.
+
 ## Title update
 
 The disc's executable and the title-updated one differ, and the recompiled

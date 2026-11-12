@@ -28,7 +28,7 @@ namespace
     // length from the blanks counted rather than from the clock.
     void Unsynchronise(uint32_t device)
     {
-        constexpr uint32_t kPresentInterval = 13596;    // in D3D9's device structure
+        constexpr uint32_t kPresentInterval = T_DEV_PresentInterval;   // in D3D9's device structure
         constexpr uint32_t kIntervalImmediate = 0x80000000;
         *GuestPtr<be32>(device + kPresentInterval) = kIntervalImmediate;
 
@@ -64,13 +64,13 @@ GUEST_HOOK(T_D3D_Present)
 // The device's other fields are in docs/d3d9-seam.md.
 GUEST_HOOK(T_D3D_ArenaWait)
 {
-    constexpr uint32_t kProgressBlock = 10896;   // in D3D9's device structure
+    constexpr uint32_t kProgressBlock = T_DEV_ProgressBlock;   // in D3D9's device structure
     if (const uint32_t block = *GuestPtr<be32>(ctx.r3.u32 + kProgressBlock))
         gpu::SetArenaProgressBlock(block);
     GUEST_ORIG(T_D3D_ArenaWait)(ctx, base);
 }
 
-#if MW2_DIAGNOSTICS
+#if MW2_DIAGNOSTICS && defined(T_D3D_ReplayRecording)
 namespace
 {
     std::atomic<uint64_t> g_endless{ 0 };
