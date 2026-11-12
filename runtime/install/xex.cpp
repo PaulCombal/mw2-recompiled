@@ -61,23 +61,6 @@ bool install::xex::Header(const std::vector<uint8_t>& file, std::vector<uint8_t>
     return true;
 }
 
-bool install::xex::Header(const std::vector<uint8_t>& file, std::vector<uint8_t>& header, std::string& error)
-{
-    std::map<uint32_t, uint32_t> headers;
-    if (!Headers(file, headers)) { error = "not an XEX2 file"; return false; }
-
-    const uint32_t headerSize = Be32(file, 0x08);
-    const uint32_t count = Be32(file, 0x14);
-    const uint64_t directoryEnd = 0x18ull + uint64_t(count) * 8;
-    if (headerSize < directoryEnd || headerSize > file.size())
-    {
-        error = "the XEX header size is invalid";
-        return false;
-    }
-
-    header.assign(file.begin(), file.begin() + headerSize);
-    return true;
-}
 
 bool install::xex::Image(const std::vector<uint8_t>& file, std::vector<uint8_t>& image, std::string& error)
 {
