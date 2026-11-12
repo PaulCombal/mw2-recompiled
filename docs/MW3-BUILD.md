@@ -1,9 +1,15 @@
 # Building the MW3 generated-code target
 
-MW3 is not yet ready to link against the MW2 runtime. Its campaign executable
-has its own entry point, globals and engine hooks; the addresses in
-`runtime/title.h` are MW2 addresses. Do not enable the MW2 runtime for MW3 by
-copying or guessing those addresses.
+MW3 does not yet have a validated, title-complete runtime. Its campaign
+executable has its own entry point, globals and engine hooks; the addresses in
+`runtime/title.h` are MW2 addresses. Do not copy or guess those addresses.
+
+An isolated diagnostic link probe now exists behind `MW3_LINK_PROBE=ON`.
+It links the existing host runtime with the generated MW3 PPC library and
+produces a headless `mw3` executable. This proves link compatibility only;
+it does not establish that MW3 boots or that MW2-derived kernel and graphics
+handlers have correct MW3 semantics. The CI workflow is being extended to run
+a short, deadline-bounded execution test against the private supported XEX.
 
 ## Build the current MW3 milestone
 
@@ -45,10 +51,30 @@ cmake -S . -B build-mw3 -G Ninja \
 cmake --build build-mw3 --target mw3-recomp-check --parallel
 ```
 
+## Diagnostic desktop link probe
+
+The optional CI link probe uses the same pinned XEX identity and links the
+generated MW3 PPC static library with the host runtime:
+
+```sh
+cmake -S . -B build-mw3 -G Ninja \
+  -DCMAKE_C_COMPILER=clang-18 \
+  -DCMAKE_CXX_COMPILER=clang++-18 \
+  -DMW2_TITLE=mw3 -DMW3_RECOMP_ONLY=ON -DMW3_LINK_PROBE=ON \
+  -DMW2_USE_SDL=OFF -DMW2_LTO=OFF
+cmake --build build-mw3 --target mw2 --parallel
+```
+
+The target's output file is `build-mw3/mw3`. It accepts an explicit XEX
+path and game-root path. Do not upload or publish this executable: it contains
+recompiled code derived from the user's private game executable. CI should run
+it in place on the runner and retain only appropriately sanitized diagnostics.
+
 ## Scope and limitations
 
-- This milestone validates compilation of generated MW3 PPC C++ only.
-- It does not produce a desktop game executable, PS4 ELF, PKG or playable build.
+- Generated MW3 PPC compilation and diagnostic desktop linking are validated.
+- Runtime execution and guest startup are not yet proven.
+- No PS4 ELF, PKG or playable build exists.
 - The runtime hook table in `runtime/title.h` remains MW2-specific.
 - MW3 hook candidates must be checked against the exact MW3 XEX before they
   are added. Unknown hooks stay undefined rather than inheriting MW2 addresses.
