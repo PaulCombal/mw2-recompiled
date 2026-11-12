@@ -87,17 +87,18 @@ return values or claim runtime compatibility from this report.
 
 The CI build also runs `tools/audit_mw3_startup.py` after generating MW3 PPC
 sources and kernel import glue. It resolves the XEX entry-point mapping to
-XenonRecomp's `_xstart` symbol, indexes generated implementation/wrapper
-bodies from both `ppc_recomp.*.cpp` and `ppc_func_mapping.cpp`, and follows
-direct generated calls of the form `function(ctx, base)`. The mapping file
-must be indexed because XenonRecomp emits the entry wrapper there. The audit
-stops at kernel/XAM imports and reports the imports reachable from startup,
-which of those are direct entry-point calls, and which still have only
-diagnostic logging stubs.
+XenonRecomp's `_xstart` implementation, indexes generated function bodies,
+and follows direct generated calls of the form `function(ctx, base)`.
+Importantly, XenonRecomp emits guest-callable functions as weak alias
+declarations such as `sub_XXXXXXXX` pointing to implementation bodies named
+`__imp__sub_XXXXXXXX`; these aliases are resolved before traversing the
+call graph. The report separately classifies known PowerPC save/restore
+helper references from other unresolved call targets.
 
 This is a static direct-call approximation, not a dynamic execution trace.
-Indirect calls, callbacks, data imports, and runtime-selected thread entry
-points are not resolved. Reachability does not imply that a conditional path
-executes during a normal boot. Existing runtime matches remain macro-level
-only; no kernel import is promoted to verified MW3 compatibility by this
-report. The artifact contains names/counts only, not generated game source.
+Indirect calls, function pointers, callbacks, data imports, and runtime-selected
+thread entry points are not resolved. Reachability does not imply that a
+conditional path executes during a normal boot. Existing runtime matches
+remain macro-level only; no kernel import is promoted to verified MW3
+compatibility by this report. The artifact contains names/counts only, not
+generated game source.
