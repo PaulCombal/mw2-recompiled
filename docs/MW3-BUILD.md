@@ -60,3 +60,25 @@ GitHub only exposes the manual **Run workflow** control after a workflow with
 `workflow_dispatch` is present on the repository's default branch. While this
 draft PR remains unmerged, a new commit to a path watched by the
 `pull_request` trigger (including this document) will rerun the PR workflow.
+
+## Generated runtime audit
+
+The full CI build also runs `tools/genshared.py` and
+`tools/gen_kernel_stubs.py` with `MW2_TITLE=mw3` and `MW2_VERSION=tu0`,
+then runs `tools/audit_mw3_generated.py`. The audit artifact contains symbol
+names and counts only; it does not contain the XEX or generated PPC source.
+
+The report checks whether the XEX entry point recorded for this supported
+image (`0x82459E58`) appears in `ppc_func_mapping.cpp`, compares the 258-style
+MW3 import inventory with the existing `runtime/kernel/*.cpp` macro
+implementations, lists imports that would receive diagnostic logging stubs,
+and separates unresolved kernel-import wrappers from other host link symbols.
+It also records host-object relocation types. Those relocations describe the
+CI runner's object format; they are not Xbox XEX loader relocations.
+
+An import counted as implemented is only a macro-level match. It does not
+prove that the existing MW2 implementation is semantically correct for MW3.
+Generated logging stubs return zero and are temporary diagnostics, not real
+kernel implementations. Review each missing import in the context of the
+MW3 boot path before implementing it. Do not replace the stubs with guessed
+return values or claim runtime compatibility from this report.
