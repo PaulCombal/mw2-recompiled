@@ -35,8 +35,8 @@ The current validated executable produces the following audit results:
 - 142 generated PPC translation units and 36,235 generated function definitions.
 - 36,493 function references.
 - 9,964 generated implementation nodes reachable from the startup entry point through the audited direct-call graph.
-- 258 kernel/XAM imports: 191 match existing runtime implementation macros and 67 are diagnostic logging stubs.
-- 27 reachable imports are covered only by logging stubs.
+- 258 kernel/XAM imports: 201 match existing runtime implementation macros and 57 are diagnostic logging stubs (full-image, name-level audit).
+- 17 reachable imports are covered only by logging stubs (171 of 188 reachable imports match existing runtime definitions; macro-level coverage only).
 - The DPC audit identifies one reachable direct callsite each for `KeInitializeDpc` and `KeInsertQueueDpc`.
 
 These are static-analysis and compilation results, not evidence that the game executes those paths successfully. A macro-level runtime match does not establish semantic compatibility with MW3. Logging stubs are placeholders, not implementations.

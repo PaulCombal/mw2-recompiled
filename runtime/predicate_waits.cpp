@@ -56,6 +56,7 @@ namespace
     }
 }
 
+#if !defined(MW3_TITLE) // T_Job_WaitPredicate is not located in MW3: MW2-only hook
 GUEST_HOOK(T_Job_WaitPredicate)
 {
     PredicateWait& w = MyPredicate();
@@ -99,6 +100,8 @@ GUEST_HOOK(T_Job_WaitPredicate)
         break;
     }
 }
+
+#endif
 
 void engine::ReportPredicateWaits()
 {
