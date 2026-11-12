@@ -191,7 +191,7 @@ def analyze_dpc_array_relationship(functions: dict[str, str]) -> list[str]:
         "- The initializer loop covers six entries (0x7F000000 through 0x7F000280, stepping by 0x80).",
         "- Per-entry context begins at object_base + 0x2CC0 + index * 0x6C.",
         "- The initialized DPC object begins at object_base + 0x2CE0 + index * 0x6C (context + 0x20).",
-        "- The insertion path selects the entry using the object's index field at offset 0x2CCC, then computes the same DPC offset.",
+        "- The insertion path selects the entry using the object's index field at offset 0x2CBC, then computes the same DPC offset.",
         "- The callback stores its first system argument into a four-slot ring at context + 0x5C..0x68, reads/increments the ring counter at context + 0x54, and signals an event at context + 0x3C.",
     ]
     if ("__imp__VdInitializeEngines" in startup
@@ -242,13 +242,14 @@ def self_test() -> None:
     folded_constants[11] = -2113208320
     callback = abstract_expr("ctx.r11.s64 + -27288", folded_state, folded_constants)
     assert callback.startswith("constant 0x820A9568")
-    assert analyze_dpc_array_relationship({
-        "__imp__sub_820A9670": "ctx.r30.u64 = ctx.r3.u64; ctx.r31.s64 = ctx.r30.s64 + 11524; ctx.r31.s64 = ctx.r31.s64 + 108; ctx.r3.s64 = ctx.r31.s64 + -36; ctx.r28.s64 = ctx.r31.s64 + -68;",
+    correlation = analyze_dpc_array_relationship({
+        "__imp__sub_820A9670": "ctx.r30.u64 = ctx.r3.u64; ctx.r31.s64 = ctx.r30.s64 + 11524; ctx.r31.s64 = ctx.r31.s64 + 108; ctx.r3.s64 = ctx.r31.s64 + -36; ctx.r28.s64 = ctx.r31.s64 + -68; ctx.r27.s64 = 2130706432; ctx.r27.s64 = ctx.r27.s64 + 128; ctx.r11.u64 = ctx.r11.u64 | 768;",
         "__imp__sub_820A95A0": "ctx.r26.u64 = ctx.r3.u64; PPC_LOAD_U32(ctx.r26.u32 + 11452); ctx.r11.s64 = ctx.r11.s64 * 108; ctx.r11.u64 = ctx.r11.u64 + ctx.r26.u64; ctx.r3.s64 = ctx.r11.s64 + 11488;",
-        "__imp__sub_820A9568": "PPC_LOAD_U32(ctx.r4.u32 + 84); ctx.r10.s64 = ctx.r10.s64 + 23; PPC_STORE_U32(r11.u32 + 84, ctx.r10.u32); __imp__KeSetEvent(ctx, base);",
+        "__imp__sub_820A9568": "PPC_LOAD_U32(ctx.r4.u32 + 84); ctx.r10.s64 = ctx.r10.s64 + 23; PPC_STORE_U32(r11.u32 + 84, ctx.r10.u32); PPC_STORE_U32(ctx.r10.u32 + r11.u32, ctx.r9.u32); ctx.r3.s64 = r11.s64 + 60; __imp__KeSetEvent(ctx, base);",
         "__imp__sub_820A6788": "__imp__VdInitializeEngines(ctx, base); __imp__VdSetGraphicsInterruptCallback(ctx, base); sub_820A9670(ctx, base);",
         "__imp__sub_8209C588": "__imp__KfAcquireSpinLock(ctx, base); sub_820A95A0(ctx, base);",
     })
+    assert correlation and any("0x2CE0" in line for line in correlation)
     print("DPC callsite provenance self-test passed")
 
 
