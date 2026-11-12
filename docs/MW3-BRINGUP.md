@@ -201,6 +201,8 @@ The shift is not uniform (+128, +276, +296), so none of these can be derived fro
 
 `T_D3D_InitPixelShader` (820984F0) and `T_D3D_PatchVertexFetches` (820A4468) are enabled. The first is statement-for-statement MW2's `sub_820B8B58`. The second was found by searching both executables' generated code for the four large immediates MW2's `sub_820B6B10` uses (22413312, 3145728, -1077542912, -1077936128): each executable has exactly one such function, both are 1572 bytes, and their sequences of structure accesses are identical. The hooks only read a shader's header after D3D's own routine ran and check its magic first, falling back to compile-at-first-draw, so a wrong guess costs startup time rather than correctness. Not checked on a live boot.
 
+`tools/find_by_immediates.py ADDR` automates that search. Run on the other hooks it was not conclusive: for `D3D_ReplayRecording` it lists six D3D-library functions with the same constants but different access sequences (MW3's D3D build differs there), for `Job_WaitPredicate` only tiny candidates with the wrong size, and `Dvar_RegisterInt` has no large immediates to search by. `CG_ViewFov`, `DB_MissingAsset` and `D3D_ReplayRecording` (diagnostics only) remain unlocated; they need a structural match on calls and strings-free data references, not constants.
+
 ## Title update
 
 The disc's executable and the title-updated one differ, and the recompiled
