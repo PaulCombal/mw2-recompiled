@@ -111,6 +111,7 @@ namespace
     std::mutex g_unimplLock;
     std::map<std::string, uint64_t> g_unimpl;
 
+#if defined(MW3_TITLE)
     void InstallExecutableModuleHandle(const std::vector<uint8_t>& xexHeader)
     {
         if (xexHeader.empty()) return; // Flat-PE development runs have no XEX metadata.
@@ -167,6 +168,7 @@ namespace
         LOGI("XexExecutableModuleHandle: import %08X -> handle slot %08X -> LDR %08X -> XEX header %08X (%zu bytes)",
              importRecord, handleSlot, ldrAddress, headerAddress, xexHeader.size());
     }
+#endif
 }
 
 namespace
@@ -205,7 +207,11 @@ void kernel::Initialise(const std::filesystem::path& gameRoot, const std::vector
     ReadTlsDirectory();
     InstallTimeStampBundle();
     InstallDebugMonitorData();
+#if defined(MW3_TITLE)
     InstallExecutableModuleHandle(xexHeader);
+#else
+    (void)xexHeader;
+#endif
     g_gameRoot = gameRoot;
     LOGI("game root: %s%s", gameRoot.string().c_str(),
          std::filesystem::exists(gameRoot) ? "" : "  (does not exist)");
