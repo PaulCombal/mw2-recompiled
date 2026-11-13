@@ -111,6 +111,8 @@ namespace
     std::mutex g_unimplLock;
     std::map<std::string, uint64_t> g_unimpl;
 
+    uint32_t g_executableXexHeader = 0;
+
 #if defined(MW3_TITLE)
     void InstallExecutableModuleHandle(const std::vector<uint8_t>& xexHeader)
     {
@@ -164,6 +166,7 @@ namespace
         *GuestPtr<be32>(ldrAddress + kXexHeaderBaseOffset) = headerAddress;
         *GuestPtr<be32>(handleSlot) = ldrAddress;
         *GuestPtr<be32>(importRecord) = handleSlot;
+        g_executableXexHeader = headerAddress;
 
         LOGI("XexExecutableModuleHandle: import %08X -> handle slot %08X -> LDR %08X -> XEX header %08X (%zu bytes)",
              importRecord, handleSlot, ldrAddress, headerAddress, xexHeader.size());
@@ -451,3 +454,5 @@ bool kernel::DeliverUserApcs(const PPCContext& caller)
     }
     return true;
 }
+
+uint32_t kernel::ExecutableXexHeader() { return g_executableXexHeader; }

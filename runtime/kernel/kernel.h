@@ -10,6 +10,11 @@
 
 namespace kernel
 {
+    // Guest address of the executable's XEX header as the loader would have
+    // placed it (the one XexExecutableModuleHandle's module entry points to), or
+    // zero for a run with no XEX metadata, such as a flat-PE development run.
+    uint32_t ExecutableXexHeader();
+
     // The threads blocked in a kernel wait, and on what: for the watchdog.
     void ReportWaits();
 
