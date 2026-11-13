@@ -13,8 +13,10 @@ git-ignored.
 - Ubuntu 24.04, or Windows with WSL2 running Ubuntu 24.04. On WSL, keep the
   repository and game files inside the Linux filesystem (`~/`), not under
   `/mnt/c`, which is many times slower.
-- About 25 GB of free disk space once all image packs are in place, and 8 GB of
-  RAM or more. The recompile builds about 36,000 functions into a large library.
+- Plenty of free disk space and RAM: the game files are about 5 GB with all four
+  image packs, and the recompile builds about 36,000 functions into a large
+  library. I have not measured the build's own footprint; 20 GB free and 8 GB of
+  RAM are guesses, and the compile is the step that fails first if they are short.
 - Your own game files, extracted from your disc.
 
 ```sh
