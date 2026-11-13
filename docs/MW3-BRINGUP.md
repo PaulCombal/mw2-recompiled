@@ -223,6 +223,13 @@ Run 43390210714, with `imagefile1.pak` supplied (113,864,516 bytes): accepted, 1
 
 Run 43392106086, with `imagefile3.pak` supplied: accepted (17 frames, 802 draw packets, 301 audio callbacks). The title then asks for `D:\imagefile4.pak`. Request order so far is 1, 3, 4; `imagefile2.pak` (1.89 GB) has not been asked for yet. Same ending each time: dirty-disc error, dashboard.
 
+### Hooks checked without game files
+
+- `RtlRaiseException` is implemented: MW3 raises `0x406D1388` (the thread-naming convention) from its thread start-up, the only unimplemented import the smoke runs reached; the calling host thread is now named and other codes are logged.
+- `T_Image_FlushMove` (823D4398) is enabled. MW2's `sub_823A52F8` and it make the same 20 calls in the same order (callees map one to one) and use destination, source and size the same way; only a device offset moved (13320 -> 14472). The hook wraps the function without reading any structure.
+- `T_Memcard_InitializeSystem` (8232EC08) stays disabled. The function is MW2's shape (it clears a memcard structure, 6928 bytes against MW2's 3208, then initializes it), but the hook writes into a separate per-controller device table whose MW3 address is not known: MW2's table is not inside the cleared structure (it lies 11,392 bytes below it, at 0x83A53020) and no MW2 code builds its address directly, so it is reached through a base and an index. Its absence costs a one-time save-device prompt, not boot.
+- `T_Cbuf_AddText` and `T_CG_CullZoom` are not yet checked this way.
+
 ## Title update
 
 The disc's executable and the title-updated one differ, and the recompiled
