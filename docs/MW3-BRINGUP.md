@@ -221,6 +221,8 @@ Run 43390210714, with `imagefile1.pak` supplied (113,864,516 bytes): accepted, 1
 
 `imagefile3.pak` (18 MB) was then added to the private repository and the smoke test rerun.
 
+Run 43392106086, with `imagefile3.pak` supplied: accepted (17 frames, 802 draw packets, 301 audio callbacks). The title then asks for `D:\imagefile4.pak`. Request order so far is 1, 3, 4; `imagefile2.pak` (1.89 GB) has not been asked for yet. Same ending each time: dirty-disc error, dashboard.
+
 ## Title update
 
 The disc's executable and the title-updated one differ, and the recompiled
