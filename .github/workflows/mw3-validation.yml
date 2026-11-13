@@ -36,6 +36,7 @@ jobs:
           python tools/audit_mw3_startup.py --self-test
           python tools/audit_mw3_dpc.py --self-test
           python tools/audit_mw3_xex_module_handle.py --self-test
+          python -m py_compile tools/audit_mw3_indirect_target.py
 
       - name: Test MW2-to-MW3 hook matcher
         run: python tools/port_hooks.py --selftest
@@ -139,6 +140,12 @@ jobs:
             -DMW2_LTO=OFF
           cmake --build build-mw3 --target mw2 --parallel
 
+      - name: Audit the unresolved MW3 indirect-call target
+        run: |
+          set -euo pipefail
+          python3 tools/audit_mw3_indirect_target.py --address 0x823E0968 --report build-mw3/mw3-indirect-target-audit.txt
+          cat build-mw3/mw3-indirect-target-audit.txt
+
       - name: Smoke-test MW3 runtime with the private XEX
         run: |
           set -euo pipefail
@@ -184,6 +191,7 @@ jobs:
           python3 tools/audit_mw3_xex_module_handle.py --source-dir ppc_mw3 | tee build-mw3/mw3-xex-module-handle-audit.txt
 
       - name: Upload MW3 runtime audit metadata
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: mw3-runtime-audit-metadata
@@ -192,6 +200,7 @@ jobs:
             build-mw3/mw3-startup-callgraph.txt
             build-mw3/mw3-dpc-callsites.txt
             build-mw3/mw3-xex-module-handle-audit.txt
+            build-mw3/mw3-indirect-target-audit.txt
             ppc_mw3/kernel_imports.txt
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 14
