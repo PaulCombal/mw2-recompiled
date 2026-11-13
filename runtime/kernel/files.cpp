@@ -326,7 +326,11 @@ namespace
 
             const char* mode = truncate ? "w+b" : (f->writable ? "r+b" : "rb");
             f->handle = Open(resolved, mode);
-            if (!f->handle) { NoteMissing(guestPath); return X_STATUS_OBJECT_NAME_NOT_FOUND; }
+            if (!f->handle)
+            {
+                NoteMissing(operation, guestPath, " (host file open failed)");
+                return X_STATUS_OBJECT_NAME_NOT_FOUND;
+            }
             f->size = truncate ? 0 : fs::file_size(resolved, ec);
             information = !existed ? FILE_CREATED
                         : truncate ? (disposition == FILE_SUPERSEDE ? FILE_SUPERSEDED : FILE_OVERWRITTEN)
