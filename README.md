@@ -4,7 +4,7 @@
 
 This project adapts the [MW2-recompiled](https://github.com/PaulCombal/mw2-recompiled) runtime and tooling to bring up the MW3 single-player campaign. [XenonRecomp](https://github.com/hedge-dev/XenonRecomp) translates the Xbox 360 PowerPC executable into C++, which is then compiled for the host. This is static recompilation, not Xbox 360 emulation.
 
-> **Current milestone:** generated-code compilation, desktop runtime linking, and first-stage guest execution pass in CI. The title reaches its request to launch `default.xex`, then the development runner stops at that handoff. **The main menu and gameplay have not been reached; there is no playable desktop or PS4 build.**
+> **Current milestone:** generated-code compilation, desktop runtime linking, and first-stage guest execution pass in CI. The title then hits a fatal error, `Could not find zone 'ui.ff'` (the game root staged in CI has no `ui.ff`), and its error handler asks to relaunch `default.xex`, where the development runner stops. **The main menu and gameplay have not been reached; there is no playable desktop or PS4 build.**
 
 ## Status
 
@@ -13,12 +13,12 @@ This project adapts the [MW2-recompiled](https://github.com/PaulCombal/mw2-recom
 | XEX analysis and static recompilation | **Working:** 142 generated C++ translation units; 128 jump tables |
 | Generated PPC compilation | **Pass:** builds `libppc_recomp.a` |
 | Runtime integration | **In progress:** diagnostic desktop executable links; MW3-specific hooks and kernel semantics still need validation |
-| First-stage execution | **Pass:** guest entry, kernel/thread/audio initialization and GPU command submission observed; title requests `XamLoaderLaunchTitle("default.xex")` |
-| Second-stage executable / main menu | **Not reached** |
+| First-stage execution | **Pass:** guest entry, kernel/thread/audio initialization and GPU command submission observed; stops on a missing-zone fatal error (`ui.ff` not found), which the title answers with `XamLoaderLaunchTitle("default.xex")` |
+| Past the first fastfile load (`ui.ff`, then the rest) / main menu | **Not reached** |
 | Campaign gameplay | **Not started** |
 | PS4 build and package | **Not started** |
 
-The first-stage CI smoke test observes 26 GPU draw calls, but GPU device initialization is not yet validated: the CI runner's Vulkan driver is incompatible. The title's next-executable handoff is recognized but not yet chain-loaded. These results establish progress through early startup, not a successful boot.
+The first-stage CI smoke test observes 26 GPU draw calls, but GPU device initialization is not yet validated: the CI runner's Vulkan driver is incompatible. The `default.xex` relaunch is the title's fatal-error restart, not a second executable, so there is nothing to chain-load: the fix is the missing game file. These results establish progress through early startup, not a successful boot.
 
 ## Build
 
@@ -40,7 +40,7 @@ The GitHub Actions workflow can run the full recompile, diagnostic desktop link,
 
 ## Next milestones
 
-1. Identify and validate the executable expected at the `XamLoaderLaunchTitle("default.xex")` handoff, then implement a safe development chain-load path.
+1. Supply the fastfiles the title asks for (`ui.ff` first, from your own disc dump) and fix what the next error says. Each missing zone ends the run with a readable `ERROR:` line in the log.
 2. Resolve MW3-specific engine hooks, globals, and runtime behavior against the supported XEX.
 3. Implement and test the imports required to progress through startup; replace diagnostic stubs only when their semantics are understood.
 4. Validate DPC scheduling and graphics-completion behavior, then resolve Vulkan/device initialization.

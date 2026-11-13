@@ -77,14 +77,15 @@ it in place on the runner and retain only appropriately sanitized diagnostics.
 ## Scope and limitations
 
 - Generated MW3 PPC compilation and diagnostic desktop linking are validated.
-- First-stage guest execution is observed through an explicit
-  `XamLoaderLaunchTitle("default.xex")` handoff. This is not a complete boot.
-- The next executable has not been loaded; main-menu boot and gameplay are
-  unverified.
+- First-stage guest execution runs until the title's fatal-error handler
+  (`sub_8232E638`) reports `ERROR: Could not find zone 'ui.ff'` through
+  launch data and asks to relaunch `default.xex`. That relaunch is the error
+  restart, not a second executable. This is not a complete boot.
+- Main-menu boot and gameplay are unverified.
 - The CI runner's Vulkan driver is incompatible, so GPU device initialization
   is not validated by this run.
 - No PS4 ELF, PKG or playable build exists.
-- The runtime hook table in `runtime/title.h` remains MW2-specific.
+- `runtime/title.h` has an MW3 block (entry point, `Com_Error`, `D3D_Present`, `D3D_ArenaWait`, both shader-preload hooks, the device offsets and the kernel data records); hooks not listed there are not enabled for MW3.
 - MW3 hook candidates must be checked against the exact MW3 XEX before they
   are added. Unknown hooks stay undefined rather than inheriting MW2 addresses.
 - The generated `ppc_mw3/` directory and extracted game executable are local

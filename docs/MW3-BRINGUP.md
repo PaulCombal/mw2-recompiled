@@ -203,6 +203,10 @@ The shift is not uniform (+128, +276, +296), so none of these can be derived fro
 
 `tools/find_by_immediates.py ADDR` automates that search. It ignores the high and low halves of addresses, which are placed differently in each build; an earlier version did not, and found nothing for this very hook. Checked against the known hits it finds `PatchVertexFetches` uniquely (identical access sequence) and lists `Image_FlushMove`'s location (823D4398) among three candidates, agreeing with the earlier match. On the hooks still missing it is not conclusive: `D3D_ReplayRecording` has six same-constant candidates in the D3D library with different access sequences (MW3's D3D build differs there); `Job_WaitPredicate`, `DB_MissingAsset` and `Dvar_RegisterInt` have no large immediates to search by; `CG_ViewFov` matches hundreds of functions on one constant. `CG_ViewFov`, `DB_MissingAsset`, `Job_WaitPredicate`, `Dvar_RegisterInt` and `D3D_ReplayRecording` (diagnostics only) stay unlocated; they need a structural match on call graph and data references, not constants.
 
+### The `default.xex` relaunch is an error restart
+
+`XamLoaderLaunchTitle` is reached through the XDK's `XLaunchNewImage` wrapper (`sub_82455AC0`, which recognizes the `XLNI_*` keywords), from three places: a dirty-disc error (`sub_82456050`), a relaunch of `default_mp.xex` with launch data (`sub_821233C8`), and `sub_8232E638`, a printf-style fatal-error function with 77 callers. That last one formats `"e%s"` into a 1000-byte global, hands it to `XamLoaderSetLaunchData` (the text starts at +4) and relaunches `default.xex`, the title's restart-to-show-the-error. The runtime now logs that text, and the CI smoke test shows `eERROR: Could not find zone 'ui.ff'`, so the handoff seen so far is a missing-file error and not a chain-load. `patch.ff`, `patch.ffm`, `ui.ffm` and `update:\patch.ff` are also asked for before it; those look optional, since only `ui.ff` ended the run.
+
 ## Title update
 
 The disc's executable and the title-updated one differ, and the recompiled
