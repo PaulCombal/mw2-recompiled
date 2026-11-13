@@ -64,3 +64,50 @@ PPC_FUNC(__imp__KeBugCheckEx)
     kernel::ReportUnimplemented();
     std::exit(4);
 }
+
+// XamTaskSchedule(callback, context, params, HANDLE* task): XAM's own worker
+// pool. The callback is DWORD(*)(void*). Each task gets a host thread with its
+// own guest stack and thread block, like the DPC worker; the handle is a plain
+// object so XamTaskCloseHandle has something to close. XamTaskShouldExit is
+// always "no": nothing here cancels a task.
+#include "../crash.h"
+#include <thread>
+
+namespace
+{
+    struct XamTask : Object { const char* TypeName() const override { return "xam-task"; } };
+    constexpr uint32_t kTaskStack = 256u * 1024u;
+
+    void RunTask(uint32_t routine, uint32_t context)
+    {
+        crash::RegisterThread("xam task");
+        const uint32_t stack = kernel::AllocateGuest(kTaskStack, 0x1000);
+        const uint32_t pcr = kernel::CreateThreadBlock(kernel::NewThreadId());
+        PPCFunc* fn = kernel::GuestFunction(routine);
+        if (!stack || !pcr || !fn)
+        {
+            LOGW("xam: task %08X could not start", routine);
+            return;
+        }
+        PPCContext ctx{};
+        ctx.r1.u32 = (stack + kTaskStack - 0x100) & ~0xFu;
+        ctx.r13.u32 = pcr;
+        ctx.r3.u32 = context;
+        ctx.fpscr.loadFromHost();
+        fn(ctx, guest::Base());
+        LOGI("xam: task %08X returned %u", routine, ctx.r3.u32);
+    }
+}
+
+PPC_FUNC(__imp__XamTaskSchedule)
+{
+    const uint32_t routine = ctx.r3.u32, context = ctx.r4.u32, out = ctx.r6.u32;
+    if (!routine) { ctx.r3.u64 = 0x80070057u; return; }   // E_INVALIDARG
+    if (auto* h = GuestPtr<be32>(out)) *h = InsertHandle(std::make_shared<XamTask>());
+    LOGI("xam: scheduling task %08X(%08X)", routine, context);
+    std::thread(RunTask, routine, context).detach();
+    ctx.r3.u64 = 0;   // S_OK
+}
+
+PPC_FUNC(__imp__XamTaskShouldExit)  { ctx.r3.u64 = 0; }
+PPC_FUNC(__imp__XamTaskCloseHandle) { CloseHandle(ctx.r3.u32); ctx.r3.u64 = 0; }
