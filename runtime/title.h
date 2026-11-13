@@ -70,10 +70,14 @@
 // bit-field extracts on destination and size, and one device offset that moved
 // (13320 -> 14472). The hook only wraps it, so no structure offset is read here.
 #define T_Image_FlushMove      823D4398
+// MW2's sub_8227CF18 (localClientNum in r3, line in r4): the same "p<digit> "
+// client prefix parse (the byte compares against 112, 80, 48, 50 and 32), the
+// same buffer record ({data, size, used} at +0/+4/+8) and the same enter/leave
+// around it; only the critical-section index differs (28 -> 26).
+#define T_Cbuf_AddText         8228CA48
 
 // Located, not enabled: each reads fields of the title's own structures at MW2
 // offsets, which have not been re-derived (MW2's +21628 is +21908 on the device).
-//   T_Cbuf_AddText               8228CA48
 //   T_Memcard_InitializeSystem   8232EC08
 //   T_CG_CullZoom                821067A8
 // Not located: T_D3D_ReplayRecording, T_Job_WaitPredicate, T_CG_ViewFov, T_Dvar_RegisterInt, T_DB_MissingAsset,
