@@ -217,6 +217,8 @@ With `common.ff` supplied (CI run 43387636948) the title loads its startup zones
 
 Sizes of the image packs in the user's dump, for planning CI bandwidth (every CI run downloads the whole private repository from LFS, 10 GiB a month on the free plan): `imagefile1.pak` 108 MB (supplied), `imagefile3.pak` 18 MB, `imagefile4.pak` 0.95 GB, `imagefile2.pak` 1.89 GB. Adding all four to the ~2 GB already staged makes a run cost about 5 GB, so two runs would use the month. If the title asks for the large packs, move the smoke test to a local machine rather than CI.
 
+Run 43390210714, with `imagefile1.pak` supplied (113,864,516 bytes): accepted, 16 frames, 752 draw packets, 265 audio callbacks. The next requested file is `D:\imagefile3.pak` (and `.pakm`); the title did not ask for `imagefile2.pak` first, so the packs are not requested in numeric order. Same ending: dirty-disc error, then the dashboard.
+
 ## Title update
 
 The disc's executable and the title-updated one differ, and the recompiled
