@@ -68,6 +68,9 @@ namespace
         bool isDirectory = false;
         bool writable = false;
         bool deleteOnClose = false;
+        // Xenia exposes Harddisk0\\Partition0 as a zero-length NullDevice;
+        // it has a handle but no host FILE* backing it.
+        bool nullDevice = false;
         std::mutex lock;
 
         const char* TypeName() const override { return "file"; }
@@ -256,6 +259,8 @@ namespace
     }
 
     // NT create dispositions, and what the caller is told happened.
+    // STATUS_ACCESS_DENIED (NTSTATUS 0xC0000022), not defined by the shared headers.
+    constexpr uint32_t X_STATUS_ACCESS_DENIED = 0xC0000022u;
     constexpr uint32_t FILE_SUPERSEDE = 0, FILE_OPEN = 1, FILE_CREATE = 2,
                        FILE_OPEN_IF = 3, FILE_OVERWRITE = 4, FILE_OVERWRITE_IF = 5;
     constexpr uint32_t FILE_SUPERSEDED = 0, FILE_OPENED = 1, FILE_CREATED = 2,
@@ -269,12 +274,37 @@ namespace
         return (desiredAccess & (GENERIC_WRITE | GENERIC_ALL | FILE_WRITE_DATA | FILE_APPEND_DATA)) != 0;
     }
 
+    bool IsHarddiskPartition0(const std::string& device, const std::string& relative)
+    {
+        return device == "harddisk0" && Lower(relative) == "partition0";
+    }
+
     uint32_t OpenFileCommon(const char* operation, const std::string& guestPath,
                             uint32_t desiredAccess, uint32_t disposition, uint32_t options,
                             uint32_t& handleOut, uint32_t& information)
     {
         std::string device, relative;
         SplitDevice(guestPath, device, relative);
+
+        // Xenia registers Partition0 (along with cache placeholders) as a
+        // NullDevice rather than mapping it onto the game directory. MW3 has
+        // been observed opening this exact object read-only with NtCreateFile.
+        if (IsHarddiskPartition0(device, relative))
+        {
+            if (WantsToWrite(desiredAccess) || disposition == FILE_SUPERSEDE ||
+                disposition == FILE_OVERWRITE || disposition == FILE_OVERWRITE_IF)
+                return X_STATUS_ACCESS_DENIED;
+            if (disposition == FILE_CREATE)
+                return X_STATUS_OBJECT_NAME_COLLISION;
+
+            auto f = std::make_shared<FileObject>();
+            f->nullDevice = true;
+            information = FILE_OPENED;
+            handleOut = InsertHandle(f);
+            if (TraceFiles()) LOGK("open %s -> Harddisk0\\Partition0 (null device)", guestPath.c_str());
+            return X_STATUS_SUCCESS;
+        }
+
         bool writable = false;
         const fs::path root = DeviceRoot(device, writable);
 
@@ -407,7 +437,7 @@ PPC_FUNC(__imp__NtReadFile)
     uint32_t length = ctx.r9.u32;
     uint32_t offsetPtr = ctx.r10.u32;
 
-    if (!file || !file->handle || !buffer)
+    if (!file || (!file->handle && !file->nullDevice) || !buffer)
     {
         if (iosb) { iosb->status = X_STATUS_INVALID_PARAMETER; iosb->information = 0; }
         ctx.r3.u64 = X_STATUS_INVALID_PARAMETER;
@@ -424,6 +454,13 @@ PPC_FUNC(__imp__NtReadFile)
     auto transfer = [file, buffer, length, offset, iosb]
     {
         std::lock_guard g(file->lock);
+        // The Xbox cache/config placeholder is a zero-length NullDevice: reads
+        // complete successfully without transferring bytes (not EOF).
+        if (file->nullDevice)
+        {
+            if (iosb) { iosb->status = X_STATUS_SUCCESS; iosb->information = 0; }
+            return;
+        }
         // C requires a positioning call between a write and a read on the same
         // update stream; seeking to where it already is counts as one.
         if (offset >= 0) Seek(file->handle, offset);
@@ -463,6 +500,15 @@ PPC_FUNC(__imp__NtWriteFile)
     uint32_t buffer = ctx.r8.u32;
     uint32_t length = ctx.r9.u32;
     uint32_t offsetPtr = ctx.r10.u32;
+
+    // Partition0 is a read-only NullDevice, not the ordinary discard-write
+    // behavior used for the read-only game disc.
+    if (file && file->nullDevice)
+    {
+        if (iosb) { iosb->status = X_STATUS_ACCESS_DENIED; iosb->information = 0; }
+        ctx.r3.u64 = X_STATUS_ACCESS_DENIED;
+        return;
+    }
 
     // A write to anything but a mounted package is a write to the disc -- the
     // title's own logs go there. Accept and discard those, as before.
@@ -534,6 +580,16 @@ PPC_FUNC(__imp__NtQueryFullAttributesFile)
     std::string name = ReadObjectName(ctx.r3.u32);
     std::string device, relative;
     SplitDevice(name, device, relative);
+    if (IsHarddiskPartition0(device, relative))
+    {
+        if (auto* p = GuestPtr<be64>(ctx.r4.u32))
+        {
+            for (int i = 0; i < 6; i++) p[i] = 0;
+            *GuestPtr<be32>(ctx.r4.u32 + 48) = 0x80u; // FILE_ATTRIBUTE_NORMAL
+        }
+        ctx.r3.u64 = X_STATUS_SUCCESS;
+        return;
+    }
     bool writable = false;
     const fs::path root = DeviceRoot(device, writable);
     fs::path resolved;
