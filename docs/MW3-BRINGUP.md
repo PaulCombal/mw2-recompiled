@@ -209,7 +209,7 @@ The shift is not uniform (+128, +276, +296), so none of these can be derived fro
 
 ### Fastfile progress
 
-With `ui.ff` supplied the run passes it (the 9.9 MB zone loads and 4 shaders are used) and stops on `ERROR: Could not find zone 'common.ff'`, again through the launch-data message. The startup function `sub_8229C308` names the zones it loads: `code_post_gfx` and `common` (strings at 0x820203CC and 0x820203C4), after the `ui` zone requested earlier. So the full startup set is `code_post_gfx.ff`, `ui.ff` and `common.ff`; level zones are requested later by the level loader and are not known statically. `common_specialops` and `common_survival` also exist as strings and belong to Special Ops. `common_mp.ff`, if the dump has one, does not substitute for `common.ff`; the title builds the file name from `%s.ff`.
+With `ui.ff` supplied the run passes it (the 9.9 MB zone loads and 4 shaders are used) and stops on `ERROR: Could not find zone 'common.ff'` (the 39.8 MB file was then added to the private repo through Git LFS), again through the launch-data message. The startup function `sub_8229C308` names the zones it loads: `code_post_gfx` and `common` (strings at 0x820203CC and 0x820203C4), after the `ui` zone requested earlier. So the full startup set is `code_post_gfx.ff`, `ui.ff` and `common.ff`; level zones are requested later by the level loader and are not known statically. `common_specialops` and `common_survival` also exist as strings and belong to Special Ops. `common_mp.ff`, if the dump has one, does not substitute for `common.ff`; the title builds the file name from `%s.ff`.
 
 ## Title update
 
