@@ -207,6 +207,10 @@ The shift is not uniform (+128, +276, +296), so none of these can be derived fro
 
 `XamLoaderLaunchTitle` is reached through the XDK's `XLaunchNewImage` wrapper (`sub_82455AC0`, which recognizes the `XLNI_*` keywords), from three places: a dirty-disc error (`sub_82456050`), a relaunch of `default_mp.xex` with launch data (`sub_821233C8`), and `sub_8232E638`, a printf-style fatal-error function with 77 callers. That last one formats `"e%s"` into a 1000-byte global, hands it to `XamLoaderSetLaunchData` (the text starts at +4) and relaunches `default.xex`, the title's restart-to-show-the-error. The runtime now logs that text, and the CI smoke test shows `eERROR: Could not find zone 'ui.ff'`, so the handoff seen so far is a missing-file error and not a chain-load. `patch.ff`, `patch.ffm`, `ui.ffm` and `update:\\patch.ff` are also asked for before it. They are optional: the disc dump has no `patch.*` (title-update files) and no `ui.ffm`, only `ui.ff` and `ui_mp.ff`, and only `ui.ff` ended the run.
 
+### Fastfile progress
+
+With `ui.ff` supplied the run passes it (the 9.9 MB zone loads and 4 shaders are used) and stops on `ERROR: Could not find zone 'common.ff'`, again through the launch-data message. The startup function `sub_8229C308` names the zones it loads: `code_post_gfx` and `common` (strings at 0x820203CC and 0x820203C4), after the `ui` zone requested earlier. So the full startup set is `code_post_gfx.ff`, `ui.ff` and `common.ff`; level zones are requested later by the level loader and are not known statically. `common_specialops` and `common_survival` also exist as strings and belong to Special Ops. `common_mp.ff`, if the dump has one, does not substitute for `common.ff`; the title builds the file name from `%s.ff`.
+
 ## Title update
 
 The disc's executable and the title-updated one differ, and the recompiled
