@@ -22,11 +22,12 @@ jobs:
           python-version: "3.12"
 
       - name: Check shell syntax
-        run: bash -n tools/build_mw3.sh tools/recomp_mw3.sh
+        run: bash -n tools/build_mw3.sh tools/recomp_mw3.sh tools/smoke_mw3.sh
 
       - name: Compile-check Python tooling
         run: |
           python -m compileall -q tools
+          python -B tests/mw3_xex_input_test.py
           python tools/audit_mw3_startup.py --self-test
           python tools/audit_mw3_dpc.py --self-test
           python tools/audit_mw3_xex_module_handle.py --self-test

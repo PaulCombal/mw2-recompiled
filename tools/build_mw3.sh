@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
-for tool in cmake ninja clang-18 clang++-18 python3 git nm objdump c++filt; do
+for tool in cmake ninja clang-18 clang++-18 python3 git nm objdump c++filt openssl; do
     command -v "$tool" >/dev/null 2>&1 || {
         echo "Missing prerequisite: $tool" >&2
         exit 1
