@@ -111,3 +111,12 @@ PPC_FUNC(__imp__XamTaskSchedule)
 
 PPC_FUNC(__imp__XamTaskShouldExit)  { ctx.r3.u64 = 0; }
 PPC_FUNC(__imp__XamTaskCloseHandle) { CloseHandle(ctx.r3.u32); ctx.r3.u64 = 0; }
+
+// XamShowFriendRequestUI: the friend-request dialog is a dashboard screen and
+// there is no dashboard. Fail the call outright, with no overlapped left
+// pending for the title to wait on.
+PPC_FUNC(__imp__XamShowFriendRequestUI)
+{
+    LOGW("xam: friend request UI -- no dashboard, failing the call");
+    ctx.r3.u64 = 1627;   // ERROR_FUNCTION_FAILED
+}

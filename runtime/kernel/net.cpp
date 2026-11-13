@@ -760,3 +760,28 @@ PPC_FUNC(__imp__NetDll_XNetInAddrToString)
 
 // The Xbox Live logon state: not logged on.
 PPC_FUNC(__imp__NetDll_XnpLogonGetStatus) { ctx.r3.u64 = 0; }
+
+// WSACreateEvent: a manual-reset, unsignalled event for WSAEventSelect-style
+// waits. Made as a kernel event so WaitForSingleObject can wait on it.
+PPC_FUNC(__imp__NetDll_WSACreateEvent)
+{
+    auto event = std::make_shared<kernel::Event>();
+    event->manualReset = true;
+    event->signalled = false;
+    ctx.r3.u64 = kernel::InsertHandle(event);
+}
+
+// __WSAFDIsSet(SOCKET, fd_set*): fd_set is { u_int count; SOCKET array[] }
+// in guest memory, big-endian. The socket is set when it is in the first
+// `count` entries.
+PPC_FUNC(__imp__NetDll___WSAFDIsSet)
+{
+    const uint32_t socket = ctx.r3.u32;
+    const auto* set = GuestPtr<be32>(ctx.r4.u32);
+    uint32_t set_count = 0;
+    if (set) set_count = uint32_t(set[0]);
+    bool present = false;
+    for (uint32_t i = 0; set && i < set_count && i < 64; i++)
+        if (uint32_t(set[1 + i]) == socket) { present = true; break; }
+    ctx.r3.u64 = present ? 1 : 0;
+}
