@@ -206,8 +206,12 @@ PPC_FUNC(__imp__XamLoaderSetLaunchData)
     // MW3's fatal-error path (sub_8232E638) formats "e%s" with its message into
     // this buffer and then relaunches default.xex, so a startup failure surfaces
     // here as text. Show the printable head of it.
+    // The buffer opens with a small header (the message sits at +4), so start at
+    // the first printable byte within its head.
     std::string text;
-    for (uint32_t i = 0; i < ctx.r4.u32 && i < 240 && data[i]; i++)
+    uint32_t at = 0;
+    while (at < 16 && at < ctx.r4.u32 && !(data[at] >= 32 && data[at] < 127)) at++;
+    for (uint32_t i = at; i < ctx.r4.u32 && i < at + 240 && data[i]; i++)
         text += (data[i] >= 32 && data[i] < 127) ? char(data[i]) : '?';
     if (!text.empty()) LOGW("XamLoaderSetLaunchData: %u bytes, text \"%s\"", ctx.r4.u32, text.c_str());
     ctx.r3.u64 = X_ERROR_SUCCESS;
