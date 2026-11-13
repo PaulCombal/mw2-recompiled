@@ -110,7 +110,7 @@ jobs:
           echo "MW3 XEX SHA-256: $actual"
           test "$actual" = "$expected" || { echo "Unexpected MW3 executable; refusing to build against an unverified image"; exit 1; }
           echo "Private XEX/fastfile inventory (names and sizes only):"
-          find private -type f \( -iname '*.xex' -o -iname '*.ff' -o -iname '*.ffm' \) -printf '%P %s bytes\n' | sort | head -n 200
+          find private -type f \( -iname '*.xex' -o -iname '*.ff' -o -iname '*.ffm' -o -iname '*.pak' -o -iname '*.pakm' \) -printf '%P %s bytes\n' | sort | head -n 200
           mkdir -p mw3/tu0
           # Preserve the complete extracted game-root layout (fastfiles, subfolders,
           # and any additional XEX files) while excluding checkout metadata.
