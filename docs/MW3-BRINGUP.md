@@ -219,6 +219,8 @@ Sizes of the image packs in the user's dump, for planning CI bandwidth (every CI
 
 Run 43390210714, with `imagefile1.pak` supplied (113,864,516 bytes): accepted, 16 frames, 752 draw packets, 265 audio callbacks. The next requested file is `D:\imagefile3.pak` (and `.pakm`); the title did not ask for `imagefile2.pak` first, so the packs are not requested in numeric order. Same ending: dirty-disc error, then the dashboard.
 
+`imagefile3.pak` (18 MB) was then added to the private repository and the smoke test rerun.
+
 ## Title update
 
 The disc's executable and the title-updated one differ, and the recompiled
