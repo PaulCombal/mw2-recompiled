@@ -259,6 +259,8 @@ namespace
     }
 
     // NT create dispositions, and what the caller is told happened.
+    // STATUS_ACCESS_DENIED (NTSTATUS 0xC0000022), not defined by the shared headers.
+    constexpr uint32_t X_STATUS_ACCESS_DENIED = 0xC0000022u;
     constexpr uint32_t FILE_SUPERSEDE = 0, FILE_OPEN = 1, FILE_CREATE = 2,
                        FILE_OPEN_IF = 3, FILE_OVERWRITE = 4, FILE_OVERWRITE_IF = 5;
     constexpr uint32_t FILE_SUPERSEDED = 0, FILE_OPENED = 1, FILE_CREATED = 2,
