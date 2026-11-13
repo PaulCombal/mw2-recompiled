@@ -65,12 +65,16 @@
 // large immediates (22413312, 3145728, -1077542912, -1077936128), 1572 bytes in
 // both, with the same sequence of structure accesses.
 #define T_D3D_PatchVertexFetches 820A4468
+// MW2's sub_823A52F8 (destination, source, size, r6): the same 20 calls in the
+// same order (the callees map one to one, e.g. 820B9230 -> 82098BC8), the same
+// bit-field extracts on destination and size, and one device offset that moved
+// (13320 -> 14472). The hook only wraps it, so no structure offset is read here.
+#define T_Image_FlushMove      823D4398
 
 // Located, not enabled: each reads fields of the title's own structures at MW2
 // offsets, which have not been re-derived (MW2's +21628 is +21908 on the device).
 //   T_Cbuf_AddText               8228CA48
 //   T_Memcard_InitializeSystem   8232EC08
-//   T_Image_FlushMove            823D4398
 //   T_CG_CullZoom                821067A8
 // Not located: T_D3D_ReplayRecording, T_Job_WaitPredicate, T_CG_ViewFov, T_Dvar_RegisterInt, T_DB_MissingAsset,
 // T_Com_Printf (MW3 has no such function).

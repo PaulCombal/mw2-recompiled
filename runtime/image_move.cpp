@@ -86,7 +86,7 @@ namespace
     }
 }
 
-#if !defined(MW3_TITLE) // T_Image_FlushMove uses MW2 image-pool semantics: MW2-only hook
+#ifdef T_Image_FlushMove
 GUEST_HOOK(T_Image_FlushMove)
 {
     const uint32_t destination = ctx.r3.u32, source = ctx.r4.u32, size = ctx.r5.u32;
