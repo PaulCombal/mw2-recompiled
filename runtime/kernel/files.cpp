@@ -234,7 +234,8 @@ namespace
     std::mutex g_missingLock;
     std::map<std::string, uint64_t> g_missing;
 
-    void NoteMissing(const std::string& guestPath)
+    void NoteMissing(const char* operation, const std::string& guestPath,
+                     const char* detail = "")
     {
         if constexpr (!diag::kOn) return;
         // An empty name means the open carried no ANSI_STRING at all, which is a
@@ -243,7 +244,9 @@ namespace
         std::lock_guard g(g_missingLock);
         auto [it, inserted] = g_missing.try_emplace(key, 0);
         it->second++;
-        if (inserted) LOGK("file not found: %s", key.c_str());
+        if (inserted)
+            LOGK("file not found via %s: %s%s", operation, key.c_str(),
+                 detail && *detail ? detail : "");
     }
 
     bool TraceFiles()
@@ -266,8 +269,8 @@ namespace
         return (desiredAccess & (GENERIC_WRITE | GENERIC_ALL | FILE_WRITE_DATA | FILE_APPEND_DATA)) != 0;
     }
 
-    uint32_t OpenFileCommon(const std::string& guestPath, uint32_t desiredAccess,
-                            uint32_t disposition, uint32_t options,
+    uint32_t OpenFileCommon(const char* operation, const std::string& guestPath,
+                            uint32_t desiredAccess, uint32_t disposition, uint32_t options,
                             uint32_t& handleOut, uint32_t& information)
     {
         std::string device, relative;
@@ -286,7 +289,11 @@ namespace
                 disposition == FILE_OPEN || disposition == FILE_OVERWRITE ||
                 !HostPath(root, relative, resolved))
             {
-                NoteMissing(guestPath);
+                char detail[192];
+                std::snprintf(detail, sizeof(detail),
+                              " (device=%s, relative=%s, access=%08X, disposition=%u, options=%08X)",
+                              device.c_str(), relative.c_str(), desiredAccess, disposition, options);
+                NoteMissing(operation, guestPath, detail);
                 return X_STATUS_OBJECT_NAME_NOT_FOUND;
             }
         }
@@ -319,7 +326,11 @@ namespace
 
             const char* mode = truncate ? "w+b" : (f->writable ? "r+b" : "rb");
             f->handle = Open(resolved, mode);
-            if (!f->handle) { NoteMissing(guestPath); return X_STATUS_OBJECT_NAME_NOT_FOUND; }
+            if (!f->handle)
+            {
+                NoteMissing(operation, guestPath, " (host file open failed)");
+                return X_STATUS_OBJECT_NAME_NOT_FOUND;
+            }
             f->size = truncate ? 0 : fs::file_size(resolved, ec);
             information = !existed ? FILE_CREATED
                         : truncate ? (disposition == FILE_SUPERSEDE ? FILE_SUPERSEDED : FILE_OVERWRITTEN)
@@ -367,7 +378,8 @@ PPC_FUNC(__imp__NtCreateFile)
     const uint32_t options = kernel::StackArgument(ctx, 8);   // CreateOptions
 
     uint32_t handle = 0, information = 0;
-    uint32_t status = OpenFileCommon(name, ctx.r4.u32, ctx.r10.u32, options, handle, information);
+    uint32_t status = OpenFileCommon("NtCreateFile", name, ctx.r4.u32, ctx.r10.u32,
+                                     options, handle, information);
     if (handleOut && status == X_STATUS_SUCCESS) *handleOut = handle;
     if (iosb) { iosb->status = status; iosb->information = (status == X_STATUS_SUCCESS) ? information : 0u; }
     ctx.r3.u64 = status;
@@ -380,7 +392,8 @@ PPC_FUNC(__imp__NtOpenFile)
     auto* iosb = GuestPtr<XIoStatusBlock>(ctx.r6.u32);
 
     uint32_t handle = 0, information = 0;
-    uint32_t status = OpenFileCommon(name, ctx.r4.u32, FILE_OPEN, ctx.r8.u32, handle, information);
+    uint32_t status = OpenFileCommon("NtOpenFile", name, ctx.r4.u32, FILE_OPEN,
+                                     ctx.r8.u32, handle, information);
     if (handleOut && status == X_STATUS_SUCCESS) *handleOut = handle;
     if (iosb) { iosb->status = status; iosb->information = (status == X_STATUS_SUCCESS) ? information : 0u; }
     ctx.r3.u64 = status;
@@ -526,7 +539,7 @@ PPC_FUNC(__imp__NtQueryFullAttributesFile)
     fs::path resolved;
     if (relative.empty() || !ResolveInsensitive(root, relative, resolved))
     {
-        NoteMissing(name);
+        NoteMissing("NtQueryFullAttributesFile", name);
         ctx.r3.u64 = X_STATUS_OBJECT_NAME_NOT_FOUND;
         return;
     }
