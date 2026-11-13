@@ -215,6 +215,8 @@ With `ui.ff` supplied the run passes it (the 9.9 MB zone loads and 4 shaders are
 
 With `common.ff` supplied (CI run 43387636948) the title loads its startup zones and runs: a profile signs in, 17 frames are submitted (802 draw packets, 4 shaders, 6041 command packets, no unknown opcodes, no refused loads, the graphics interrupt serviced every frame, audio callbacks 297, no crash). It then asks for `D:\imagefile1.pak` and `D:\imagefile1.pakm`, does not get them, raises the dirty-disc error (`XamShowDirtyDiscErrorUI`) and leaves for the dashboard (`sub_82456050`, the first of the three launch-wrapper callers above). `imagefile1.pak` is a required disc file, not an optional one like `patch.*`. The smoke test no longer asserts a particular ending; it requires the end-of-run report and prints how the run ended.
 
+Sizes of the image packs in the user's dump, for planning CI bandwidth (every CI run downloads the whole private repository from LFS, 10 GiB a month on the free plan): `imagefile1.pak` 108 MB (supplied), `imagefile3.pak` 18 MB, `imagefile4.pak` 0.95 GB, `imagefile2.pak` 1.89 GB. Adding all four to the ~2 GB already staged makes a run cost about 5 GB, so two runs would use the month. If the title asks for the large packs, move the smoke test to a local machine rather than CI.
+
 ## Title update
 
 The disc's executable and the title-updated one differ, and the recompiled
