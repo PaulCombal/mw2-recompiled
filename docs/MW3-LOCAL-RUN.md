@@ -1,9 +1,17 @@
 # Running the MW3 smoke test on your own machine
 
-This repeats what the CI job does (`.github/workflows/mw3-validation.yml`,
-job `generated-code-build`), without GitHub's LFS bandwidth limit. It was written
-from that workflow and `tools/build_mw3.sh`; it has not been run on a local
-machine yet, so if a step fails, the error message is the useful thing to send.
+The local runner builds and runs a bounded diagnostic smoke test on x86-64
+Linux. Automatic PR CI does not receive game files.
+
+```sh
+bash tools/smoke_mw3.sh
+```
+
+It verifies the supported XEX before generation, builds and links the runner,
+and checks guest entry and completion of its report. Disc/zone failures make
+the command fail. Logs stay in private temporary files; no uploads occur.
+Use `JOBS=2` to limit build parallelism and `MW2_RUN_SECONDS=60` for a longer
+run. This is a diagnostic check, not proof of menu boot or gameplay.
 
 Your game files never leave your machine and are never committed: `mw3/` is
 git-ignored.
@@ -21,7 +29,7 @@ git-ignored.
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y clang-18 lld-18 ninja-build python3 cmake git binutils libvulkan-dev
+sudo apt-get install -y clang-18 lld-18 ninja-build python3 cmake git binutils openssl ca-certificates libvulkan-dev
 ```
 
 ## 1. Get the code
@@ -104,11 +112,11 @@ Look for these, in this order:
    did not get`. A run that lasts the full `MW2_RUN_SECONDS` with frames and no
    `exiting:` line has not hit any of the above.
 
-The log contains file names, counts and addresses, not game data, so it is safe
-to paste into an issue or a chat.
+Logs can contain private paths and guest diagnostics. Review and redact them
+before sharing; do not publish raw logs automatically.
 
 ## Where the run stands
 
 See [MW3-BRINGUP.md](MW3-BRINGUP.md): with `ui.ff`, `common.ff`,
 `imagefile1.pak` and `imagefile3.pak` supplied the title reaches
-`imagefile4.pak`, rendering 17 frames before the dirty-disc error.
+`imagefile4.pak`, submitting 17 GPU swaps before the dirty-disc error.

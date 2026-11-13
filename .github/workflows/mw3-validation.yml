@@ -2,16 +2,7 @@ name: MW3 validation
 
 on:
   push:
-    branches:
-      - mw3-bringup
   pull_request:
-    paths:
-      - "CMakeLists.txt"
-      - "config/MW3.toml"
-      - "tools/**"
-      - "runtime/**"
-      - ".github/workflows/mw3-validation.yml"
-      - "docs/MW3-BUILD.md"
   workflow_dispatch:
 
 permissions:
@@ -20,19 +11,23 @@ permissions:
 jobs:
   static-validation:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Check shell syntax
-        run: bash -n tools/build_mw3.sh tools/recomp_mw3.sh
+        run: bash -n tools/build_mw3.sh tools/recomp_mw3.sh tools/smoke_mw3.sh
 
       - name: Compile-check Python tooling
         run: |
           python -m compileall -q tools
+          python -B tests/mw3_xex_input_test.py
           python tools/audit_mw3_startup.py --self-test
           python tools/audit_mw3_dpc.py --self-test
           python tools/audit_mw3_xex_module_handle.py --self-test
@@ -85,122 +80,27 @@ jobs:
           echo "$output"
           grep -F "MW3 runtime integration is incomplete" <<< "$output"
 
-
-  generated-code-build:
-    # Configure this repository variable and secret to enable a real MW3 XEX build.
-    if: ${{ vars.MW3_ASSET_REPO != '' }}
+  unit-tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-
-      - name: Check out private MW3 executable
-        uses: actions/checkout@v6
         with:
-          repository: ${{ vars.MW3_ASSET_REPO }}
-          token: ${{ secrets.MW3_ASSET_REPO_TOKEN }}
-          lfs: true
-          path: private
-
-      - name: Verify and stage the exact supported executable
+          persist-credentials: false
+      - name: Configure asset-free tests
+        run: cmake -S . -B build-tests -G Ninja -DMW2_TESTS_ONLY=ON -DCMAKE_BUILD_TYPE=Debug
+      - name: Build and run tests
         run: |
-          set -euo pipefail
-          test -f private/default.xex || { echo "Private asset repository must contain default.xex at its root"; exit 1; }
-          actual=$(sha256sum private/default.xex | cut -d' ' -f1)
-          expected=d90bc8d93b7b8f6001ead8330271196a6ef7a5c2e4a9e9b63118f47d58a05912
-          echo "MW3 XEX SHA-256: $actual"
-          test "$actual" = "$expected" || { echo "Unexpected MW3 executable; refusing to build against an unverified image"; exit 1; }
-          echo "Private XEX/fastfile inventory (names and sizes only):"
-          find private -type f \( -iname '*.xex' -o -iname '*.ff' -o -iname '*.ffm' -o -iname '*.pak' -o -iname '*.pakm' \) -printf '%P %s bytes\n' | sort | head -n 200
-          mkdir -p mw3/tu0
-          # Preserve the complete extracted game-root layout (fastfiles, subfolders,
-          # and any additional XEX files) while excluding checkout metadata.
-          find private -mindepth 1 -maxdepth 1 ! -name .git -exec cp -a {} mw3/tu0/ \;
-          test -f mw3/tu0/default.xex
-          rm -rf private
+          cmake --build build-tests --parallel 2
+          ctest --test-dir build-tests --output-on-failure
 
-      - name: Install compiler and build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-18 lld-18 ninja-build python3 cmake git binutils libvulkan-dev
-
-      - name: Recompile MW3 and compile generated PPC
-        run: bash tools/build_mw3.sh --compile-only
-
-      - name: Link MW3 diagnostic desktop executable
-        run: |
-          cmake -S . -B build-mw3 -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=clang-18 \
-            -DCMAKE_CXX_COMPILER=clang++-18 \
-            -DMW2_TITLE=mw3 \
-            -DMW3_RECOMP_ONLY=ON \
-            -DMW3_LINK_PROBE=ON \
-            -DMW2_USE_SDL=OFF \
-            -DMW2_LTO=OFF
-          cmake --build build-mw3 --target mw2 --parallel
-
-      - name: Audit the unresolved MW3 indirect-call target
-        run: |
-          set -euo pipefail
-          python3 tools/audit_mw3_indirect_target.py --address 0x823E0968 --report build-mw3/mw3-indirect-target-audit.txt
-          cat build-mw3/mw3-indirect-target-audit.txt
-
-      - name: Smoke-test MW3 runtime with the private XEX
-        run: |
-          set -euo pipefail
-          log="$RUNNER_TEMP/mw3-runtime-smoke.log"
-          set +e
-          timeout --signal=TERM --kill-after=5s 35s env \
-            MW2_RUN_SECONDS=12 \
-            MW2_LOG_FILE="$log" \
-            ./build-mw3/mw3 mw3/tu0/default.xex mw3/tu0
-          status=$?
-          set -e
-          if [ -f "$log" ]; then
-            echo "----- MW3 runtime smoke log -----"
-            tail -n 160 "$log"
-            echo "----- end runtime smoke log -----"
-          else
-            echo "Runtime did not create its diagnostic log."
-          fi
-          grep -F "function table:" "$log"
-          grep -F "entering guest at" "$log"
-          # How the run ended is reported, not asserted: it moves as the boot does
-          # (a missing zone, a missing file, the title leaving, or the deadline).
-          # What must hold is that the guest started and the runner finished its
-          # end-of-run report instead of crashing or hanging.
-          grep -F "memory: virtual heap" "$log"
-          echo "----- how the run ended -----"
-          grep -E "^\[(w|E)\]|exiting:|XamLoaderSetLaunchData|file not found" "$log" | grep -v "no Vulkan\|no device came up" | tail -n 25 || true
-          echo "-----------------------------"
-          if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
-            echo "Expected the development runner to exit normally or with its explicit handoff status; got $status"
-            exit 1
-          fi
-          echo "MW3 startup ran and the runner completed its report."
-
-      # Keep generated PPC source and the compiled archive on this ephemeral runner.
-      # The artifact contains metadata only: names, counts, and sanitized callsite summaries.
-      - name: Run isolated MW3 metadata audits
-        run: |
-          set -euo pipefail
-          python3 tools/audit_mw3_generated.py build-mw3/libppc_recomp.a build-mw3/mw3-runtime-audit.txt
-          python3 tools/audit_mw3_startup.py --report build-mw3/mw3-startup-callgraph.txt
-          python3 tools/audit_mw3_dpc.py --report build-mw3/mw3-dpc-callsites.txt
-          python3 tools/audit_mw3_xex_module_handle.py --source-dir ppc_mw3 | tee build-mw3/mw3-xex-module-handle-audit.txt
-
-      - name: Upload MW3 runtime audit metadata
-        if: always()
-        uses: actions/upload-artifact@v4
+  relay-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
         with:
-          name: mw3-runtime-audit-metadata
-          path: |
-            build-mw3/mw3-runtime-audit.txt
-            build-mw3/mw3-startup-callgraph.txt
-            build-mw3/mw3-dpc-callsites.txt
-            build-mw3/mw3-xex-module-handle-audit.txt
-            build-mw3/mw3-indirect-target-audit.txt
-            ppc_mw3/kernel_imports.txt
-          if-no-files-found: ignore
-          retention-days: 14
+          persist-credentials: false
+      - name: Test relay with locked dependencies
+        working-directory: relay
+        run: cargo test --locked
