@@ -203,6 +203,13 @@ PPC_FUNC(__imp__XamLoaderSetLaunchData)
 {
     const auto* data = GuestPtr<const uint8_t>(ctx.r3.u32);
     install::LaunchData().assign(data, data + ctx.r4.u32);
+    // MW3's fatal-error path (sub_8232E638) formats "e%s" with its message into
+    // this buffer and then relaunches default.xex, so a startup failure surfaces
+    // here as text. Show the printable head of it.
+    std::string text;
+    for (uint32_t i = 0; i < ctx.r4.u32 && i < 240 && data[i]; i++)
+        text += (data[i] >= 32 && data[i] < 127) ? char(data[i]) : '?';
+    if (!text.empty()) LOGW("XamLoaderSetLaunchData: %u bytes, text \"%s\"", ctx.r4.u32, text.c_str());
     ctx.r3.u64 = X_ERROR_SUCCESS;
 }
 
