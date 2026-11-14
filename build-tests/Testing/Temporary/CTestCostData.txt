@@ -1,0 +1,12 @@
+xex-header-test 1 0.00241367
+guest-format-test 1 0.0024822
+dpc-queue-test 1 0.00266555
+kernel_heap_test 1 0.340533
+kernel_memory_test 1 0.0108026
+kernel_threads_test 1 0.144104
+kernel_objects_test 1 0.478008
+kernel_files_test 1 0.0177526
+kernel_dpc_test 1 0.275935
+kernel_xam_test 1 0.0147105
+gpu_command_processor_test 1 0.142659
+---

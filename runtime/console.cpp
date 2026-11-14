@@ -130,12 +130,18 @@ void console::Pump(PPCContext& ctx, uint8_t* base)
     const uint32_t scratch = (sp - 0x100) & ~0xFu;
     std::memcpy(base + scratch, text.c_str(), text.size() + 1);
 
+#ifdef T_Cbuf_AddText
     const PPCContext saved = ctx;
     ctx.r1.u64 = (sp - 0x200) & ~0xFull;
     ctx.r3.u64 = 0;                         // localClientNum
     ctx.r4.u64 = scratch;
     GUEST_FUNC(T_Cbuf_AddText)(ctx, base);
     ctx = saved;
+#else
+    // The title's Cbuf_AddText is not enabled (title.h), so there is no queue to feed.
+    LOGW("console: no command queue for the %s", MW2_TITLE_NAME);
+    return;
+#endif
 
     if (!placing) LOGI("console: queued \"%.*s\" at %.2f s", int(text.size()) - 1, text.c_str(), Elapsed());
 }

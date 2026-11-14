@@ -1,0 +1,109 @@
+name: MW3 validation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-validation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Ensure no game files or LFS pointers are tracked
+        run: python3 tools/check_no_game_files.py --self-test && python3 tools/check_no_game_files.py
+
+      - name: Check shell syntax
+        run: bash -n tools/build_mw3.sh tools/recomp_mw3.sh tools/smoke_mw3.sh
+
+      - name: Compile-check Python tooling
+        run: |
+          python -m compileall -q tools
+          python -B tests/mw3_xex_input_test.py
+          python tools/audit_mw3_startup.py --self-test
+          python tools/audit_mw3_dpc.py --self-test
+          python tools/audit_mw3_xex_module_handle.py --self-test
+          python -m py_compile tools/audit_mw3_indirect_target.py
+
+      - name: Test MW2-to-MW3 hook matcher
+        run: python tools/port_hooks.py --selftest
+
+      - name: Validate MW3 recompiler configuration and title routing
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import os
+          import tomllib
+
+          with open("config/MW3.toml", "rb") as f:
+              config = tomllib.load(f)
+
+          main = config["main"]
+          assert main["file_path"] == "../mw3/tu0/default.xex"
+          assert main["out_directory_path"] == "../ppc_mw3"
+          assert main["switch_table_file_path"] == "mw3_switch_tables.toml"
+          functions = config.get("functions", [])
+          addresses = [fn["address"] for fn in functions]
+          assert len(addresses) == len(set(addresses)), "duplicate MW3 function entries"
+          assert all(fn["size"] > 0 for fn in functions)
+
+          os.environ["MW2_TITLE"] = "mw3"
+          os.environ["MW2_VERSION"] = "tu0"
+          spec = importlib.util.spec_from_file_location("title", "tools/title.py")
+          title = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(title)
+          assert title.NAME == "mw3"
+          assert title.XEX.endswith("mw3/tu0/default.xex")
+          assert title.PPC.endswith("ppc_mw3")
+          assert title.TOML.endswith("config/MW3.toml")
+          print(f"Validated MW3 config: {len(functions)} explicit function extents")
+          PY
+
+      - name: Ensure MW3 cannot accidentally link against MW2 runtime
+        run: |
+          set +e
+          output=$(cmake -S . -B /tmp/mw3-runtime-guard -DMW2_TITLE=mw3 2>&1)
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "CMake unexpectedly accepted the incomplete MW3 runtime configuration."
+            exit 1
+          fi
+          echo "$output"
+          grep -F "MW3 runtime integration is incomplete" <<< "$output"
+
+  unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Configure asset-free tests
+        run: cmake -S . -B build-tests -G Ninja -DMW2_TESTS_ONLY=ON -DCMAKE_BUILD_TYPE=Debug
+      - name: Build and run tests
+        run: |
+          cmake --build build-tests --parallel 2
+          ctest --test-dir build-tests --output-on-failure
+
+  relay-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Test relay with locked dependencies
+        working-directory: relay
+        run: cargo test --locked

@@ -1,5 +1,7 @@
 #include "kernel.h"
+#include "xex_module_handle.h"
 #include "title.h"
+#include "heap.h"
 #include "../guest.h"
 #include "../diagnostics.h"
 #include "../log.h"
@@ -15,100 +17,76 @@ namespace
 {
     std::filesystem::path g_gameRoot;
 
-    // A range of guest address space. Freed blocks are kept, merged with
-    // their neighbours and handed out again first-fit, and zeroed when they
-    // are, as the console's pages come; the rest is carved off the top, which
-    // only rises, so what lies above it has never been used and is zero.
-    struct Heap
-    {
-        const char* name;
-        const uint32_t end;
-        std::atomic<uint32_t> top;
-        std::mutex lock;
-        std::map<uint32_t, uint32_t> live, free;   // address -> size
-        uint64_t allocations = 0, reused = 0, liveBytes = 0;
-
-        Heap(const char* heapName, uint32_t base, uint32_t limit)
-            : name(heapName), end(limit), top(base) {}
-
-        uint32_t Alloc(uint32_t size, uint32_t align)
-        {
-            if (!size) return 0;
-            std::lock_guard held(lock);
-            allocations++;
-            for (auto it = free.begin(); it != free.end(); ++it)
-            {
-                const uint32_t start = it->first, length = it->second;
-                const uint32_t at = (start + align - 1) & ~(align - 1);
-                if (uint64_t(at) + size > uint64_t(start) + length) continue;
-                free.erase(it);
-                if (at > start) free[start] = at - start;
-                if (at + size < start + length) free[at + size] = start + length - (at + size);
-                std::memset(guest::Base() + at, 0, size);
-                reused++;
-                return Took(at, size);
-            }
-            const uint32_t from = top.load(std::memory_order_relaxed);
-            const uint32_t at = (from + align - 1) & ~(align - 1);
-            if (uint64_t(at) + size > end) return 0;
-            if (at > from) free[from] = at - from;
-            top.store(at + size, std::memory_order_release);
-            return Took(at, size);
-        }
-
-        uint32_t Took(uint32_t at, uint32_t size)
-        {
-            live[at] = size;
-            liveBytes += size;
-            return at;
-        }
-
-        bool Free(uint32_t address)
-        {
-            std::lock_guard held(lock);
-            auto it = live.find(address);
-            if (it == live.end()) return false;
-            uint32_t start = address, length = it->second;
-            liveBytes -= length;
-            live.erase(it);
-            if (auto after = free.find(start + length); after != free.end())
-            {
-                length += after->second;
-                free.erase(after);
-            }
-            if (auto before = free.lower_bound(start); before != free.begin())
-                if (--before; before->first + before->second == start)
-                {
-                    start = before->first;
-                    length += before->second;
-                    free.erase(before);
-                }
-            free[start] = length;
-            return true;
-        }
-
-        uint32_t HighWater() const { return top.load(std::memory_order_acquire); }
-
-        void Report()
-        {
-            std::lock_guard held(lock);
-            uint64_t freeBytes = 0;
-            for (const auto& [at, size] : free) freeBytes += size;
-            LOGI("memory: %s heap %llu MB in use, %llu MB free below the high water of %08X;"
-                 " %llu allocations, %llu of them into freed space",
-                 name, (unsigned long long)(liveBytes >> 20), (unsigned long long)(freeBytes >> 20),
-                 HighWater(), (unsigned long long)allocations, (unsigned long long)reused);
-        }
-    };
-
-    Heap g_heap{ "virtual", guest::kHeapBase, guest::kHeapEnd };
-    Heap g_phys{ "physical", guest::kPhysicalBase, guest::kPhysicalEnd };
+    kernel::Heap g_heap{ "virtual", guest::kHeapBase, guest::kHeapEnd };
+    kernel::Heap g_phys{ "physical", guest::kPhysicalBase, guest::kPhysicalEnd };
 
     struct TlsTemplate { uint32_t address = 0, size = 0; };
     TlsTemplate g_tlsTemplate;
 
     std::mutex g_unimplLock;
     std::map<std::string, uint64_t> g_unimpl;
+
+    uint32_t g_executableXexHeader = 0;
+
+#if defined(MW3_TITLE)
+    void InstallExecutableModuleHandle(const std::vector<uint8_t>& xexHeader)
+    {
+        if (xexHeader.empty()) return; // Flat-PE development runs have no XEX metadata.
+        if (xexHeader.size() < 0x18 ||
+            std::memcmp(xexHeader.data(), "XEX2", 4) != 0 ||
+            uint32_t(*reinterpret_cast<const be32*>(xexHeader.data() + 8)) != xexHeader.size())
+        {
+            LOGW("XexExecutableModuleHandle: refusing an invalid or incomplete XEX header");
+            return;
+        }
+
+        unsigned matches = 0;
+        const uint32_t importRecord = kernel::xex::FindUniqueDataImportRecord(
+            guest::Base() + PPC_IMAGE_BASE, uint32_t(PPC_IMAGE_SIZE),
+            uint32_t(PPC_IMAGE_BASE), 0x0193, matches);
+        if (!importRecord)
+        {
+            LOGW("XexExecutableModuleHandle: expected one xboxkrnl ordinal 0x193 data import, found %u",
+                 matches);
+            return;
+        }
+
+        // The audited MW3 caller loads this global from 0x82000000 + 0x87C.
+        // A unique marker elsewhere is not sufficient: it would leave the
+        // actual startup pointer unresolved.
+        constexpr uint32_t kModuleHandleGlobal = PPC_IMAGE_BASE + 0x87C;
+        if (importRecord != kModuleHandleGlobal)
+        {
+            LOGW("XexExecutableModuleHandle: ordinal 0x193 is at %08X, MW3 caller reads %08X",
+                 importRecord, kModuleHandleGlobal);
+            return;
+        }
+
+        constexpr uint32_t kLdrEntrySize = 0x64;
+        constexpr uint32_t kXexHeaderBaseOffset = 0x58;
+        const uint32_t headerAddress = kernel::AllocateGuest(uint32_t(xexHeader.size()), 16);
+        const uint32_t ldrAddress = kernel::AllocateGuest(kLdrEntrySize, 16);
+        const uint32_t handleSlot = kernel::AllocateGuest(4, 4);
+        if (!headerAddress || !ldrAddress || !handleSlot)
+        {
+            if (headerAddress) kernel::FreeGuest(headerAddress);
+            if (ldrAddress) kernel::FreeGuest(ldrAddress);
+            if (handleSlot) kernel::FreeGuest(handleSlot);
+            LOGE("XexExecutableModuleHandle: could not allocate guest module metadata");
+            return;
+        }
+
+        std::memcpy(guest::Base() + headerAddress, xexHeader.data(), xexHeader.size());
+        std::memset(guest::Base() + ldrAddress, 0, kLdrEntrySize);
+        *GuestPtr<be32>(ldrAddress + kXexHeaderBaseOffset) = headerAddress;
+        *GuestPtr<be32>(handleSlot) = ldrAddress;
+        *GuestPtr<be32>(importRecord) = handleSlot;
+        g_executableXexHeader = headerAddress;
+
+        LOGI("XexExecutableModuleHandle: import %08X -> handle slot %08X -> LDR %08X -> XEX header %08X (%zu bytes)",
+             importRecord, handleSlot, ldrAddress, headerAddress, xexHeader.size());
+    }
+#endif
 }
 
 namespace
@@ -142,11 +120,16 @@ namespace
 
 const TlsTemplate& ImageTlsTemplate() { return g_tlsTemplate; }
 
-void kernel::Initialise(const std::filesystem::path& gameRoot)
+void kernel::Initialise(const std::filesystem::path& gameRoot, const std::vector<uint8_t>& xexHeader)
 {
     ReadTlsDirectory();
     InstallTimeStampBundle();
     InstallDebugMonitorData();
+#if defined(MW3_TITLE)
+    InstallExecutableModuleHandle(xexHeader);
+#else
+    (void)xexHeader;
+#endif
     g_gameRoot = gameRoot;
     LOGI("game root: %s%s", gameRoot.string().c_str(),
          std::filesystem::exists(gameRoot) ? "" : "  (does not exist)");
@@ -386,3 +369,5 @@ bool kernel::DeliverUserApcs(const PPCContext& caller)
     }
     return true;
 }
+
+uint32_t kernel::ExecutableXexHeader() { return g_executableXexHeader; }

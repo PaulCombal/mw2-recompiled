@@ -3,6 +3,54 @@ project(mw2recomp CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+option(MW2_TESTS_ONLY "Configure only asset-free runtime unit tests" OFF)
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(xex-header-test tests/xex_header_test.cpp runtime/install/xex.cpp runtime/install/crypto.cpp)
+    target_include_directories(xex-header-test PRIVATE "${CMAKE_SOURCE_DIR}")
+    add_test(NAME xex-header-test COMMAND xex-header-test)
+    add_executable(guest-format-test tests/guest_format_test.cpp)
+    target_include_directories(guest-format-test PRIVATE "${CMAKE_SOURCE_DIR}")
+    add_test(NAME guest-format-test COMMAND guest-format-test)
+    add_executable(dpc-queue-test tests/dpc_queue_test.cpp)
+    target_include_directories(dpc-queue-test PRIVATE "${CMAKE_SOURCE_DIR}")
+    find_package(Threads)
+    if(Threads_FOUND)
+        target_link_libraries(dpc-queue-test PRIVATE Threads::Threads)
+    endif()
+    add_test(NAME dpc-queue-test COMMAND dpc-queue-test)
+    # Runtime tests: the runtime's own kernel and GPU sources, compiled unchanged against
+    # a fake guest memory (tests/fake_guest.h) and a stub of the generated
+    # header (tests/stubs). Synthetic data only; no game files are involved.
+    function(mw3_runtime_test name)
+        add_executable(${name} tests/${name}.cpp ${ARGN})
+        target_include_directories(${name} PRIVATE "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/tests/stubs")
+        if(Threads_FOUND)
+            target_link_libraries(${name} PRIVATE Threads::Threads)
+        endif()
+        add_test(NAME ${name} COMMAND ${name})
+        set_tests_properties(${name} PROPERTIES TIMEOUT 60)
+    endfunction()
+    mw3_runtime_test(kernel_heap_test)
+    mw3_runtime_test(kernel_memory_test runtime/kernel/memory.cpp)
+    mw3_runtime_test(kernel_threads_test runtime/kernel/threads.cpp runtime/kernel/objects.cpp)
+    mw3_runtime_test(kernel_objects_test runtime/kernel/objects.cpp)
+    mw3_runtime_test(kernel_files_test runtime/kernel/files.cpp runtime/kernel/objects.cpp)
+    mw3_runtime_test(kernel_dpc_test runtime/kernel/dpc.cpp runtime/kernel/objects.cpp)
+    mw3_runtime_test(kernel_xam_test runtime/kernel/xam.cpp runtime/kernel/objects.cpp)
+    # The PM4 command processor, fed streams built by the test, with a recording fake
+    # standing in for the Vulkan renderer.
+    mw3_runtime_test(gpu_command_processor_test runtime/gpu/command_processor.cpp)
+endif()
+# Stop before title selection, generated PPC sources and dependency downloads.
+if(MW2_TESTS_ONLY)
+    if(NOT BUILD_TESTING)
+        message(FATAL_ERROR "MW2_TESTS_ONLY requires BUILD_TESTING=ON")
+    endif()
+    return()
+endif()
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -12,6 +60,8 @@ option(MW2_TRACE_INDIRECT "Report indirect calls with no recompiled target inste
 option(MW2_LOGGING "Emit the runtime's log" ON)
 option(MW2_PORTABLE "Link the C++ runtime statically, for a binary that runs on other machines" OFF)
 option(MW2_DIAGNOSTICS "Build the traces, dumps, statistics, reports and test harness (runtime/diagnostics.h)" ON)
+option(MW3_RECOMP_ONLY "Build only the MW3 generated PPC library; runtime hooks are not ready yet" OFF)
+option(MW3_LINK_PROBE "Link a diagnostic MW3 desktop executable after the compile-only checks" OFF)
 
 # The x86-64 level the game is compiled for. The 360's vector unit reads memory
 # big-endian, so nearly every vector load, store and permute of the recompiled
@@ -27,14 +77,20 @@ set(MW2_X86_LEVEL "x86-64-v2" CACHE STRING "The -march the game is compiled for"
 # default_mp.xex (the multiplayer). Each is recompiled into its own tree by
 # build.sh (TITLE=sp|mp), and the runtime names the title's functions through
 # runtime/title.h, which this definition selects.
-set(MW2_TITLE "sp" CACHE STRING "Which executable to build: sp (default.xex) or mp (default_mp.xex)")
+set(MW2_TITLE "sp" CACHE STRING "Which executable to build: sp, mp, or mw3")
 if(MW2_TITLE STREQUAL "sp")
     set(MW2_PPC_DIR "${CMAKE_SOURCE_DIR}/ppc")
 elseif(MW2_TITLE STREQUAL "mp")
     set(MW2_PPC_DIR "${CMAKE_SOURCE_DIR}/ppc_mp")
     add_compile_definitions(MW2_TITLE_MP=1)
+elseif(MW2_TITLE STREQUAL "mw3")
+    set(MW2_PPC_DIR "${CMAKE_SOURCE_DIR}/ppc_mw3")
+    if(NOT MW3_RECOMP_ONLY)
+        message(FATAL_ERROR "MW3 runtime integration is incomplete; configure with -DMW3_RECOMP_ONLY=ON to validate generated PPC code")
+    endif()
+    add_compile_definitions(MW3_TITLE=1)
 else()
-    message(FATAL_ERROR "MW2_TITLE must be sp or mp, not '${MW2_TITLE}'")
+    message(FATAL_ERROR "MW2_TITLE must be sp, mp, or mw3, not '${MW2_TITLE}'")
 endif()
 # And which version of it: the one title update 6 makes of the disc's (tu6),
 # or the disc's own (tu0), recompiled into ppc_tu0/ and ppc_mp_tu0/.
@@ -44,6 +100,9 @@ if(MW2_VERSION STREQUAL "tu0")
     add_compile_definitions(MW2_VERSION_TU0=1)
 elseif(NOT MW2_VERSION STREQUAL "tu6")
     message(FATAL_ERROR "MW2_VERSION must be tu6 or tu0, not '${MW2_VERSION}'")
+endif()
+if(MW2_TITLE STREQUAL "mw3" AND NOT MW2_VERSION STREQUAL "tu6")
+    message(FATAL_ERROR "MW3 currently uses its disc executable; leave MW2_VERSION at its default")
 endif()
 
 # ---- how the code is optimised ---------------------------------------------
@@ -128,6 +187,84 @@ if(MW2_TRACE_INDIRECT)
     target_compile_definitions(ppc_recomp PUBLIC MW2_TRACE_INDIRECT=1)
 endif()
 
+# MW3's generated PPC can be compiled independently before its runtime hook
+# addresses have been identified. This deliberately stops before compiling
+# MW2-specific runtime sources or linking an executable with fabricated hooks.
+if(MW3_RECOMP_ONLY AND NOT MW3_LINK_PROBE)
+    if(NOT MW2_TITLE STREQUAL "mw3")
+        message(FATAL_ERROR "MW3_RECOMP_ONLY requires -DMW2_TITLE=mw3")
+    endif()
+
+    # Compile the shared kernel implementation as object files against the
+    # generated MW3 headers. This catches C++ integration errors in import
+    # handlers without linking an executable or claiming MW2 semantics are
+    # compatible with MW3. MW3-specific hooks and title globals remain gated.
+    file(GLOB MW3_KERNEL_SOURCES CONFIGURE_DEPENDS
+         "${CMAKE_SOURCE_DIR}/runtime/kernel/*.cpp")
+    # The runtime's own sources, which name the title through runtime/title.h:
+    # compiling them against MW3's block checks that every entry the code needs
+    # is there or compiled out. gpu/, apu/, install/ and online/ come too, with
+    # placeholder hashes and playlist data (nothing is linked, so the values are
+    # never used). The Vulkan renderer and the XMA decoder are added only where
+    # their headers are installed, so a machine with them checks more.
+    file(GLOB MW3_TITLE_SOURCES CONFIGURE_DEPENDS
+         "${CMAKE_SOURCE_DIR}/runtime/*.cpp"
+         "${CMAKE_SOURCE_DIR}/runtime/gpu/*.cpp"
+         "${CMAKE_SOURCE_DIR}/runtime/apu/*.cpp"
+         "${CMAKE_SOURCE_DIR}/runtime/install/*.cpp"
+         "${CMAKE_SOURCE_DIR}/runtime/online/*.cpp")
+    list(REMOVE_ITEM MW3_TITLE_SOURCES "${CMAKE_SOURCE_DIR}/runtime/apu/xma.cpp")
+    set(MW3_OPTIONAL_NOTES "")
+    find_package(Vulkan QUIET)
+    if(Vulkan_FOUND)
+        file(GLOB MW3_VULKAN_SOURCES CONFIGURE_DEPENDS
+             "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/*.cpp")
+        list(REMOVE_ITEM MW3_VULKAN_SOURCES
+             "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_build.cpp")
+        list(APPEND MW3_TITLE_SOURCES ${MW3_VULKAN_SOURCES})
+        string(APPEND MW3_OPTIONAL_NOTES " vulkan")
+    endif()
+    find_path(MW3_AVCODEC_DIR libavcodec/avcodec.h
+              HINTS "${CMAKE_SOURCE_DIR}/third_party/ffmpeg-xenia")
+    if(MW3_AVCODEC_DIR)
+        list(APPEND MW3_TITLE_SOURCES "${CMAKE_SOURCE_DIR}/runtime/apu/xma.cpp")
+        string(APPEND MW3_OPTIONAL_NOTES " xma")
+    endif()
+    message(STATUS "MW3 compile check: optional sources:${MW3_OPTIONAL_NOTES}")
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/mw3-check-generated")
+    file(WRITE "${CMAKE_BINARY_DIR}/mw3-check-generated/playlists_data.h"
+         "// Placeholder for the MW3 compile check only.\nstatic const unsigned char kPlaylists[] = { 0 };\nstatic constexpr unsigned kPlaylistsSize = 1;\n")
+    add_library(mw3-runtime-compile-check OBJECT ${MW3_KERNEL_SOURCES} ${MW3_TITLE_SOURCES})
+    target_include_directories(mw3-runtime-compile-check PRIVATE
+        "${MW2_PPC_DIR}"
+        "${CMAKE_SOURCE_DIR}/runtime"
+        "${CMAKE_BINARY_DIR}/mw3-check-generated"
+        "${CMAKE_SOURCE_DIR}/XenonRecomp/thirdparty/simde")
+    if(MW3_AVCODEC_DIR)
+        target_include_directories(mw3-runtime-compile-check PRIVATE "${MW3_AVCODEC_DIR}")
+    endif()
+    if(Vulkan_FOUND)
+        target_link_libraries(mw3-runtime-compile-check PRIVATE Vulkan::Headers)
+    endif()
+    target_compile_options(mw3-runtime-compile-check PRIVATE
+        -march=${MW2_X86_LEVEL} -fwrapv)
+    target_compile_definitions(mw3-runtime-compile-check PRIVATE
+        MW3_TITLE=1 MW2_DIAGNOSTICS=0
+        MW2_XEX_SHA256_SP=\"compile-check\" MW2_XEX_SHA256_MP=\"compile-check\"
+        MW2_DISC_SHA256_SP=\"compile-check\" MW2_DISC_SHA256_MP=\"compile-check\")
+
+    add_custom_target(mw3-recomp-check)
+    add_dependencies(mw3-recomp-check ppc_recomp mw3-runtime-compile-check)
+    if(BUILD_TESTING)
+        add_dependencies(mw3-recomp-check xex-header-test guest-format-test dpc-queue-test)
+    endif()
+    return()
+endif()
+
+if(MW3_LINK_PROBE AND NOT MW2_TITLE STREQUAL "mw3")
+    message(FATAL_ERROR "MW3_LINK_PROBE requires -DMW2_TITLE=mw3")
+endif()
+
 # ---- runtime ---------------------------------------------------------------
 file(GLOB RUNTIME_SOURCES CONFIGURE_DEPENDS
      "${CMAKE_SOURCE_DIR}/runtime/*.cpp"
@@ -189,6 +326,9 @@ set(MW2_ONLINE_SOURCES
 add_executable(mw2 ${RUNTIME_SOURCES}
     ${MW2_ONLINE_SOURCES}
     "${MW2_PPC_DIR}/stubs_generated.cpp")
+if(MW2_TITLE STREQUAL "mw3")
+    set_target_properties(mw2 PROPERTIES OUTPUT_NAME "mw3")
+endif()
 target_link_libraries(mw2 PRIVATE ppc_recomp)
 target_compile_options(mw2 PRIVATE -march=${MW2_X86_LEVEL})
 # The one file that must run on any x86-64 processor: it checks for the others.
@@ -234,21 +374,32 @@ function(mw2_sha256 variable path)
     file(SHA256 "${path}" hash)
     set(${variable} "${hash}" PARENT_SCOPE)
 endfunction()
-mw2_sha256(MW2_XEX_SHA256_SP  "${MW2_XEX_DIR}/default.xex")
-mw2_sha256(MW2_XEX_SHA256_MP  "${MW2_XEX_DIR}/default_mp.xex")
-mw2_sha256(MW2_DISC_SHA256_SP "${CMAKE_SOURCE_DIR}/mw2/tu0/default.xex")
-mw2_sha256(MW2_DISC_SHA256_MP "${CMAKE_SOURCE_DIR}/mw2/tu0/default_mp.xex")
-set(MW2_HASH_DEFINITIONS
-    MW2_XEX_SHA256_SP="${MW2_XEX_SHA256_SP}" MW2_XEX_SHA256_MP="${MW2_XEX_SHA256_MP}"
-    MW2_DISC_SHA256_SP="${MW2_DISC_SHA256_SP}" MW2_DISC_SHA256_MP="${MW2_DISC_SHA256_MP}")
-if(NOT MW2_VERSION STREQUAL "tu0")
-    mw2_sha256(MW2_UPDATE_SHA256_PATCH_MP   "${CMAKE_SOURCE_DIR}/mw2/update/patch_mp.ff")
-    mw2_sha256(MW2_UPDATE_SHA256_DLC1_UI_MP "${CMAKE_SOURCE_DIR}/mw2/update/dlc1_ui_mp.ff")
-    mw2_sha256(MW2_UPDATE_SHA256_DLC2_UI_MP "${CMAKE_SOURCE_DIR}/mw2/update/dlc2_ui_mp.ff")
-    list(APPEND MW2_HASH_DEFINITIONS
-        MW2_UPDATE_SHA256_PATCH_MP="${MW2_UPDATE_SHA256_PATCH_MP}"
-        MW2_UPDATE_SHA256_DLC1_UI_MP="${MW2_UPDATE_SHA256_DLC1_UI_MP}"
-        MW2_UPDATE_SHA256_DLC2_UI_MP="${MW2_UPDATE_SHA256_DLC2_UI_MP}")
+if(MW2_TITLE STREQUAL "mw3")
+    # The link probe is a development executable for the one pinned MW3 XEX.
+    # It accepts an explicit XEX/flat-image path; no MW2 disc or update assets
+    # are required, and the launcher/player-install path is not enabled.
+    set(MW2_HASH_DEFINITIONS
+        MW2_XEX_SHA256_SP="d90bc8d93b7b8f6001ead8330271196a6ef7a5c2e4a9e9b63118f47d58a05912"
+        MW2_XEX_SHA256_MP="unsupported"
+        MW2_DISC_SHA256_SP="d90bc8d93b7b8f6001ead8330271196a6ef7a5c2e4a9e9b63118f47d58a05912"
+        MW2_DISC_SHA256_MP="unsupported")
+else()
+    mw2_sha256(MW2_XEX_SHA256_SP  "${MW2_XEX_DIR}/default.xex")
+    mw2_sha256(MW2_XEX_SHA256_MP  "${MW2_XEX_DIR}/default_mp.xex")
+    mw2_sha256(MW2_DISC_SHA256_SP "${CMAKE_SOURCE_DIR}/mw2/tu0/default.xex")
+    mw2_sha256(MW2_DISC_SHA256_MP "${CMAKE_SOURCE_DIR}/mw2/tu0/default_mp.xex")
+    set(MW2_HASH_DEFINITIONS
+        MW2_XEX_SHA256_SP="${MW2_XEX_SHA256_SP}" MW2_XEX_SHA256_MP="${MW2_XEX_SHA256_MP}"
+        MW2_DISC_SHA256_SP="${MW2_DISC_SHA256_SP}" MW2_DISC_SHA256_MP="${MW2_DISC_SHA256_MP}")
+    if(NOT MW2_VERSION STREQUAL "tu0")
+        mw2_sha256(MW2_UPDATE_SHA256_PATCH_MP   "${CMAKE_SOURCE_DIR}/mw2/update/patch_mp.ff")
+        mw2_sha256(MW2_UPDATE_SHA256_DLC1_UI_MP "${CMAKE_SOURCE_DIR}/mw2/update/dlc1_ui_mp.ff")
+        mw2_sha256(MW2_UPDATE_SHA256_DLC2_UI_MP "${CMAKE_SOURCE_DIR}/mw2/update/dlc2_ui_mp.ff")
+        list(APPEND MW2_HASH_DEFINITIONS
+            MW2_UPDATE_SHA256_PATCH_MP="${MW2_UPDATE_SHA256_PATCH_MP}"
+            MW2_UPDATE_SHA256_DLC1_UI_MP="${MW2_UPDATE_SHA256_DLC1_UI_MP}"
+            MW2_UPDATE_SHA256_DLC2_UI_MP="${MW2_UPDATE_SHA256_DLC2_UI_MP}")
+    endif()
 endif()
 target_compile_definitions(mw2 PRIVATE ${MW2_HASH_DEFINITIONS})
 if(WIN32)

@@ -1,0 +1,41 @@
+# Template for the MW3 campaign's recompiler config. NOT used by the build:
+# copy it to MW3.toml and fill in every <FILL> from tools/port_hooks.py
+# (see docs/MW3-BRINGUP.md, step 2). XenonRecomp stops on an unfilled value,
+# which is the point: a wrong address here miscompiles the game quietly.
+#
+# The register-handling switches are MW2's. They are a compiler-performance
+# choice, not a property of the title; they can stay while the game boots.
+[main]
+file_path = "../mw3/tu0/default.xex"
+out_directory_path = "../ppc_mw3"
+switch_table_file_path = "mw3_switch_tables.toml"
+
+skip_lr = false
+skip_msr = false
+ctr_as_local = true
+xer_as_local = true
+reserved_as_local = true
+cr_as_local = true
+non_argument_as_local = true
+non_volatile_as_local = true
+
+# The C runtime's register save/restore helpers. Same compiler as MW2's, so
+# port_hooks.py should find them by their instructions.
+restgprlr_14_address = <FILL>
+savegprlr_14_address = <FILL>
+restfpr_14_address   = <FILL>
+savefpr_14_address   = <FILL>
+restvmx_14_address   = <FILL>
+savevmx_14_address   = <FILL>
+restvmx_64_address   = <FILL>
+savevmx_64_address   = <FILL>
+
+# The C runtime's setjmp and longjmp (Com_Error leaves an error by longjmp).
+setjmp_address  = <FILL>
+longjmp_address = <FILL>
+
+# Functions the analyser gets wrong. Empty until the first recompile shows
+# which: leaf functions that contain a jump table are the usual ones (see
+# config/MW2.tu0.toml for the shape, tools/fixbounds.py for the extents).
+functions = [
+]

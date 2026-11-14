@@ -92,6 +92,7 @@ GUEST_HOOK(T_Com_Error)
 }
 
 #if MW2_DIAGNOSTICS
+#if !defined(MW3_TITLE) // MW2-only print and console hooks
 // Com_Printf(channel, format, ...): viewpos answers through it, so it is the
 // general print and not only the error one.
 GUEST_HOOK(T_Com_Printf)
@@ -135,6 +136,8 @@ GUEST_HOOK(T_Cbuf_AddText)
     if (traced) LOGI("cbuf(%u): %s", ctx.r3.u32, GuestAnsi(ctx.r4.u32).c_str());
     GUEST_ORIG(T_Cbuf_AddText)(ctx, base);
 }
+#endif
+
 #endif
 
 // DB_FindXAssetHeader gives up here when a lookup fails and the loader is not

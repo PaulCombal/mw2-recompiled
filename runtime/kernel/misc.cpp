@@ -14,6 +14,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <limits>
 
 uint64_t kernel::SystemTime100ns()
 {
@@ -57,6 +58,99 @@ PPC_FUNC(__imp__KeQuerySystemTime)
 {
     auto* out = GuestPtr<be64>(ctx.r3.u32);
     if (out) *out = kernel::SystemTime100ns();
+}
+
+// TIME_FIELDS is eight big-endian SHORTs. NT LARGE_INTEGER time is
+// measured in 100ns units from 1601-01-01 UTC.
+namespace
+{
+    struct XTimeFields
+    {
+        be16 year;
+        be16 month;
+        be16 day;
+        be16 hour;
+        be16 minute;
+        be16 second;
+        be16 milliseconds;
+        be16 weekday;
+    };
+
+    constexpr uint64_t kNtTicksPerMillisecond = 10000;
+    constexpr uint64_t kNtTicksPerSecond = 10000000;
+    constexpr uint64_t kNtTicksPerDay = 864000000000;
+    constexpr std::chrono::sys_days kNtEpoch =
+        std::chrono::sys_days{ std::chrono::year{1601} / 1 / 1 };
+}
+
+PPC_FUNC(__imp__RtlTimeToTimeFields)
+{
+    const auto* time = GuestPtr<const be64>(ctx.r3.u32);
+    auto* fields = GuestPtr<XTimeFields>(ctx.r4.u32);
+    if (!time || !fields) return;
+
+    const uint64_t ticks = uint64_t(*time);
+    const uint64_t dayCount = ticks / kNtTicksPerDay;
+    uint64_t remainder = ticks % kNtTicksPerDay;
+    const auto date = kNtEpoch + std::chrono::days{ int64_t(dayCount) };
+    const std::chrono::year_month_day ymd{ date };
+
+    fields->year = int16_t(int(ymd.year()));
+    fields->month = uint16_t(unsigned(ymd.month()));
+    fields->day = uint16_t(unsigned(ymd.day()));
+    fields->weekday = uint16_t(std::chrono::weekday{ date }.c_encoding());
+    fields->hour = uint16_t(remainder / (3600 * kNtTicksPerSecond));
+    remainder %= 3600 * kNtTicksPerSecond;
+    fields->minute = uint16_t(remainder / (60 * kNtTicksPerSecond));
+    remainder %= 60 * kNtTicksPerSecond;
+    fields->second = uint16_t(remainder / kNtTicksPerSecond);
+    remainder %= kNtTicksPerSecond;
+    fields->milliseconds = uint16_t(remainder / kNtTicksPerMillisecond);
+}
+
+PPC_FUNC(__imp__RtlTimeFieldsToTime)
+{
+    const auto* fields = GuestPtr<const XTimeFields>(ctx.r3.u32);
+    auto* time = GuestPtr<be64>(ctx.r4.u32);
+    if (!fields || !time) { ctx.r3.u64 = 0; return; }
+
+    const int yearValue = int16_t(fields->year);
+    const unsigned monthValue = uint16_t(fields->month);
+    const unsigned dayValue = uint16_t(fields->day);
+    const unsigned hourValue = uint16_t(fields->hour);
+    const unsigned minuteValue = uint16_t(fields->minute);
+    const unsigned secondValue = uint16_t(fields->second);
+    const unsigned millisecondValue = uint16_t(fields->milliseconds);
+
+    const std::chrono::year_month_day date{
+        std::chrono::year{ yearValue },
+        std::chrono::month{ monthValue },
+        std::chrono::day{ dayValue }
+    };
+    if (yearValue < 1601 || !date.ok() || hourValue > 23 ||
+        minuteValue > 59 || secondValue > 59 || millisecondValue > 999)
+    {
+        ctx.r3.u64 = 0;
+        return;
+    }
+
+    const int64_t dayCount = (std::chrono::sys_days{ date } - kNtEpoch).count();
+    if (dayCount < 0) { ctx.r3.u64 = 0; return; }
+
+    const uint64_t ticks =
+        uint64_t(dayCount) * kNtTicksPerDay +
+        uint64_t(hourValue) * 3600 * kNtTicksPerSecond +
+        uint64_t(minuteValue) * 60 * kNtTicksPerSecond +
+        uint64_t(secondValue) * kNtTicksPerSecond +
+        uint64_t(millisecondValue) * kNtTicksPerMillisecond;
+    if (ticks > uint64_t(std::numeric_limits<int64_t>::max()))
+    {
+        ctx.r3.u64 = 0;
+        return;
+    }
+
+    *time = ticks;
+    ctx.r3.u64 = 1;
 }
 
 PPC_FUNC(__imp__KeDelayExecutionThread)
@@ -109,6 +203,17 @@ PPC_FUNC(__imp__XamLoaderSetLaunchData)
 {
     const auto* data = GuestPtr<const uint8_t>(ctx.r3.u32);
     install::LaunchData().assign(data, data + ctx.r4.u32);
+    // MW3's fatal-error path (sub_8232E638) formats "e%s" with its message into
+    // this buffer and then relaunches default.xex, so a startup failure surfaces
+    // here as text. Show the printable head of it.
+    // The buffer opens with a small header (the message sits at +4), so start at
+    // the first printable byte within its head.
+    std::string text;
+    uint32_t at = 0;
+    while (at < 16 && at < ctx.r4.u32 && !(data[at] >= 32 && data[at] < 127)) at++;
+    for (uint32_t i = at; i < ctx.r4.u32 && i < at + 240 && data[i]; i++)
+        text += (data[i] >= 32 && data[i] < 127) ? char(data[i]) : '?';
+    if (!text.empty()) LOGW("XamLoaderSetLaunchData: %u bytes, text \"%s\"", ctx.r4.u32, text.c_str());
     ctx.r3.u64 = X_ERROR_SUCCESS;
 }
 
@@ -221,6 +326,41 @@ PPC_FUNC(__imp__RtlInitAnsiString)
     size_t length = std::strlen(reinterpret_cast<const char*>(guest::Base() + source));
     dest->length = uint16_t(length);
     dest->maximumLength = uint16_t(length + 1);
+    dest->pointer = source;
+}
+
+// (UNICODE_STRING*, source). The source buffer remains owned by the
+// caller; this routine only records its byte length and pointer.
+PPC_FUNC(__imp__RtlInitUnicodeString)
+{
+    struct XUnicodeString { be16 length; be16 maximumLength; be32 pointer; };
+    auto* dest = GuestPtr<XUnicodeString>(ctx.r3.u32);
+    if (!dest) return;
+
+    const uint32_t source = ctx.r4.u32;
+    if (!source)
+    {
+        dest->length = 0;
+        dest->maximumLength = 0;
+        dest->pointer = 0;
+        return;
+    }
+
+    const auto* text = GuestPtr<const be16>(source);
+    if (!text)
+    {
+        dest->length = 0;
+        dest->maximumLength = 0;
+        dest->pointer = 0;
+        return;
+    }
+
+    // UNICODE_STRING lengths are byte counts and exclude the terminator.
+    // Length fields are USHORTs, so cap the scan before multiplication wraps.
+    uint32_t characters = 0;
+    while (characters < 0x7FFE && uint16_t(text[characters]) != 0) ++characters;
+    dest->length = uint16_t(characters * 2);
+    dest->maximumLength = uint16_t((characters + 1) * 2);
     dest->pointer = source;
 }
 

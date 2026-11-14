@@ -28,7 +28,77 @@
 // data). The multiplayer's client state is 0x200 smaller on the disc; the
 // fields read here have the same offsets.
 
-#if defined(MW2_TITLE_MP) && !defined(MW2_VERSION_TU0)
+// Modern Warfare 3's campaign (iw5sp_ship.exe), the disc's executable, for the
+// recompilation in ppc_mw3/ (-DMW3_TITLE=1; docs/MW3-BRINGUP.md). Every entry here
+// was found in that executable and checked against it: none is an MW2 address.
+// MW2_VERSION does not apply to it.
+//
+// An entry that is not here has not been located, or has been and is not safe
+// to use yet; the code that names it is compiled out under #ifdef, as the
+// multiplayer's is. The ones located and left out are listed below, with what
+// stops them: a hook is the same function in both games, but its body reads
+// the title's structures at MW2's offsets, and those moved.
+#if defined(MW3_TITLE)
+
+#define MW2_TITLE_NAME  "MW3 campaign"
+#define T_ENTRY_POINT   0x82459E58u          // the XEX header's ENTRY_POINT
+
+// the engine
+#define T_Com_Error            8229D688   // logs the error and who raised it; takes (code, format, ...) as MW2's does
+
+// D3D9's device structure moved between the games; the two offsets the runtime
+// reads (gpu/d3d_hooks.cpp) were found by laying sub_820A11B8 (the flip packet
+// writer, MW2's sub_820C2E60) beside its MW2 counterpart: the same code, every
+// large offset shifted (10900 -> 11028, 13596 -> 13872, 11860 -> 12156,
+// 10941 -> 11069), and by the arena wait's own first load.
+#define T_DEV_PresentInterval  13872u   // D3DRS_PRESENTINTERVAL (MW2: 13596)
+#define T_DEV_ProgressBlock    11024u   // the arena progress block (MW2: 10896)
+
+// the D3D9 library's hooks, found by call structure (docs/MW3-BRINGUP.md)
+#define T_D3D_Present          820A16E8   // takes the device in r3 and writes its flip
+#define T_D3D_ArenaWait        8209B5E8   // first instruction loads [r3+11024]
+// Identical to MW2's sub_820B8B58 statement for statement: it clears the 40-byte
+// resource header and stores the program at +24, and the hook reads the shader
+// header after it (shader_preload.cpp), checking its magic before it trusts it.
+#define T_D3D_InitPixelShader  820984F0
+// MW2's sub_820B6B10: the only function in either executable with its four
+// large immediates (22413312, 3145728, -1077542912, -1077936128), 1572 bytes in
+// both, with the same sequence of structure accesses.
+#define T_D3D_PatchVertexFetches 820A4468
+// MW2's sub_823A52F8 (destination, source, size, r6): the same 20 calls in the
+// same order (the callees map one to one, e.g. 820B9230 -> 82098BC8), the same
+// bit-field extracts on destination and size, and one device offset that moved
+// (13320 -> 14472). The hook only wraps it, so no structure offset is read here.
+#define T_Image_FlushMove      823D4398
+// MW2's sub_8227CF18 (localClientNum in r3, line in r4): the same "p<digit> "
+// client prefix parse (the byte compares against 112, 80, 48, 50 and 32), the
+// same buffer record ({data, size, used} at +0/+4/+8) and the same enter/leave
+// around it; only the critical-section index differs (28 -> 26).
+#define T_Cbuf_AddText         8228CA48
+
+// Located, not enabled: each reads fields of the title's own structures at MW2
+// offsets, which have not been re-derived (MW2's +21628 is +21908 on the device).
+//   T_Memcard_InitializeSystem   8232EC08
+//   T_CG_CullZoom                821067A8
+// Not located: T_D3D_ReplayRecording, T_Job_WaitPredicate, T_CG_ViewFov, T_Dvar_RegisterInt, T_DB_MissingAsset,
+// T_Com_Printf (MW3 has no such function).
+
+// the kernel's data imports: the image's own import records, found by their
+// (library, ordinal) words, 0x000100AD and 0x00010059, each present once
+#define T_DATA_TimeStampBundlePtr 0x820007B0u   // the KeTimeStampBundle import record
+#define T_DATA_DebugMonitorPtr    0x8200093Cu   // the KeDebugMonitorData import record
+
+// Not derived for this title: the code that reads each of these checks for zero.
+// The MW2 gameplay code (player.cpp's route trace) is the only reader of the
+// client's fields, and the engine's own globals are not mapped for MW3 yet.
+#define T_DATA_DeviceTable        0u
+#define T_DATA_ClientStates       0u
+#define T_CLIENT_STRIDE           0u
+#define T_CLIENT_VALID            0u
+#define T_CLIENT_ORIGIN           0u
+#define T_CLIENT_ANGLES           0u
+
+#elif defined(MW2_TITLE_MP) && !defined(MW2_VERSION_TU0)
 
 #define MW2_TITLE_NAME  "multiplayer"
 #define T_ENTRY_POINT   0x823A90C8u          // the XEX header's ENTRY_POINT
@@ -537,6 +607,14 @@
 #define T_DATA_Spa                0x83E60000u
 #define T_DATA_SpaSize            625298u
 
+#endif
+
+// The device offsets of MW2's D3D9 (docs/d3d9-seam.md); MW3's block above has its own.
+#ifndef T_DEV_PresentInterval
+#define T_DEV_PresentInterval  13596u
+#endif
+#ifndef T_DEV_ProgressBlock
+#define T_DEV_ProgressBlock    10896u
 #endif
 
 // The macros that turn a table entry into the symbols the recompiled code uses.

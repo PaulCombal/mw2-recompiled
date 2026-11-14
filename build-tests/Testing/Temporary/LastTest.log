@@ -1,0 +1,233 @@
+Start testing: Nov 14 12:51 Asia
+----------------------------------------------------------
+1/11 Testing: xex-header-test
+1/11 Test: xex-header-test
+Command: "/home/claude/mw3recomp/build-tests/xex-header-test"
+Directory: /home/claude/mw3recomp/build-tests
+"xex-header-test" start time: Nov 14 12:51 Asia
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"xex-header-test" end time: Nov 14 12:51 Asia
+"xex-header-test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/11 Testing: guest-format-test
+2/11 Test: guest-format-test
+Command: "/home/claude/mw3recomp/build-tests/guest-format-test"
+Directory: /home/claude/mw3recomp/build-tests
+"guest-format-test" start time: Nov 14 12:51 Asia
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"guest-format-test" end time: Nov 14 12:51 Asia
+"guest-format-test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+3/11 Testing: dpc-queue-test
+3/11 Test: dpc-queue-test
+Command: "/home/claude/mw3recomp/build-tests/dpc-queue-test"
+Directory: /home/claude/mw3recomp/build-tests
+"dpc-queue-test" start time: Nov 14 12:51 Asia
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"dpc-queue-test" end time: Nov 14 12:51 Asia
+"dpc-queue-test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+4/11 Testing: kernel_heap_test
+4/11 Test: kernel_heap_test
+Command: "/home/claude/mw3recomp/build-tests/kernel_heap_test"
+Directory: /home/claude/mw3recomp/build-tests
+"kernel_heap_test" start time: Nov 14 12:51 Asia
+Output:
+----------------------------------------------------------
+kernel-heap-test ok
+<end of output>
+Test time =   0.34 sec
+----------------------------------------------------------
+Test Passed.
+"kernel_heap_test" end time: Nov 14 12:51 Asia
+"kernel_heap_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+5/11 Testing: kernel_memory_test
+5/11 Test: kernel_memory_test
+Command: "/home/claude/mw3recomp/build-tests/kernel_memory_test"
+Directory: /home/claude/mw3recomp/build-tests
+"kernel_memory_test" start time: Nov 14 12:51 Asia
+Output:
+----------------------------------------------------------
+[w] NtAllocateVirtualMemory: out of guest heap (8388608 bytes)
+[w] MmAllocatePhysicalMemoryEx: out of physical heap (4294967280 bytes, align 65536, range 00000000..FFFFFFFF; 1545 MB already handed out)
+kernel-memory-test ok
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"kernel_memory_test" end time: Nov 14 12:51 Asia
+"kernel_memory_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+6/11 Testing: kernel_threads_test
+6/11 Test: kernel_threads_test
+Command: "/home/claude/mw3recomp/build-tests/kernel_threads_test"
+Directory: /home/claude/mw3recomp/build-tests
+"kernel_threads_test" start time: Nov 14 12:51 Asia
+Output:
+----------------------------------------------------------
+[w] ExCreateThread: start address 00000000 is not guest code
+[w] ExCreateThread: start address 00010000 is not guest code
+[w] ExCreateThread: start address 81FFFFFC is not guest code
+[w] ExCreateThread: start address 82100000 is not guest code
+[k] ExCreateThread -> id 2 handle 00010004 at 82001000, 512 KB stack at 00100000, processor 0 (flags 00000000), r13 00180000
+[k] thread 2 returned
+[k] ExCreateThread -> id 3 handle 00010008 at 82001000, 512 KB stack at 00182000, processor 0 (flags 00000000), r13 00202000
+[k] thread 3 returned
+[k] ExCreateThread -> id 4 handle 0001000C at 82001000, 512 KB stack at 00203000, processor 0 (flags 00000001), r13 00283000 (suspended)
+[k] thread 4 returned
+[k] ExCreateThread -> id 5 handle 00010010 at 82001000, 512 KB stack at 00284000, processor 0 (flags 00000001), r13 00304000 (suspended)
+[k] thread 5 returned
+[k] ExCreateThread -> id 6 handle 00010014 at 82001000, 512 KB stack at 00305000, processor 0 (flags 00000000), r13 00385000
+[k] thread 6 returned
+[k] ExCreateThread -> id 7 handle 00010018 at 82001000, 512 KB stack at 00386000, processor 2 (flags 04000001), r13 00406000 (suspended)
+[k] ExCreateThread -> id 8 handle 0001001C at 82001000, 512 KB stack at 00407000, processor 0 (flags 00000001), r13 00487000 (suspended)
+[k] thread 8 returned
+[k] thread 7 returned
+[k] ExCreateThread -> id 9 handle 00010020 at 82004000, 512 KB stack at 00488000, processor 0 (flags 00000000), r13 00508000
+[E] thread 9: no recompiled function at 82004000
+[k] ExCreateThread -> id 10 handle 00010024 at 82001000, 512 KB stack at 00509000, processor 0 (flags 00000001), r13 00589000 (suspended)
+[k] ExCreateThread -> id 11 handle 00010028 at 82001000, 512 KB stack at 0058A000, processor 0 (flags 00000001), r13 0060A000 (suspended)
+[k] ExCreateThread -> id 12 handle 0001002C at 82001000, 512 KB stack at 0060B000, processor 0 (flags 00000001), r13 0068B000 (suspended)
+[k] ExCreateThread -> id 13 handle 00010030 at 82001000, 512 KB stack at 0068C000, processor 0 (flags 00000001), r13 0070C000 (suspended)
+[k] thread 10 returned
+[k] thread 13 returned
+[k] thread 11 returned
+[k] thread 12 returned
+kernel-threads-test ok
+<end of output>
+Test time =   0.14 sec
+----------------------------------------------------------
+Test Passed.
+"kernel_threads_test" end time: Nov 14 12:51 Asia
+"kernel_threads_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+7/11 Testing: kernel_objects_test
+7/11 Test: kernel_objects_test
+Command: "/home/claude/mw3recomp/build-tests/kernel_objects_test"
+Directory: /home/claude/mw3recomp/build-tests
+"kernel_objects_test" start time: Nov 14 12:51 Asia
+Output:
+----------------------------------------------------------
+kernel-objects-test ok
+<end of output>
+Test time =   0.48 sec
+----------------------------------------------------------
+Test Passed.
+"kernel_objects_test" end time: Nov 14 12:51 Asia
+"kernel_objects_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+8/11 Testing: kernel_files_test
+8/11 Test: kernel_files_test
+Command: "/home/claude/mw3recomp/build-tests/kernel_files_test"
+Directory: /home/claude/mw3recomp/build-tests
+"kernel_files_test" start time: Nov 14 12:51 Asia
+Output:
+----------------------------------------------------------
+[k] file not found via NtCreateFile: D:\patch.ff (device=d, relative=patch.ff, access=80000000, disposition=1, options=00000000)
+[k] file not found via NtCreateFile: update:\patch.ff (device=update, relative=patch.ff, access=80000000, disposition=1, options=00000000)
+[k] file not found via NtCreateFile: D:\patch.ffm (device=d, relative=patch.ffm, access=80000000, disposition=1, options=00000000)
+[k] file not found via NtCreateFile: D:\imagefile4.pak (device=d, relative=imagefile4.pak, access=80000000, disposition=1, options=00000000)
+[k] file not found via NtCreateFile: D:\imagefile4.pakm (device=d, relative=imagefile4.pakm, access=80000000, disposition=1, options=00000000)
+[k] file not found via NtCreateFile: D:\zone\nothing.bin (device=d, relative=zone\nothing.bin, access=80000000, disposition=1, options=00000000)
+[k] file not found via NtCreateFile: D:\ (device=d, relative=, access=80000000, disposition=1, options=00000000)
+[k] file not found via NtCreateFile: <no name in OBJECT_ATTRIBUTES> (device=, relative=, access=80000000, disposition=1, options=00000000)
+[k] file not found via NtCreateFile: D:\..\outside.txt (device=d, relative=outside.txt, access=80000000, disposition=1, options=00000000)
+[k] file not found via NtCreateFile: D:\zone\..\..\outside.txt (device=d, relative=outside.txt, access=80000000, disposition=1, options=00000000)
+[k] file not found via NtCreateFile: D:\..\..\..\outside.txt (device=d, relative=outside.txt, access=80000000, disposition=1, options=00000000)
+[k] file not found via NtCreateFile: D:/../outside.txt (device=d, relative=outside.txt, access=80000000, disposition=1, options=00000000)
+[k] file not found via NtCreateFile: D:\new.bin (device=d, relative=new.bin, access=40000000, disposition=3, options=00000000)
+[k] file not found via NtCreateFile: \Device\Harddisk0\Partition1 (device=harddisk0, relative=Partition1, access=80000000, disposition=1, options=00000000)
+[k] file not found via NtCreateFile: cache0:\absent.dat (device=cache0, relative=absent.dat, access=40000000, disposition=1, options=00000000)
+[k] file not found via NtCreateFile: cache0:\profile\save.dat (device=cache0, relative=profile\save.dat, access=80000000, disposition=1, options=00000000)
+kernel-files-test ok
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"kernel_files_test" end time: Nov 14 12:51 Asia
+"kernel_files_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+9/11 Testing: kernel_dpc_test
+9/11 Test: kernel_dpc_test
+Command: "/home/claude/mw3recomp/build-tests/kernel_dpc_test"
+Directory: /home/claude/mw3recomp/build-tests
+"kernel_dpc_test" start time: Nov 14 12:51 Asia
+Output:
+----------------------------------------------------------
+[w] KeInitializeDpc: rejected dpc=00000000 routine=82010000
+[w] KeInitializeDpc: rejected dpc=00001000 routine=00000000
+[w] dpc: no recompiled function at routine 82019990
+kernel-dpc-test ok
+<end of output>
+Test time =   0.28 sec
+----------------------------------------------------------
+Test Passed.
+"kernel_dpc_test" end time: Nov 14 12:51 Asia
+"kernel_dpc_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+10/11 Testing: kernel_xam_test
+10/11 Test: kernel_xam_test
+Command: "/home/claude/mw3recomp/build-tests/kernel_xam_test"
+Directory: /home/claude/mw3recomp/build-tests
+"kernel_xam_test" start time: Nov 14 12:51 Asia
+Output:
+----------------------------------------------------------
+[E] the title reported a dirty disc and asked for the error UI
+kernel-xam-test ok
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"kernel_xam_test" end time: Nov 14 12:51 Asia
+"kernel_xam_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+11/11 Testing: gpu_command_processor_test
+11/11 Test: gpu_command_processor_test
+Command: "/home/claude/mw3recomp/build-tests/gpu_command_processor_test"
+Directory: /home/claude/mw3recomp/build-tests
+"gpu_command_processor_test" start time: Nov 14 12:51 Asia
+Output:
+----------------------------------------------------------
+[w] gpu: gave up after 500 ms waiting for memory 00047002 & FFFFFFFF to compare (function 0) with 0000000A; it holds 0000000A
+[w] gpu: gave up after 500 ms waiting for memory 00047002 & FFFFFFFF to compare (function 1) with 0000000A; it holds 0000000A
+[w] gpu: gave up after 500 ms waiting for memory 00047002 & FFFFFFFF to compare (function 4) with 0000000A; it holds 0000000A
+[w] gpu: gave up after 500 ms waiting for memory 00047002 & FFFFFFFF to compare (function 6) with 0000000A; it holds 0000000A
+[w] gpu: gave up after 500 ms waiting for memory 00047002 & 0000000F to compare (function 3) with 00000002; it holds 0000000A
+[w] pm4: unknown type-3 opcode 0x7E, 3 dwords (header C0027E00) at 00F00000 (depth 0)
+[w] pm4: a packet at 0095200C (header C0C73D00) runs past the end of its buffer; the rest of the buffer is not read
+gpu-command-processor-test ok
+<end of output>
+Test time =   0.14 sec
+----------------------------------------------------------
+Test Passed.
+"gpu_command_processor_test" end time: Nov 14 12:51 Asia
+"gpu_command_processor_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Nov 14 12:51 Asia

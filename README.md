@@ -1,132 +1,110 @@
-<p align="center">
-  <img src="docs/images/readme/hero.svg" width="100%" alt="Modern Warfare 2, recompiled">
-</p>
+# mw3recomp
 
-<p align="center">
-  <b>Call of Duty: Modern Warfare 2 (2009) for the Xbox 360, running natively on Linux and Windows.</b><br>
-  Not an emulator: the game's executables are recompiled ahead of time.<br>
-  No game files are included. You need your own disc.
-</p>
+**Call of Duty: Modern Warfare 3 (2011, Xbox 360): static recompilation research and an eventual PS4 port.**
 
-<p align="center">
-  <a href="../../releases/latest"><img src="docs/images/readme/download.svg" alt="Download the latest release"></a>
-</p>
+The goal is the offline single-player campaign of MW3 (IW5), running natively. [XenonRecomp](https://github.com/hedge-dev/XenonRecomp) translates the Xbox 360 PowerPC executable into C++, which is compiled together with a native host runtime. The approach comes from [mw2-recompiled](https://github.com/PaulCombal/mw2-recompiled). This is **not** Xbox 360 emulation.
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/images/readme/multiplayer-menu.jpg" alt="The multiplayer menu"></td>
-    <td width="50%"><img src="docs/images/readme/split-screen.jpg" alt="Four players in split screen on Afghan"></td>
-  </tr>
-</table>
+> [!IMPORTANT]
+> **Status (14 November 2026):** the generated MW3 code compiles, a diagnostic desktop runner links, and locally the guest has been seen running through early startup and graphics submission. **The main menu has not been reached. There is no playable build, no PS4 executable and no FPKG.**
 
-<a id="features" href="#features"><img src="docs/images/readme/h-features.svg" alt="Features" height="56"></a>
+## No game files, ever
 
-<img src="docs/images/readme/features.svg" width="100%" alt="60 fps or more; up to 4K, 16:9, 16:10 or 4:3; 1 to 4 players in split screen; Steam invites; LAN system link; PC custom maps (beta)">
+This repository contains no game data and never will.
 
-- **Campaign and multiplayer**, with split screen for up to four controllers.
-- **Online with friends**: private matches and system link, through Steam invites or on your local network.
-- **Sharper than the console**: any window size or fullscreen; drawn at 720p, 1080p, 1440p or 4K, in 16:9, 16:10 or 4:3 (down to 640x480 for a CRT TV); antialiasing up to 8x; 16x texture filtering; sharper shadows; wider field of view.
-- **Your profiles**: set your rank and prestige, unlock everything, open any mission.
-- **Custom maps (beta)**: maps made for the PC game, converted by the launcher.
-- **Xbox 360-style controllers**, with rumble.
+- You supply your own legally obtained disc dump. It stays on your machine under `mw3/`, which is git-ignored.
+- Game files are never uploaded anywhere: not to this repository, not to a private asset repository, not to Git LFS and not to CI.
+- CI is asset-free by design. Everything that needs the executable or game data runs locally only.
+- [`tools/check_no_game_files.py`](tools/check_no_game_files.py) fails CI if a game file, an LFS pointer or an LFS rule is tracked. Run it with `--staged` as a pre-commit hook.
+- Do not commit `.xex`, `.pe`, `.ff`, `.ffm`, `.pak`, generated PPC source or build outputs, and do not create placeholder files to imitate missing ones.
 
-Not supported: ranked playlists, matchmaking without a [server](#online), and keeping a match going when its host crashes or loses the connection.
+## Where things stand
 
-<a id="requirements" href="#requirements"><img src="docs/images/readme/h-requirements.svg" alt="Requirements" height="56"></a>
-
-| You need | |
+| Area | Status |
 |---|---|
-| **Game** | an ISO of the Xbox 360 disc, version 1.0.557 (USA/Europe). The launcher checks it and downloads title update 6 itself. |
-| **System** | Linux or Windows, 64-bit, with a processor that has SSE4.2 (Intel since 2008, AMD since 2011) |
-| **Graphics** | Vulkan 1.2 |
-| **Disk** | 8 GB |
-| **Controller** | required to play; the keyboard covers the menus |
+| Executable analysis | Done for the supported campaign XEX (`iw5sp_ship.exe`, title ID `0x415608CB`, XEX version `0x16`) |
+| Static recompilation | 142 PPC translation units, 128 jump tables |
+| Generated code compiles | Yes, as `libppc_recomp.a` |
+| Desktop runner links | Yes, as a diagnostic executable |
+| Startup audit | Entry-point call graph and import coverage reports |
+| Early guest execution | Seen locally: sign-in, file requests, graphics submissions, frame swaps |
+| Kernel / XAM semantics | In progress; name-level coverage is not proof of compatibility |
+| Main menu and campaign | Not reached |
+| PS4 port | Not started |
 
-<a id="install" href="#install"><img src="docs/images/readme/h-install.svg" alt="Install" height="56"></a>
+A successful compile, link or smoke run is a development milestone, not a boot milestone. The 17 GPU swaps seen in the last local run show progress through early submission; they do not prove the host GPU initialized or that a usable frame was drawn.
 
-1. **Download** it for your system from the [releases](../../releases/latest), and extract it anywhere.
-2. **Install**: start `mw2-launcher`, choose INSTALL GAME and pick your ISO. The game is copied into `game/` and updated to title update 6.
-3. **Play**: PLAY CAMPAIGN or PLAY MULTIPLAYER. (`mw2-sp` and `mw2-mp` start the game directly.)
+## Quick start
 
-<a id="launcher" href="#launcher"><img src="docs/images/readme/h-launcher.svg" alt="The launcher" height="56"></a>
+### Checks that need no game files
 
-| Screen | |
-|---|---|
-| **PROFILES** | rename yourself or switch profile; set the multiplayer rank and prestige; unlock everything; open the campaign's and Special Ops' missions |
-| **GRAPHICS** | fullscreen, aspect ratio, resolution, stretching, antialiasing, texture filtering, shadows, frame rate limit and field of view (below) |
-| **NETWORK** | how the multiplayer reaches other players: NONE (this PC only), LAN, SERVER or STEAM ([below](#online)) |
-| **MAPS** *(beta)* | ADD MAP converts a map made for the PC game (IW4x). It then shows in a private match under BONUS MAPS. PC GAME points at your copy of the PC game, which such maps borrow pictures and sounds from; it is found on Steam by itself. Some maps don't convert yet, and some that do don't play. |
-| **CHECK FOR UPDATES** | installs a newer release over this one |
-| **REPORT A BUG** | runs the game once with its log kept, writes a report and opens a new issue with your system filled in |
+These are what CI runs, and they work on any machine:
 
-| Graphics | As on the console | Also |
-|---|---|---|
-| FULLSCREEN | | `F8` in the game |
-| ASPECT RATIO | 16:9 | 16:10, 4:3 |
-| RESOLUTION | 720p | 1080p, 1440p, 4K, or their 16:10 sizes (faster graphics cards); 640x480 to 2880x2160 in 4:3 |
-| STRETCH | off, black bars on a screen of another shape | on, the picture fills it (for a CRT TV) |
-| ANTIALIASING | 2x | 4x, 8x, off |
-| ANISOTROPY | 1x to 4x | 2x to 16x at least (sharper ground and walls at a slant) |
-| SHADOWS | console | 2x, 3x, 4x (smoother shadow edges; faster graphics cards) |
-| FPS LIMIT | 60 | higher, or none |
-| FOV | 65 | up to 120 |
+```sh
+python3 tools/check_no_game_files.py
+python3 tools/port_hooks.py --selftest
+cmake -S . -B build-tests -G Ninja -DMW2_TESTS_ONLY=ON -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-tests --parallel 2
+ctest --test-dir build-tests --output-on-failure
+```
 
-<a id="keyboard" href="#keyboard"><img src="docs/images/readme/h-keyboard.svg" alt="Keyboard" height="56"></a>
+The `kernel_*` and `gpu_*` tests compile the runtime's real kernel and GPU sources against a fake guest memory (`tests/fake_guest.h`) and a stub of the generated header (`tests/stubs/`).
 
-| Key | Does |
-|---|---|
-| arrows, `Enter`, `Esc` | d-pad, Start, Back |
-| `Z` `X` `C` `V` | A B X Y |
-| `Q` `E` | bumpers |
-| `F8` | fullscreen |
-| `F6` | invite friends |
-| `Home` | the guide (the controller's Guide button): what you are playing, friends, quit |
+You need CMake 3.20 or newer, Ninja, a C++20 compiler and Python 3.11 or newer.
 
-<a id="online" href="#online"><img src="docs/images/readme/h-online.svg" alt="Online" height="56"></a>
+### Building against your own executable
 
-Everyone runs `mw2-mp` from the same release, with the same NETWORK chosen in the launcher.
+1. Put your supported campaign executable at `mw3/tu0/default.xex`.
+2. Install CMake, Ninja, Clang 18, Python 3, Git and binutils (`nm`, `objdump`, `c++filt`).
+3. Run:
 
-**Steam.** With Steam running, the game shows as *Spacewar*. SYSTEM LINK lists the games every Steam player hosts, worldwide, and anyone can join yours. For a game among friends, host PLAY ONLINE → PRIVATE MATCH and choose *Invite friends* (or press `F6`): it lists your Steam friends who are playing. Your friend accepts in Steam's chat while their game is running. Other players see your Steam name. Without Steam running, it plays as LAN.
+```sh
+bash tools/build_mw3.sh
+```
 
-**Server.** Everyone on the same server sees each other's games in SYSTEM LINK, can join each other's private matches, and finds games together with FIND GAME, from anywhere. Whoever hosts a match plays in it. Enter the server's address and password under NETWORK; nobody but the server's owner needs to open a port. To run one, see [docs/relay.md](docs/relay.md).
+This extracts and recompiles the executable, compiles the generated library to `build-mw3/libppc_recomp.a`, and writes static audit reports. It does not produce a playable game.
 
-**LAN.** SYSTEM LINK finds games on the network by itself. In a private match, the lobby's *Invite friends* invites everyone on the network; start the others with `MW2_LAN_ACCEPT=1`. Two copies of `mw2-mp` on one PC can play a system link match, each with the controller that chose SYSTEM LINK in it.
+To run the bounded diagnostic smoke test with your own game root, see [docs/MW3-LOCAL-RUN.md](docs/MW3-LOCAL-RUN.md). Linux x86-64 (or WSL2 with Ubuntu 24.04) is the supported host.
 
-Everyone must have the same release: the launcher updates it. Another release's games don't show in SYSTEM LINK, and joining one says *Server is a different version*.
+## How it works
 
-<a id="safety" href="#safety"><img src="docs/images/readme/h-safety.svg" alt="Playing online safely" height="56"></a>
+1. **Extract:** `xexdump.py` turns the XEX into a flat image; the XEX identity is pinned and checked before anything else.
+2. **Analyse and recompile:** XenonAnalyse finds jump tables, XenonRecomp emits C++ from `config/MW3.toml`.
+3. **Link with the host runtime:** guest memory, threads, kernel and XAM handlers, DPC dispatch, a Vulkan-side GPU seam and audio replace the console. MW3-specific hooks and D3D device offsets are added one at a time; MW2 addresses are never reused without checking them against the MW3 image.
+4. **Run and iterate:** each failure (a missing import, a file request, a deadlock) is traced to a cause and fixed against evidence rather than by name-matching.
 
-The known security bugs in the game's 2009 network code are fixed ([docs/security.md](docs/security.md)). It is still old code: play online only with people you trust.
+## What has been learned so far
 
-- **Steam**: anyone on Steam can join a SYSTEM LINK game you host, and can reach your game while you host one. While you look for games in SYSTEM LINK, any game listed there can answer. Otherwise the game ignores traffic from anyone not in your lobby, and a private match is always among friends.
-- **Server**: anyone on the server can join your games. The server sees all the traffic; the other players don't see your address.
-- **LAN**: anyone on the same network can reach the game.
+- **Entry:** guest entry `0x82459E58`, image base `0x82000000`. The generated-code audit indexes about 36,000 functions.
+- **Imports:** 258 kernel/XAM imports inventoried. Three reachable ones still use logging stubs (`NetDll_WSACreateEvent`, `NetDll___WSAFDIsSet`, `XamShowFriendRequestUI`); none is a known blocker for the offline campaign.
+- **File system:** failed opens now log the guest API, device, path and parameters. A read-only zero-length object stands in for `\Device\Harddisk0\Partition0`, modelled on Xenia's null device.
+- **Disc layout:** the title asks for `update:\patch.ff`, `D:\patch.ff`, `D:\patch.ffm` and the `imagefile*.pak` packs, and exits through its dirty-disc path when a required one is missing. Which requests are required versus optional is decided from evidence, not assumed.
+- **DPC and graphics completion:** a six-entry structure array, a callback, a four-slot completion ring and an event-driven worker form the graphics-interrupt path. A DPC queue implementation with unit tests exists but is **not yet validated against a live boot**; IRQL, affinity, timer delivery and ordering are open.
 
-<a id="settings" href="#settings"><img src="docs/images/readme/h-settings.svg" alt="Settings" height="56"></a>
+Details: [bring-up notes](docs/MW3-BRINGUP.md), [DPC investigation](docs/MW3-DPC-INVESTIGATION.md), [startup-import plan](docs/MW3-STARTUP-IMPORT-PLAN.md).
 
-What the launcher sets is kept in a file named `.env` beside the executables, one setting per line. Environment variables work too.
+## Roadmap
 
-| Setting | |
-|---|---|
-| `MW2_FULLSCREEN=1` | FULLSCREEN |
-| `MW2_RENDER=<w>x<h>`, `MW2_SCALE=<2 or 3>` | ASPECT RATIO and RESOLUTION |
-| `MW2_STRETCH=1` | STRETCH |
-| `MW2_MSAA=<n>`, `MW2_NO_MSAA=1` | ANTIALIASING |
-| `MW2_ANISOTROPY=<2 to 16>` | ANISOTROPY |
-| `MW2_SHADOW_SCALE=<2 to 4>` | SHADOWS |
-| `MW2_FPS_LIMIT=<n>` | FPS LIMIT; 0 is no limit |
-| `MW2_FOV=<65 to 120>` | FOV |
-| `MW2_NO_AUDIO=1` | no sound |
-| `MW2_LOG_FILE=mw2.log` | keeps the log, to attach to a bug report |
+1. **Asset-free runtime validation (underway):** the runtime's own sources are tested against synthetic inputs, with no game data. Covered so far: dispatcher objects and waits, the file layer, the guest heap, the memory and thread imports, DPC delivery, the GPU command processor fed hand-built PM4 streams, and the XAM sign-in, notification, overlapped, enumerator and config imports. Still to come: the remaining kernel imports (misc, sync, net, input, audio) and the renderer seam.
+2. **Local boot work:** resolve the remaining file requests, get past the dirty-disc path and capture the next startup stage, all on your own machine.
+3. **Validate runtime semantics** against actual execution.
+4. **Main menu and first mission on desktop:** input, audio, saves, rendering and performance.
+5. **Only then PS4:** OpenOrbis integration, guest-memory mapping, Vulkan/RADV compatibility, controller and audio, profiling and packaging.
 
-Saves are in `saves/` beside the executables.
+Out of scope for now: multiplayer services and Special Ops.
 
-<a id="developers" href="#developers"><img src="docs/images/readme/h-developers.svg" alt="Developers" height="56"></a>
+## Documentation
 
-Building, the source layout and how the runtime works: [docs/building.md](docs/building.md), [docs/runtime.md](docs/runtime.md), [docs/switches.md](docs/switches.md) and the rest of [docs/](docs/).
+- [Build and local workflow](docs/MW3-BUILD.md), [running locally](docs/MW3-LOCAL-RUN.md), [CI](docs/ci.md)
+- [Build prerequisites](docs/building.md) and [runtime architecture](docs/runtime.md)
+- [D3D9 integration](docs/d3d9-seam.md), [rendering](docs/rendering.md), [audio](docs/audio.md)
 
-<a id="license" href="#license"><img src="docs/images/readme/h-license.svg" alt="License" height="56"></a>
+## References and credits
 
-[GPL-3.0-only](LICENSE) (`SPDX-License-Identifier: GPL-3.0-only`). It covers this project's own code: the runtime, tools, patches and build files. It grants nothing for the game: Activision's code and data, and the C++ generated from the game's executables, are not part of this repository and not under this license.
+- [mw2-recompiled](https://github.com/PaulCombal/mw2-recompiled): runtime and recompilation foundation
+- [XenonRecomp](https://github.com/hedge-dev/XenonRecomp): Xbox 360 PowerPC static recompiler
+- [LibertyRecomp](https://github.com/OZORDI/LibertyRecomp) and [gta4-ps4](https://github.com/plastikman/gta4-ps4): related recompilation and PS4 porting work
+- [Xenia](https://github.com/xenia-project/xenia): Xbox 360 compatibility reference
 
-No game code or data is included; the builds only run with files from your own disc. Not affiliated with Activision, Infinity Ward, Microsoft or Valve.
+## License
+
+Code is licensed under [GPL-3.0-only](LICENSE). Game content belongs to its owners and is not part of this project.

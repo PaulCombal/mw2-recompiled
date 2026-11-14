@@ -727,3 +727,61 @@ PPC_FUNC(__imp__NetDll_inet_addr)
     // sequence -- swap so the be32 store puts it back.
     ctx.r3.u64 = __builtin_bswap32(network);
 }
+
+// Offline answers for the calls that need a connection nothing here provides.
+// Xbox Live's sockets never connect (see NetDll_connect), so a stream send or
+// receive is on a socket that is not connected.
+PPC_FUNC(__imp__NetDll_send) { t_lastError = 10057; ctx.r3.u64 = uint32_t(-1); }   // WSAENOTCONN
+PPC_FUNC(__imp__NetDll_recv) { t_lastError = 10057; ctx.r3.u64 = uint32_t(-1); }
+
+// select(): nothing is ready, so it times out.
+PPC_FUNC(__imp__NetDll_select) { ctx.r3.u64 = 0; }
+
+// DNS: no resolver, so a lookup fails at once and there is nothing to release.
+PPC_FUNC(__imp__NetDll_XNetDnsLookup)
+{
+    if (auto* out = GuestPtr<be32>(ctx.r6.u32)) *out = 0;
+    ctx.r3.u64 = X_WSAENETDOWN;
+}
+PPC_FUNC(__imp__NetDll_XNetDnsRelease) { ctx.r3.u64 = 0; }
+
+// XNetInAddrToString(id, in_addr, char* buffer, size): dotted quad, in_addr
+// being in network order, which a big-endian guest reads as written.
+PPC_FUNC(__imp__NetDll_XNetInAddrToString)
+{
+    const uint32_t a = ctx.r4.u32, buffer = ctx.r5.u32, size = ctx.r6.u32;
+    char text[16];
+    const int n = std::snprintf(text, sizeof text, "%u.%u.%u.%u",
+                                a >> 24, (a >> 16) & 255, (a >> 8) & 255, a & 255);
+    auto* out = reinterpret_cast<char*>(GuestPtr<uint8_t>(buffer));
+    if (out && size > uint32_t(n)) std::memcpy(out, text, size_t(n) + 1);
+    ctx.r3.u64 = out && size > uint32_t(n) ? uint32_t(n) : 0;
+}
+
+// The Xbox Live logon state: not logged on.
+PPC_FUNC(__imp__NetDll_XnpLogonGetStatus) { ctx.r3.u64 = 0; }
+
+// WSACreateEvent: a manual-reset, unsignalled event for WSAEventSelect-style
+// waits. Made as a kernel event so WaitForSingleObject can wait on it.
+PPC_FUNC(__imp__NetDll_WSACreateEvent)
+{
+    auto event = std::make_shared<kernel::Event>();
+    event->manualReset = true;
+    event->signalled = false;
+    ctx.r3.u64 = kernel::InsertHandle(event);
+}
+
+// __WSAFDIsSet(SOCKET, fd_set*): fd_set is { u_int count; SOCKET array[] }
+// in guest memory, big-endian. The socket is set when it is in the first
+// `count` entries.
+PPC_FUNC(__imp__NetDll___WSAFDIsSet)
+{
+    const uint32_t socket = ctx.r3.u32;
+    const auto* set = GuestPtr<be32>(ctx.r4.u32);
+    uint32_t set_count = 0;
+    if (set) set_count = uint32_t(set[0]);
+    bool present = false;
+    for (uint32_t i = 0; set && i < set_count && i < 64; i++)
+        if (uint32_t(set[1 + i]) == socket) { present = true; break; }
+    ctx.r3.u64 = present ? 1 : 0;
+}

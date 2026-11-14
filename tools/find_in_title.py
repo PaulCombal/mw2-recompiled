@@ -74,13 +74,11 @@ def main():
         else: addresses.append(int(a, 16))
     src, dst = ("mp", "sp") if reverse else ("sp", "mp")
     if table:
-        text = open(os.path.join(ROOT, "runtime/title.h")).read()
-        # The table's blocks, in its order: the update's multiplayer and
-        # campaign, then the disc's.
-        blocks = re.split(r"^#(?:if|elif|else|endif)\b.*$", text, flags=re.M)[1:5]
-        mp, sp = blocks[:2] if title.VERSION == "tu6" else blocks[2:]
-        block = mp if reverse else sp
-        addresses = [(n, int(a, 16)) for n, a in re.findall(r"#define (T_\w+)\s+([0-9A-F]{8})\b", block)]
+        # The table's four blocks (the update's multiplayer and campaign, the disc's),
+        # as port_hooks.py reads them: the MW3 block ahead of them is not one.
+        import port_hooks
+        addresses, _ = port_hooks.parse_title_h(os.path.join(ROOT, "runtime/title.h"),
+                                                "mp" if reverse else "sp", title.VERSION)
     else:
         addresses = [(f"{a:08X}", a) for a in addresses]
     a = Image(os.path.join(ROOT, title.TITLES[src]["image"]))

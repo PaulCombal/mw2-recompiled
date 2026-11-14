@@ -86,6 +86,7 @@ namespace
     }
 }
 
+#ifdef T_Image_FlushMove
 GUEST_HOOK(T_Image_FlushMove)
 {
     const uint32_t destination = ctx.r3.u32, source = ctx.r4.u32, size = ctx.r5.u32;
@@ -110,6 +111,8 @@ GUEST_HOOK(T_Image_FlushMove)
     g_immediate++;
     Copy(destination, source, size, false);
 }
+
+#endif
 
 bool imagepool::CopiesWaiting() { return g_pendingCount.load(std::memory_order_relaxed) != 0; }
 

@@ -45,6 +45,7 @@ namespace
     }
 }
 
+#if !defined(MW3_TITLE) // MW2 FOV entry points are not located in MW3
 GUEST_HOOK(T_CG_ViewFov)
 {
     GUEST_ORIG(T_CG_ViewFov)(ctx, base);
@@ -56,3 +57,5 @@ GUEST_HOOK(T_CG_CullZoom)
     GUEST_ORIG(T_CG_CullZoom)(ctx, base);
     ctx.f1.f64 = double(float(ctx.f1.f64 / Scale()));
 }
+
+#endif

@@ -28,7 +28,6 @@ def load(path):
         # pad src to 16-byte multiple for openssl
         pad = (-len(src)) % 16
         src = aes_cbc_dec(session.hex(), src + bytes(pad))[:len(src)+pad]
-        print(f"# session key = {session.hex()}", file=sys.stderr)
     if comp == 0:       # stored as it is: what applying a title update writes
         return bytes(src), hdrs, d
     assert comp == 1, f"unsupported compression {comp}"

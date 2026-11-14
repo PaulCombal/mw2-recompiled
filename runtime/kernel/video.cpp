@@ -102,6 +102,19 @@ PPC_FUNC(__imp__VdGetCurrentDisplayInformation)
     ctx.r3.u64 = 0;
 }
 
+// VdSetDisplayModeOverride(width, height, refreshRate (f1), flags, mode, 0): the
+// title asks the console for a display mode and then calls VdSetDisplayMode and
+// reads the result back through VdGetCurrentDisplayInformation. The host window
+// owns the real mode and that query already reports it, so the request is
+// recorded and accepted. MW3 calls it from sub_820A6690 with 1280x720 or
+// 1920x1080.
+PPC_FUNC(__imp__VdSetDisplayModeOverride)
+{
+    LOGI("video: display mode override %ux%u @ %.2f Hz (host mode unchanged)",
+         ctx.r3.u32, ctx.r4.u32, ctx.f1.f64);
+    ctx.r3.u64 = 0;
+}
+
 PPC_FUNC(__imp__VdGetCurrentDisplayGamma)
 {
     if (auto* type = GuestPtr<be32>(ctx.r3.u32)) *type = 2;

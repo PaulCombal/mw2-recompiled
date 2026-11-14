@@ -16,6 +16,7 @@ namespace install
     struct Launch
     {
         std::vector<uint8_t> image;         // the title's memory image
+        std::vector<uint8_t> xexHeader;    // original XEX2 header, for RTL/module metadata
         std::filesystem::path gameRoot;
     };
 
@@ -31,7 +32,8 @@ namespace install
     bool Prepare(int argc, char** argv, Launch& launch, int& exitCode);
 
     // A development run's image: a flat PE, or an XEX decrypted on the way in.
-    bool LoadImageFile(const std::filesystem::path& path, std::vector<uint8_t>& image);
+    bool LoadImageFile(const std::filesystem::path& path, std::vector<uint8_t>& image,
+                       std::vector<uint8_t>& xexHeader);
 
     // Starts the launcher to compile every shader of the game for `device`
     // (vk::pipeline::DeviceId) and then start this title, when the shaders

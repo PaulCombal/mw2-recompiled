@@ -92,6 +92,7 @@ const fs::path& kernel::SaveRoot()
 
 // Memcard_InitializeSystem. The table is clear when it returns, so this is the
 // moment to answer the question the prompt would ask.
+#if !defined(MW3_TITLE) // T_Memcard_InitializeSystem uses MW2-only device-table offsets: MW2-only hook
 GUEST_HOOK(T_Memcard_InitializeSystem)
 {
     GUEST_ORIG(T_Memcard_InitializeSystem)(ctx, base);
@@ -103,6 +104,8 @@ GUEST_HOOK(T_Memcard_InitializeSystem)
     }
     LOGK("content: the hard disk is the save device for every controller");
 }
+
+#endif
 
 // Which storage devices exist. The title asks before it offers to save, and a
 // "no" here is the save-device prompt.

@@ -6,13 +6,20 @@
 #include <string>
 #include <filesystem>
 #include <functional>
+#include <vector>
 
 namespace kernel
 {
+    // Guest address of the executable's XEX header as the loader would have
+    // placed it (the one XexExecutableModuleHandle's module entry points to), or
+    // zero for a run with no XEX metadata, such as a flat-PE development run.
+    uint32_t ExecutableXexHeader();
+
     // The threads blocked in a kernel wait, and on what: for the watchdog.
     void ReportWaits();
 
-    void Initialise(const std::filesystem::path& gameRoot);
+    void Initialise(const std::filesystem::path& gameRoot,
+                    const std::vector<uint8_t>& xexHeader = {});
     const std::filesystem::path& GameRoot();
 
     uint32_t AllocateGuest(uint32_t size, uint32_t alignment = 16);
