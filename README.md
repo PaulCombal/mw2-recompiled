@@ -84,7 +84,7 @@ Details: [bring-up notes](docs/MW3-BRINGUP.md), [DPC investigation](docs/MW3-DPC
 
 ## Roadmap
 
-1. **Asset-free runtime validation (underway):** the runtime's own sources are tested against synthetic inputs, with no game data. Covered so far: dispatcher objects and waits, the file layer, the guest heap, the memory and thread imports, DPC delivery, and the GPU command processor fed hand-built PM4 streams. Still to come: XAM and the remaining kernel imports, and the renderer seam.
+1. **Asset-free runtime validation (underway):** the runtime's own sources are tested against synthetic inputs, with no game data. Covered so far: dispatcher objects and waits, the file layer, the guest heap, the memory and thread imports, DPC delivery, the GPU command processor fed hand-built PM4 streams, and the XAM sign-in, notification, overlapped, enumerator and config imports. Still to come: the remaining kernel imports (misc, sync, net, input, audio) and the renderer seam.
 2. **Local boot work:** resolve the remaining file requests, get past the dirty-disc path and capture the next startup stage, all on your own machine.
 3. **Validate runtime semantics** against actual execution.
 4. **Main menu and first mission on desktop:** input, audio, saves, rendering and performance.
