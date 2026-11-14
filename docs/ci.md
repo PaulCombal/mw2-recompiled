@@ -3,7 +3,7 @@
 `mw3-validation.yml` runs on pushes, pull requests and manual dispatch on
 x86-64 Ubuntu 24.04. All jobs have read-only repository permissions and
 checkouts do not retain Git credentials. No job receives game inputs or API
-secrets. Validation covers tooling, title routing, the runtime guard, six
+secrets. Validation covers tooling, title routing, the runtime guard, eight
 asset-free C++ unit tests and the relay's locked Rust tests.
 
 Run the standalone tests with:
