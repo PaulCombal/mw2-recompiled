@@ -37,6 +37,7 @@ if(BUILD_TESTING)
     mw3_runtime_test(kernel_threads_test runtime/kernel/threads.cpp runtime/kernel/objects.cpp)
     mw3_runtime_test(kernel_objects_test runtime/kernel/objects.cpp)
     mw3_runtime_test(kernel_files_test runtime/kernel/files.cpp runtime/kernel/objects.cpp)
+    mw3_runtime_test(kernel_dpc_test runtime/kernel/dpc.cpp runtime/kernel/objects.cpp)
     # The PM4 command processor, fed streams built by the test, with a recording fake
     # standing in for the Vulkan renderer.
     mw3_runtime_test(gpu_command_processor_test runtime/gpu/command_processor.cpp)
