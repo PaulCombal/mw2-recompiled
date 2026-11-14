@@ -20,6 +20,15 @@ if(BUILD_TESTING)
         target_link_libraries(dpc-queue-test PRIVATE Threads::Threads)
     endif()
     add_test(NAME dpc-queue-test COMMAND dpc-queue-test)
+    # Compiles the kernel's dispatcher objects against a fake guest memory and
+    # a stub of the generated header (tests/stubs). No game files are involved.
+    add_executable(kernel-objects-test tests/kernel_objects_test.cpp runtime/kernel/objects.cpp)
+    target_include_directories(kernel-objects-test PRIVATE "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/tests/stubs")
+    if(Threads_FOUND)
+        target_link_libraries(kernel-objects-test PRIVATE Threads::Threads)
+    endif()
+    add_test(NAME kernel-objects-test COMMAND kernel-objects-test)
+    set_tests_properties(kernel-objects-test PROPERTIES TIMEOUT 60)
 endif()
 # Stop before title selection, generated PPC sources and dependency downloads.
 if(MW2_TESTS_ONLY)
