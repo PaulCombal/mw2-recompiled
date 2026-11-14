@@ -29,6 +29,15 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME kernel-objects-test COMMAND kernel-objects-test)
     set_tests_properties(kernel-objects-test PROPERTIES TIMEOUT 60)
+    # The file layer: NT paths to host files, over a temporary folder of
+    # synthetic files the test makes itself.
+    add_executable(kernel-files-test tests/kernel_files_test.cpp runtime/kernel/files.cpp runtime/kernel/objects.cpp)
+    target_include_directories(kernel-files-test PRIVATE "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/tests/stubs")
+    if(Threads_FOUND)
+        target_link_libraries(kernel-files-test PRIVATE Threads::Threads)
+    endif()
+    add_test(NAME kernel-files-test COMMAND kernel-files-test)
+    set_tests_properties(kernel-files-test PROPERTIES TIMEOUT 60)
 endif()
 # Stop before title selection, generated PPC sources and dependency downloads.
 if(MW2_TESTS_ONLY)

@@ -3,9 +3,8 @@
 // dispatcher headers. It compiles runtime/kernel/objects.cpp unchanged and runs
 // it against a small fake guest memory, so it needs no game files and no
 // recompiled code.
+#include "tests/fake_guest.h"
 #include "runtime/kernel/objects.h"
-#include "runtime/guest.h"
-#include "runtime/kernel/kernel.h"
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -18,35 +17,6 @@
 #include <memory>
 #include <thread>
 #include <vector>
-
-// ---- the fake guest the kernel sources are linked against -------------------
-namespace guest
-{
-    uint8_t* Base()
-    {
-        static std::vector<uint8_t> memory(1u << 24);
-        return memory.data();
-    }
-}
-
-namespace kernel
-{
-    uint32_t AllocateGuest(uint32_t size, uint32_t alignment)
-    {
-        static uint32_t next = 0x00100000;
-        next = (next + alignment - 1) & ~(alignment - 1);
-        const uint32_t address = next;
-        next += size;
-        return address;
-    }
-
-    uint64_t SystemTime100ns()
-    {
-        using namespace std::chrono;
-        return 1'000'000'000ull +
-               uint64_t(duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count() / 100);
-    }
-}
 
 using namespace kernel;
 using Clock = std::chrono::steady_clock;
@@ -276,8 +246,5 @@ int main()
     Timers();
     std::puts("kernel-objects-test ok");
     std::fflush(stdout);
-    // objects.cpp's timer thread is detached and still reads its queue and the
-    // dispatcher lock while static destructors run, which crashes at normal
-    // exit. The game never exits normally, so leave without running them.
-    std::_Exit(0);
+    return 0;
 }

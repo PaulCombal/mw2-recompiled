@@ -173,7 +173,9 @@ namespace
             wake.notify_one();
         }
     };
-    TimerQueue g_timers;
+    // Leaked on purpose: the timer thread is detached and still reads the queue
+    // while static destructors run at exit.
+    TimerQueue& g_timers = *new TimerQueue;
 }
 
 uintptr_t kernel::CurrentThread()
