@@ -47,6 +47,8 @@ cmake --build build-tests --parallel 2
 ctest --test-dir build-tests --output-on-failure
 ```
 
+The `kernel_*` and `gpu_*` tests compile the runtime's real kernel and GPU sources against a fake guest memory (`tests/fake_guest.h`) and a stub of the generated header (`tests/stubs/`).
+
 You need CMake 3.20 or newer, Ninja, a C++20 compiler and Python 3.11 or newer.
 
 ### Building against your own executable
@@ -82,7 +84,7 @@ Details: [bring-up notes](docs/MW3-BRINGUP.md), [DPC investigation](docs/MW3-DPC
 
 ## Roadmap
 
-1. **Asset-free runtime validation:** exercise the kernel and XAM stubs, guest memory, threads, the DPC queue and GPU command-packet decoding with synthetic test inputs, so bring-up work does not depend on game data.
+1. **Asset-free runtime validation (underway):** the runtime's own sources are tested against synthetic inputs, with no game data. Covered so far: dispatcher objects and waits, the file layer, the guest heap, the memory and thread imports, and the GPU command processor fed hand-built PM4 streams. Still to come: XAM and the remaining kernel imports, DPC delivery, and the renderer seam.
 2. **Local boot work:** resolve the remaining file requests, get past the dirty-disc path and capture the next startup stage, all on your own machine.
 3. **Validate runtime semantics** against actual execution.
 4. **Main menu and first mission on desktop:** input, audio, saves, rendering and performance.

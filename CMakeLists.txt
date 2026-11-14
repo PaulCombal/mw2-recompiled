@@ -20,10 +20,10 @@ if(BUILD_TESTING)
         target_link_libraries(dpc-queue-test PRIVATE Threads::Threads)
     endif()
     add_test(NAME dpc-queue-test COMMAND dpc-queue-test)
-    # Kernel tests: the runtime's own kernel sources, compiled unchanged against
+    # Runtime tests: the runtime's own kernel and GPU sources, compiled unchanged against
     # a fake guest memory (tests/fake_guest.h) and a stub of the generated
     # header (tests/stubs). Synthetic data only; no game files are involved.
-    function(mw3_kernel_test name)
+    function(mw3_runtime_test name)
         add_executable(${name} tests/${name}.cpp ${ARGN})
         target_include_directories(${name} PRIVATE "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/tests/stubs")
         if(Threads_FOUND)
@@ -32,11 +32,14 @@ if(BUILD_TESTING)
         add_test(NAME ${name} COMMAND ${name})
         set_tests_properties(${name} PROPERTIES TIMEOUT 60)
     endfunction()
-    mw3_kernel_test(kernel_heap_test)
-    mw3_kernel_test(kernel_memory_test runtime/kernel/memory.cpp)
-    mw3_kernel_test(kernel_threads_test runtime/kernel/threads.cpp runtime/kernel/objects.cpp)
-    mw3_kernel_test(kernel_objects_test runtime/kernel/objects.cpp)
-    mw3_kernel_test(kernel_files_test runtime/kernel/files.cpp runtime/kernel/objects.cpp)
+    mw3_runtime_test(kernel_heap_test)
+    mw3_runtime_test(kernel_memory_test runtime/kernel/memory.cpp)
+    mw3_runtime_test(kernel_threads_test runtime/kernel/threads.cpp runtime/kernel/objects.cpp)
+    mw3_runtime_test(kernel_objects_test runtime/kernel/objects.cpp)
+    mw3_runtime_test(kernel_files_test runtime/kernel/files.cpp runtime/kernel/objects.cpp)
+    # The PM4 command processor, fed streams built by the test, with a recording fake
+    # standing in for the Vulkan renderer.
+    mw3_runtime_test(gpu_command_processor_test runtime/gpu/command_processor.cpp)
 endif()
 # Stop before title selection, generated PPC sources and dependency downloads.
 if(MW2_TESTS_ONLY)

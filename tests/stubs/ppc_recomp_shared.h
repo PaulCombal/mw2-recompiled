@@ -23,6 +23,8 @@ struct PPCContext
 inline constexpr uint32_t PPC_CODE_BASE = 0x82000000;
 inline constexpr uint32_t PPC_CODE_SIZE = 0x00100000;
 
+inline uint64_t PPC_QueryTimebase() { return 0; }
+
 using PPCFunc = void(PPCContext& ctx, uint8_t* base);
 
 #define PPC_FUNC(x) void x(PPCContext& __restrict ctx, uint8_t* base)
