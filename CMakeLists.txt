@@ -20,24 +20,21 @@ if(BUILD_TESTING)
         target_link_libraries(dpc-queue-test PRIVATE Threads::Threads)
     endif()
     add_test(NAME dpc-queue-test COMMAND dpc-queue-test)
-    # Compiles the kernel's dispatcher objects against a fake guest memory and
-    # a stub of the generated header (tests/stubs). No game files are involved.
-    add_executable(kernel-objects-test tests/kernel_objects_test.cpp runtime/kernel/objects.cpp)
-    target_include_directories(kernel-objects-test PRIVATE "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/tests/stubs")
-    if(Threads_FOUND)
-        target_link_libraries(kernel-objects-test PRIVATE Threads::Threads)
-    endif()
-    add_test(NAME kernel-objects-test COMMAND kernel-objects-test)
-    set_tests_properties(kernel-objects-test PROPERTIES TIMEOUT 60)
-    # The file layer: NT paths to host files, over a temporary folder of
-    # synthetic files the test makes itself.
-    add_executable(kernel-files-test tests/kernel_files_test.cpp runtime/kernel/files.cpp runtime/kernel/objects.cpp)
-    target_include_directories(kernel-files-test PRIVATE "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/tests/stubs")
-    if(Threads_FOUND)
-        target_link_libraries(kernel-files-test PRIVATE Threads::Threads)
-    endif()
-    add_test(NAME kernel-files-test COMMAND kernel-files-test)
-    set_tests_properties(kernel-files-test PROPERTIES TIMEOUT 60)
+    # Kernel tests: the runtime's own kernel sources, compiled unchanged against
+    # a fake guest memory (tests/fake_guest.h) and a stub of the generated
+    # header (tests/stubs). Synthetic data only; no game files are involved.
+    function(mw3_kernel_test name)
+        add_executable(${name} tests/${name}.cpp ${ARGN})
+        target_include_directories(${name} PRIVATE "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/tests/stubs")
+        if(Threads_FOUND)
+            target_link_libraries(${name} PRIVATE Threads::Threads)
+        endif()
+        add_test(NAME ${name} COMMAND ${name})
+        set_tests_properties(${name} PROPERTIES TIMEOUT 60)
+    endfunction()
+    mw3_kernel_test(kernel_heap_test)
+    mw3_kernel_test(kernel_objects_test runtime/kernel/objects.cpp)
+    mw3_kernel_test(kernel_files_test runtime/kernel/files.cpp runtime/kernel/objects.cpp)
 endif()
 # Stop before title selection, generated PPC sources and dependency downloads.
 if(MW2_TESTS_ONLY)
