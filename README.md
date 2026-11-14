@@ -1,143 +1,108 @@
 # mw3recomp
 
-**Call of Duty: Modern Warfare 3 (2011, Xbox 360) — static recompilation research and eventual PS4 port.**
+**Call of Duty: Modern Warfare 3 (2011, Xbox 360): static recompilation research and an eventual PS4 port.**
 
-This project is bringing up the offline single-player campaign of MW3 (IW5) using the static-recompilation approach pioneered by [mw2-recompiled](https://github.com/PaulCombal/mw2-recompiled). [XenonRecomp](https://github.com/hedge-dev/XenonRecomp) translates the Xbox 360 PowerPC executable into C++, which is compiled with a native host runtime.
-
-This is **not Xbox 360 emulation**. The long-term target is a native PS4 build, but current work is still focused on getting the recompiled title through startup on a desktop host.
+The goal is the offline single-player campaign of MW3 (IW5), running natively. [XenonRecomp](https://github.com/hedge-dev/XenonRecomp) translates the Xbox 360 PowerPC executable into C++, which is compiled together with a native host runtime. The approach comes from [mw2-recompiled](https://github.com/PaulCombal/mw2-recompiled). This is **not** Xbox 360 emulation.
 
 > [!IMPORTANT]
-> **Current state (13 November 2026):** the MW3 generated PPC library builds, the diagnostic desktop executable links, and CI runs the guest through early startup and graphics submission. The latest smoke run gets past the previously observed `\\Device\\Harddisk0\\Partition0` request, then encounters missing disc files (`patch.ff`, `patch.ffm`, `imagefile4.pak`, and `imagefile4.pakm`) and exits through the title's dirty-disc path. **The main menu has not been reached. There is no playable desktop build, PS4 executable, or FPKG.**
+> **Status (14 November 2026):** the generated MW3 code compiles, a diagnostic desktop runner links, and locally the guest has been seen running through early startup and graphics submission. **The main menu has not been reached. There is no playable build, no PS4 executable and no FPKG.**
 
-## Project status
+## No game files, ever
 
-| Area | Current status |
+This repository contains no game data and never will.
+
+- You supply your own legally obtained disc dump. It stays on your machine under `mw3/`, which is git-ignored.
+- Game files are never uploaded anywhere: not to this repository, not to a private asset repository, not to Git LFS and not to CI.
+- CI is asset-free by design. Everything that needs the executable or game data runs locally only.
+- [`tools/check_no_game_files.py`](tools/check_no_game_files.py) fails CI if a game file, an LFS pointer or an LFS rule is tracked. Run it with `--staged` as a pre-commit hook.
+- Do not commit `.xex`, `.pe`, `.ff`, `.ffm`, `.pak`, generated PPC source or build outputs, and do not create placeholder files to imitate missing ones.
+
+## Where things stand
+
+| Area | Status |
 |---|---|
-| Target executable analysis | **Established** for the supported MW3 campaign XEX; identity is pinned in the build workflow |
-| Static recompilation | **Generated:** 142 PPC translation units and 128 jump tables |
-| Generated PPC compilation | **Pass:** produces `libppc_recomp.a` |
-| Runtime compile/link integration | **Pass in CI:** diagnostic desktop executable links against the generated MW3 library |
-| Static startup audit | **Implemented:** entry-point call-graph and import coverage reports are generated in CI |
-| Early guest execution | **Observed:** guest startup, profile sign-in, file-system requests, graphics submissions and frame swaps |
-| File-system compatibility | **In progress:** device/path diagnostics and a `Harddisk0\\Partition0` null-device implementation are present |
-| Kernel / XAM semantics | **In progress:** several handlers and focused tests exist; name-level coverage is not proof of MW3 compatibility |
-| Main menu / campaign | **Not reached** |
-| PS4 port / package | **Not started** |
+| Executable analysis | Done for the supported campaign XEX (`iw5sp_ship.exe`, title ID `0x415608CB`, XEX version `0x16`) |
+| Static recompilation | 142 PPC translation units, 128 jump tables |
+| Generated code compiles | Yes, as `libppc_recomp.a` |
+| Desktop runner links | Yes, as a diagnostic executable |
+| Startup audit | Entry-point call graph and import coverage reports |
+| Early guest execution | Seen locally: sign-in, file requests, graphics submissions, frame swaps |
+| Kernel / XAM semantics | In progress; name-level coverage is not proof of compatibility |
+| Main menu and campaign | Not reached |
+| PS4 port | Not started |
 
-### What the latest smoke run establishes
+A successful compile, link or smoke run is a development milestone, not a boot milestone. The 17 GPU swaps seen in the last local run show progress through early submission; they do not prove the host GPU initialized or that a usable frame was drawn.
 
-- The title enters guest execution and reaches graphics frame submission.
-- The file diagnostics added in [PR #28](https://github.com/the-drk/mw3recomp/pull/28) identify the guest API, device, relative path and open parameters for failed file opens.
-- [PR #29](https://github.com/the-drk/mw3recomp/pull/29) adds a read-only, zero-length virtual object for the observed `\\Device\\Harddisk0\\Partition0` path, following the null-device model used by Xenia. The latest run no longer reports that object as a missing host file.
-- The latest smoke log proceeds to requests for `update:\\patch.ff`, `D:\\patch.ff`, `D:\\patch.ffm`, `D:\\imagefile4.pak` and `D:\\imagefile4.pakm`. The title reports a dirty-disc error and exits to the dashboard.
-- The run reports 17 GPU swap packets. This is evidence of progress through early rendering submission, **not** proof that the host GPU device initialized correctly or that the game rendered a usable frame.
+## Quick start
 
-The smoke executable is a diagnostic host runner. Its success means the build and diagnostic run completed as expected; it does not mean the game booted successfully.
+### Checks that need no game files
 
-## Technical progress
+These are what CI runs, and they work on any machine:
 
-### Recompiler and static analysis
+```sh
+python3 tools/check_no_game_files.py
+python3 tools/port_hooks.py --selftest
+cmake -S . -B build-tests -G Ninja -DMW2_TESTS_ONLY=ON -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-tests --parallel 2
+ctest --test-dir build-tests --output-on-failure
+```
 
-- Supported campaign executable: `iw5sp_ship.exe`, title ID `0x415608CB`, XEX version `0x16`.
-- Guest entry point: `0x82459E58`; image base: `0x82000000`.
-- XenonAnalyse identifies 128 jump tables.
-- XenonRecomp emits 142 PPC source translation units.
-- The generated-code audit currently indexes approximately 36,235 function definitions and 36,493 function references.
-- The startup call-graph audit follows direct calls from the entry point. Its reachability results are static approximations: indirect calls, function pointers, callbacks, data imports and dynamically selected thread entry points are not fully represented.
+You need CMake 3.20 or newer, Ninja, a C++20 compiler and Python 3.11 or newer.
 
-### Runtime and import coverage
+### Building against your own executable
 
-The CI audit inventories 258 kernel/XAM imports and separates reachable imports from those elsewhere in the executable. Current source-level handler matching is useful for triage, but it is only a name/macro match; it does not establish correct signatures or Xbox 360 behavior.
-
-The startup audit currently identifies three reachable imports that still use generated logging stubs:
-
-- `NetDll_WSACreateEvent`
-- `NetDll___WSAFDIsSet`
-- `XamShowFriendRequestUI`
-
-These are not currently considered blockers for the initial offline-campaign bring-up. Revisit them if runtime evidence shows they are required.
-
-Other runtime work includes:
-- MW3 title configuration and selected engine hooks/globals, with MW3-specific D3D device offsets rather than blindly reusing MW2 offsets.
-- Kernel/XAM implementations and offline networking support added during bring-up.
-- `RtlRaiseException` handling for the thread-naming exception observed during startup.
-- File-open diagnostics that expose the actual guest path and open contract.
-- A virtual null-device implementation for the observed `Harddisk0\\Partition0` object.
-
-### DPC / graphics-completion investigation
-
-The DPC investigation traced a six-entry structure array, matching initialization and insertion paths, a callback, a four-slot completion ring and an event-driven worker. This is strong evidence that the path participates in graphics-interrupt/completion handling.
-
-A dedicated DPC queue implementation and unit tests now exist. Tests cover duplicate insertion, argument capture, FIFO ordering, callback requeue, reinitialization and worker wake/stop behavior. The implementation is **not yet validated against a live MW3 boot**; IRQL, affinity, timer delivery and exact ordering against the graphics interrupt path remain open.
-
-## Build
-
-The local build script compiles and audits the generated MW3 code. It does not produce a playable game.
-
-1. Place your own supported campaign executable at `mw3/tu0/default.xex`.
-2. Install CMake, Ninja, Clang 18, Python 3, Git and the required binutils tools (`nm`, `objdump`, `c++filt`).
+1. Put your supported campaign executable at `mw3/tu0/default.xex`.
+2. Install CMake, Ninja, Clang 18, Python 3, Git and binutils (`nm`, `objdump`, `c++filt`).
 3. Run:
 
 ```sh
 bash tools/build_mw3.sh
 ```
 
-The script uses `config/MW3.toml`, runs the MW3 extraction/recompilation pipeline, compiles the generated PPC library, runs focused checks and produces static audit reports. The principal output is:
+This extracts and recompiles the executable, compiles the generated library to `build-mw3/libppc_recomp.a`, and writes static audit reports. It does not produce a playable game.
 
-```
-build-mw3/libppc_recomp.a
-```
+To run the bounded diagnostic smoke test with your own game root, see [docs/MW3-LOCAL-RUN.md](docs/MW3-LOCAL-RUN.md). Linux x86-64 (or WSL2 with Ubuntu 24.04) is the supported host.
 
-Generated PPC source and build outputs are local artifacts and are not committed.
+## How it works
 
-For the diagnostic desktop link probe and the full CI workflow, see [docs/MW3-BUILD.md](docs/MW3-BUILD.md).
+1. **Extract:** `xexdump.py` turns the XEX into a flat image; the XEX identity is pinned and checked before anything else.
+2. **Analyse and recompile:** XenonAnalyse finds jump tables, XenonRecomp emits C++ from `config/MW3.toml`.
+3. **Link with the host runtime:** guest memory, threads, kernel and XAM handlers, DPC dispatch, a Vulkan-side GPU seam and audio replace the console. MW3-specific hooks and D3D device offsets are added one at a time; MW2 addresses are never reused without checking them against the MW3 image.
+4. **Run and iterate:** each failure (a missing import, a file request, a deadlock) is traced to a cause and fixed against evidence rather than by name-matching.
 
-## Game data and repository hygiene
+## What has been learned so far
 
-Use only game files you are legally entitled to use. Keep the XEX, extracted game data, fastfiles, image packs, generated PPC source and build outputs out of this public repository.
+- **Entry:** guest entry `0x82459E58`, image base `0x82000000`. The generated-code audit indexes about 36,000 functions.
+- **Imports:** 258 kernel/XAM imports inventoried. Three reachable ones still use logging stubs (`NetDll_WSACreateEvent`, `NetDll___WSAFDIsSet`, `XamShowFriendRequestUI`); none is a known blocker for the offline campaign.
+- **File system:** failed opens now log the guest API, device, path and parameters. A read-only zero-length object stands in for `\Device\Harddisk0\Partition0`, modelled on Xenia's null device.
+- **Disc layout:** the title asks for `update:\patch.ff`, `D:\patch.ff`, `D:\patch.ffm` and the `imagefile*.pak` packs, and exits through its dirty-disc path when a required one is missing. Which requests are required versus optional is decided from evidence, not assumed.
+- **DPC and graphics completion:** a six-entry structure array, a callback, a four-slot completion ring and an event-driven worker form the graphics-interrupt path. A DPC queue implementation with unit tests exists but is **not yet validated against a live boot**; IRQL, affinity, timer delivery and ordering are open.
 
-- The supported executable and extracted game-root layout are local inputs.
-- Do not commit `.xex`, `.pe`, `.ff`, `.ffm`, `.pak`, proprietary generated PPC source or runtime game data.
-- Game files are never uploaded anywhere: not to this repository, not to a private asset repository, not to Git LFS and not to CI. CI is asset-free by design; anything that needs the executable or game data runs only on the developer's own machine. `tools/check_no_game_files.py` enforces this in CI.
-- Do not create placeholder files or rename a different asset to imitate a missing filename.
+Details: [bring-up notes](docs/MW3-BRINGUP.md), [DPC investigation](docs/MW3-DPC-INVESTIGATION.md), [startup-import plan](docs/MW3-STARTUP-IMPORT-PLAN.md).
 
-The initial target is the **offline single-player campaign**. Multiplayer services and Special Ops are outside the current milestone.
+## Roadmap
 
-## Next milestones
+1. **Asset-free runtime validation:** exercise the kernel and XAM stubs, guest memory, threads, the DPC queue and GPU command-packet decoding with synthetic test inputs, so bring-up work does not depend on game data.
+2. **Local boot work:** resolve the remaining file requests, get past the dirty-disc path and capture the next startup stage, all on your own machine.
+3. **Validate runtime semantics** against actual execution.
+4. **Main menu and first mission on desktop:** input, audio, saves, rendering and performance.
+5. **Only then PS4:** OpenOrbis integration, guest-memory mapping, Vulkan/RADV compatibility, controller and audio, profiling and packaging.
 
-1. **Resolve the remaining file requests.** Establish the correct local game-root/device mapping and supply the exact files the title requests. Do not assume that `patch.*` files are required or optional without evidence; determine the role of each request from the next run.
-2. **Run against the complete local data set.** Avoid repeatedly downloading multi-gigabyte assets through CI; keep proprietary files local and retain only sanitized diagnostics.
-3. **Advance past the dirty-disc path.** Capture the next fatal error or startup stage, then fix the underlying file-system or runtime behavior.
-4. **Validate runtime semantics.** Continue checking kernel/XAM handlers, DPC dispatch and graphics-completion ordering against actual execution rather than source-name matches alone.
-5. **Reach the main menu and first campaign mission on desktop.** Validate input, audio, saves, rendering and performance.
-6. **Only then begin PS4-specific work:** OpenOrbis integration, guest-memory mapping, Vulkan/RADV compatibility, controller/audio integration, performance profiling and package generation.
-
-A successful compile, link or smoke-test job is a development milestone—not a boot milestone. The project will report those separately.
+Out of scope for now: multiplayer services and Special Ops.
 
 ## Documentation
 
-- [MW3 bring-up notes](docs/MW3-BRINGUP.md) — executable identity, hook findings, fastfile history and open questions.
-- [MW3 build and CI setup](docs/MW3-BUILD.md) — build targets, the local-only workflow and audit details.
-- [Startup-import implementation plan](docs/MW3-STARTUP-IMPORT-PLAN.md) — import triage, evidence requirements and tests.
-- [DPC investigation](docs/MW3-DPC-INVESTIGATION.md) — callback, object-array and graphics-completion analysis.
-- [Build prerequisites](docs/building.md) and [runtime architecture](docs/runtime.md).
-- [D3D9 integration](docs/d3d9-seam.md), [rendering](docs/rendering.md) and [audio](docs/audio.md).
+- [Build and local workflow](docs/MW3-BUILD.md), [running locally](docs/MW3-LOCAL-RUN.md), [CI](docs/ci.md)
+- [Build prerequisites](docs/building.md) and [runtime architecture](docs/runtime.md)
+- [D3D9 integration](docs/d3d9-seam.md), [rendering](docs/rendering.md), [audio](docs/audio.md)
 
-## Related projects and references
+## References and credits
 
-- [mw2-recompiled](https://github.com/PaulCombal/mw2-recompiled) — runtime and recompilation foundation.
-- [XenonRecomp](https://github.com/hedge-dev/XenonRecomp) — Xbox 360 PowerPC static recompiler.
-- [LibertyRecomp](https://github.com/OZORDI/LibertyRecomp) and [gta4-ps4](https://github.com/plastikman/gta4-ps4) — related recompilation and PS4 porting references.
-- [Xenia](https://github.com/xenia-project/xenia) — Xbox 360 reverse-engineering and compatibility reference.
-
-## Credits
-
-- [PaulCombal/mw2-recompiled](https://github.com/PaulCombal/mw2-recompiled)
-- [hedge-dev/XenonRecomp](https://github.com/hedge-dev/XenonRecomp)
-- [OZORDI/LibertyRecomp](https://github.com/OZORDI/LibertyRecomp)
-- [plastikman/gta4-ps4](https://github.com/plastikman/gta4-ps4)
-- [Xenia](https://github.com/xenia-project/xenia)
+- [mw2-recompiled](https://github.com/PaulCombal/mw2-recompiled): runtime and recompilation foundation
+- [XenonRecomp](https://github.com/hedge-dev/XenonRecomp): Xbox 360 PowerPC static recompiler
+- [LibertyRecomp](https://github.com/OZORDI/LibertyRecomp) and [gta4-ps4](https://github.com/plastikman/gta4-ps4): related recompilation and PS4 porting work
+- [Xenia](https://github.com/xenia-project/xenia): Xbox 360 compatibility reference
 
 ## License
 
-The project's code is licensed under [GPL-3.0-only](LICENSE).
+Code is licensed under [GPL-3.0-only](LICENSE). Game content belongs to its owners and is not part of this project.

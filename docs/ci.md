@@ -19,30 +19,24 @@ external dependency downloads. It needs CMake >=3.20, Ninja and a C++20
 compiler. Python tooling needs Python >=3.11 for tomllib. Relay tests need a
 Rust toolchain supporting edition 2024 and Cargo.lock's dependencies.
 
-## Private builds
+## Game data stays local
 
-Automatic private-input builds have been removed from PR validation. The
-previous workflow could expose private inputs to branch code and printed raw
-runtime/audit output. Do not restore private builds until a protected manual
-workflow, owner review of the exact source SHA and isolated execution exist.
-The inherited release workflow is separate, publishes MW2-derived outputs,
-and must not be used for this MW3 validation path.
+CI never receives game files, and none are stored anywhere remote: no private
+asset repository, no Git LFS, no cache and no artifact upload. The earlier
+private-input workflow was removed and must not be restored in any form.
+`tools/check_no_game_files.py` fails CI if a game file or an LFS pointer is
+tracked.
 
-A private build needs the supported XEX at mw3/tu0/default.xex, Clang 18,
-LLD 18, CMake, Ninja, Python, Git, binutils, OpenSSL and CA certificates.
-Install libvulkan-dev for renderer compile coverage. The recompiler script
-fetches its pinned XenonRecomp revision/submodules and applies the local patch;
-diagnostic linking fetches the checksum-pinned FFmpeg/XMA archive. A startup
-run additionally needs the owner's complete extracted campaign game root.
-
-Supply legally obtained inputs through owner-controlled private storage with
-short-lived acquisition authorization. Keep acquisition credentials outside
-build execution. Pin and review source and input revisions, restrict build
-egress, disable core dumps, capture raw diagnostics only inside an ephemeral
-private environment, and publish only fixed pass/fail results. Never cache or
-upload inputs, generated code, binaries, raw logs or unaudited audit reports.
-Do not execute unreviewed PR code with private inputs. A clean environment
-alone does not prevent malicious code from exfiltrating its input files.
+Anything that needs the executable or game data runs only on the owner's own
+machine ([MW3-LOCAL-RUN.md](MW3-LOCAL-RUN.md)). That needs the supported XEX at
+`mw3/tu0/default.xex`, Clang 18, LLD 18, CMake, Ninja, Python, Git, binutils,
+OpenSSL and CA certificates, plus libvulkan-dev for renderer compile coverage.
+The recompiler script fetches its pinned XenonRecomp revision/submodules and
+applies the local patch; diagnostic linking fetches the checksum-pinned
+FFmpeg/XMA archive. A startup run additionally needs the owner's complete
+extracted campaign game root. Never upload inputs, generated code, binaries,
+raw logs or unaudited audit reports. The inherited release workflow is separate,
+publishes MW2-derived outputs, and must not be used for this MW3 path.
 
 ## Coding-agent boundary
 
