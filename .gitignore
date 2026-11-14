@@ -5,6 +5,11 @@ mw3/
 *.xexp
 *.pe
 *.iso
+*.god
+*.ff
+*.ffm
+*.pak
+*.bik
 
 # ---- upstream tool checkout (121 MB + 6 submodules) ----
 # Cloned and patched by build.sh; local changes live in patches/.

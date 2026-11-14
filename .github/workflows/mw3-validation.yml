@@ -21,6 +21,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Ensure no game files or LFS pointers are tracked
+        run: python3 tools/check_no_game_files.py --self-test && python3 tools/check_no_game_files.py
+
       - name: Check shell syntax
         run: bash -n tools/build_mw3.sh tools/recomp_mw3.sh tools/smoke_mw3.sh
 

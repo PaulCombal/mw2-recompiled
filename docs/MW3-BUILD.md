@@ -8,8 +8,7 @@ An isolated diagnostic link probe now exists behind `MW3_LINK_PROBE=ON`.
 It links the existing host runtime with the generated MW3 PPC library and
 produces a headless `mw3` executable. This proves link compatibility only;
 it does not establish that MW3 boots or that MW2-derived kernel and graphics
-handlers have correct MW3 semantics. The CI workflow runs the linked executable against the private supported XEX.
-The first-stage guest reaches `XamLoaderLaunchTitle("default.xex")`; the
+handlers have correct MW3 semantics. The first-stage guest reaches `XamLoaderLaunchTitle("default.xex")`; the
 development runner intentionally stops at that handoff rather than pretending
 to have launched the next executable. The next task is to establish which
 private title image is intended at this stage and provide a safe development
@@ -57,7 +56,7 @@ cmake --build build-mw3 --target mw3-recomp-check --parallel
 
 ## Diagnostic desktop link probe
 
-The optional CI link probe uses the same pinned XEX identity and links the
+The local link probe uses the same pinned XEX identity and links the
 generated MW3 PPC static library with the host runtime:
 
 ```sh
@@ -71,8 +70,8 @@ cmake --build build-mw3 --target mw2 --parallel
 
 The target's output file is `build-mw3/mw3`. It accepts an explicit XEX
 path and game-root path. Do not upload or publish this executable: it contains
-recompiled code derived from the user's private game executable. CI should run
-it in place on the runner and retain only appropriately sanitized diagnostics.
+recompiled code derived from the user's private game executable. Run it only on your own machine and
+share only sanitized diagnostics.
 
 ## Scope and limitations
 
@@ -91,119 +90,15 @@ it in place on the runner and retain only appropriately sanitized diagnostics.
 - The generated `ppc_mw3/` directory and extracted game executable are local
   inputs/artifacts and are not committed.
 
-## Optional GitHub Actions build with a private executable
+## CI is asset-free
 
-The pull-request workflow always runs source/configuration checks. The full
-recompile-and-compile job is enabled only when the repository has:
+Game files are never uploaded anywhere: not to this repository, not to a
+private asset repository, not to Git LFS and not to a CI runner. The
+workflow therefore only runs checks that need no game data (source and
+configuration checks, `tools/check_no_game_files.py`, the asset-free unit
+tests and the relay tests). Anything that needs `default.xex`, the
+fastfiles or the generated `ppc_mw3/` tree, including the link probe above
+and the smoke test, runs only on the developer's own machine
+([MW3-LOCAL-RUN.md](MW3-LOCAL-RUN.md)).
 
-- Repository variable `MW3_ASSET_REPO`: the private `owner/repository` holding
-  the user's own MW3 executable as `default.xex` at its root.
-- Repository secret `MW3_ASSET_REPO_TOKEN`: a fine-grained token with
-  read-only Contents access to that private asset repository.
-
-For fastfiles larger than GitHub's normal browser-upload limit, track the
-`.ff` and `.ffm` files in Git LFS in the private asset repository. The
-workflow's private checkout enables LFS download, so the staged game root
-receives the real files rather than LFS pointer text. A typical repository
-setup is:
-
-```sh
-git lfs install
-git lfs track "*.ff" "*.ffm"
-git add .gitattributes
-git add path/to/your/fastfiles/
-git commit -m "Add MW3 fastfiles with Git LFS"
-git push
-```
-
-GitHub Free currently includes 10 GiB of LFS storage and 10 GiB of monthly
-download bandwidth; Actions downloads count against bandwidth. At about
-1.96 GB per full checkout, repeated CI builds can consume the monthly
-bandwidth quickly (roughly five full downloads, depending on actual byte
-sizes and other LFS usage). Avoid rerunning the full asset build unnecessarily.
-Each LFS object must also remain below the plan's 2 GB per-file limit.
-
-The private repository should contain the **extracted Xbox 360 MW3 campaign
-game-root contents**, with the supported `default.xex` at the repository root
-and the original relative directory structure preserved. Add available
-game-root fastfiles such as `code_post_gfx.ff`, `code_post_gfx.ffm`,
-`code_post_gfx_mp.ff`, and other `.ff`/`.ffm` files. Include additional
-campaign `.xex` files only if they actually exist in your dump; none of the
-example filenames are mandatory. Do not create placeholder files or rename
-different files to imitate missing ones. Preserve the original names and
-subdirectories.
-
-Do not upload an ISO/GOD container, generated PPC sources, build outputs,
-saves, profiles, or unrelated multiplayer/DLC data for this campaign-only
-bring-up. Keep this repository private and use only game files you are
-authorized to use.
-
-The workflow verifies that root-level `default.xex` has SHA-256
-`d90bc8d93b7b8f6001ead8330271196a6ef7a5c2e4a9e9b63118f47d58a05912`
-before staging. A different executable is rejected rather than silently
-generating code for a different image. It then copies the extracted game-root
-contents (excluding Git checkout metadata) into the ignored
-`mw3/tu0/` working directory, preserving subfolders. The private checkout is
-deleted from the runner workspace after staging; none of these game assets
-are committed or uploaded as workflow artifacts.
-
-The first-stage smoke log previously requested `D:\\code_post_gfx.ff` and
-`D:\\code_post_gfx.ffm`. The user has since located and uploaded
-`code_post_gfx.ff` and `code_post_gfx_mp.ff`; the latter is a distinct
-filename and does not substitute for `code_post_gfx.ffm`. If the exact
-`.ffm` file is not present in the extracted campaign data, do not fabricate
-it. The inventory step reports filenames and sizes only, not file contents.
-
-### Triggering the build while this PR is still open
-
-GitHub's manual **Run workflow** control requires the workflow file to exist
-on the repository's default branch. While this draft PR remains unmerged, a
-new commit to a path watched by the `pull_request` trigger (including this
-document) will rerun the PR workflow.
-
-## Generated runtime audit
-
-The full CI build also runs `tools/genshared.py` and
-`tools/gen_kernel_stubs.py` with `MW2_TITLE=mw3` and `MW2_VERSION=tu0`,
-then runs `tools/audit_mw3_generated.py`. The audit artifact contains symbol
-names and counts only; it does not contain the XEX or generated PPC source.
-
-The report checks whether the XEX entry point recorded for this supported
-image (`0x82459E58`) appears in `ppc_func_mapping.cpp`, compares the MW3
-import inventory with the existing `runtime/kernel/*.cpp` macro
-implementations, lists imports that would receive diagnostic logging stubs,
-and separates unresolved kernel-import wrappers from other host link symbols.
-It also records host-object relocation types. Those relocations describe the
-CI runner's object format; they are not Xbox XEX loader relocations.
-
-An import counted as implemented is only a macro-level match. It does not
-prove that the existing MW2 implementation is semantically correct for MW3.
-Generated logging stubs return zero and are temporary diagnostics, not real
-kernel implementations. Review each missing import in the context of the
-MW3 boot path before implementing it. Do not replace the stubs with guessed
-return values or claim runtime compatibility from this report.
-
-## Startup call-graph audit
-
-The CI build also runs `tools/audit_mw3_startup.py` after generating MW3 PPC
-sources and kernel import glue. It resolves the XEX entry-point mapping to
-XenonRecomp's `_xstart` implementation, indexes generated function bodies,
-and follows direct generated calls of the form `function(ctx, base)`.
-Importantly, XenonRecomp emits guest-callable functions as weak alias
-declarations such as `sub_XXXXXXXX` pointing to implementation bodies named
-`__imp__sub_XXXXXXXX`; these aliases are resolved before traversing the
-call graph. The report separately classifies known PowerPC save/restore
-helper references from other unresolved call targets. For every reachable
-import that still has only a generated logging stub, it also records a
-shortest static direct-call path from the entry implementation, plus the
-number of reachable call sites and distinct generated callers. This helps
-separate widely referenced stubs from isolated ones and prioritize further
-inspection; it is not proof that a branch is taken during a normal boot.
-
-This is a static direct-call approximation, not a dynamic execution trace.
-Indirect calls, function pointers, callbacks, data imports, and runtime-selected
-thread entry points are not resolved. Reachability does not imply that a
-conditional path executes during a normal boot. Existing runtime matches
-remain macro-level only; no kernel import is promoted to verified MW3
-compatibility by this report. The artifact contains names/counts only, not
-generated game source.
+Do not re-add a workflow, secret, variable or LFS rule that fetches game data.

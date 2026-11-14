@@ -98,7 +98,7 @@ Use only game files you are legally entitled to use. Keep the XEX, extracted gam
 
 - The supported executable and extracted game-root layout are local inputs.
 - Do not commit `.xex`, `.pe`, `.ff`, `.ffm`, `.pak`, proprietary generated PPC source or runtime game data.
-- The optional CI asset workflow uses a separate private asset repository. Large files can consume substantial Git LFS storage and Actions download bandwidth; local testing is preferable when the remaining required assets are large.
+- Game files are never uploaded anywhere: not to this repository, not to a private asset repository, not to Git LFS and not to CI. CI is asset-free by design; anything that needs the executable or game data runs only on the developer's own machine. `tools/check_no_game_files.py` enforces this in CI.
 - Do not create placeholder files or rename a different asset to imitate a missing filename.
 
 The initial target is the **offline single-player campaign**. Multiplayer services and Special Ops are outside the current milestone.
@@ -117,7 +117,7 @@ A successful compile, link or smoke-test job is a development milestone—not a 
 ## Documentation
 
 - [MW3 bring-up notes](docs/MW3-BRINGUP.md) — executable identity, hook findings, fastfile history and open questions.
-- [MW3 build and CI setup](docs/MW3-BUILD.md) — build targets, private asset staging and audit details.
+- [MW3 build and CI setup](docs/MW3-BUILD.md) — build targets, the local-only workflow and audit details.
 - [Startup-import implementation plan](docs/MW3-STARTUP-IMPORT-PLAN.md) — import triage, evidence requirements and tests.
 - [DPC investigation](docs/MW3-DPC-INVESTIGATION.md) — callback, object-array and graphics-completion analysis.
 - [Build prerequisites](docs/building.md) and [runtime architecture](docs/runtime.md).
