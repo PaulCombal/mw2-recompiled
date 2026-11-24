@@ -42,6 +42,7 @@ dependencies = [
  "ppc_recomp",
  "ppc_rt",
  "sdl3-sys",
+ "wmapro",
 ]
 
 [[package]]
@@ -50,6 +51,7 @@ version = "0.0.0"
 dependencies = [
  "ash",
  "mw2-shaders",
+ "wmapro",
 ]
 
 [[package]]
@@ -1003,3 +1005,7 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "wmapro"
+version = "0.0.0"

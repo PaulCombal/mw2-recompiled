@@ -105,11 +105,11 @@ struct Baked {
     ascent: f32,
 }
 
-// The launcher's fonts (third_party/fonts/), in the order of Font.
+// The launcher's fonts (assets/fonts/), in the order of Font.
 const FONTS_DATA: [&[u8]; 3] = [
-    include_bytes!("../../third_party/fonts/BarlowCondensed-Medium.ttf"),
-    include_bytes!("../../third_party/fonts/BarlowCondensed-Regular.ttf"),
-    include_bytes!("../../third_party/fonts/BarlowSemiCondensed-Regular.ttf"),
+    include_bytes!("../../assets/fonts/BarlowCondensed-Medium.ttf"),
+    include_bytes!("../../assets/fonts/BarlowCondensed-Regular.ttf"),
+    include_bytes!("../../assets/fonts/BarlowSemiCondensed-Regular.ttf"),
 ];
 
 // Each the size of the last sheet drawn; the presenter draws one at a time.

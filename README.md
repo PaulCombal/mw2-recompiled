@@ -3,8 +3,8 @@
 </p>
 
 <p align="center">
-  <b>Call of Duty: Modern Warfare 2 (2009) for the Xbox 360, running natively on Linux and Windows.</b><br>
-  Not an emulator: the game's executables are recompiled ahead of time.<br>
+  <b>Call of Duty: Modern Warfare 2 (2009) for the Xbox 360, recompiled for Linux and Windows.</b><br>
+  The game's code is recompiled ahead of time, and its console graphics are translated for PC as it plays.<br>
   No game files are included. You need your own disc.
 </p>
 

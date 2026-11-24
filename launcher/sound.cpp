@@ -11,7 +11,8 @@
 //
 // and then the name's characters, the buffer and the seek table. The buffer is
 // XMA in 2 KB packets, the same the title hands the console's decoder while it
-// runs (src/runtime/kernel/xma.rs), and FFmpeg decodes it here.
+// runs (src/runtime/kernel/xma.rs), and the game's decoder decodes it here
+// (launcher/src/sound.rs).
 //
 // A sound is looked up by its name's characters rather than by walking the
 // assets before it, which would take the layout of every kind of asset there
@@ -27,9 +28,10 @@
 #include <SDL3/SDL.h>
 
 extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libavutil/channel_layout.h>
-#include <libavutil/log.h>
+// launcher/src/sound.rs: the samples of `size` bytes of XMA packets, one channel,
+// handed to `sink` once, or not at all when no frame decoded.
+void mw2l_decode_xma(const uint8_t* packets, size_t size, void (*sink)(void* context, const float* samples, size_t count),
+                     void* context);
 }
 
 #include <algorithm>
@@ -56,8 +58,7 @@ namespace
     constexpr uint8_t kMagic[] = { 'I', 'W', 'f', 'f', 'u', '1', '0', '0', 0x00, 0x00, 0x01, 0x0D };
     constexpr size_t kStreamedImages = 0x19, kZlib = 0x25;
 
-    constexpr size_t kPacket = 2048, kPacketHeader = 4;
-    constexpr int kDecoderRate = 44100;     // what the decoder is opened at; the sound's own rate is the header's
+    constexpr size_t kPacket = 2048;
     constexpr int kDeviceRate = 48000;
     // How many sounds at once: the click rings for two seconds, and the ticks
     // of a pointer crossing the entries come over it.
@@ -252,54 +253,11 @@ namespace
     // ---- XMA to samples -----------------------------------------------------
     std::vector<float> Decode(const Found& sound)
     {
-        // The packets' frames end to end: a frame runs on into the next packet.
-        std::vector<uint8_t> bits;
-        for (size_t packet = 0; packet < sound.size; packet += kPacket)
-            bits.insert(bits.end(), sound.data + packet + kPacketHeader, sound.data + packet + kPacket);
-        const size_t end = bits.size() * 8;
-        auto bit = [&](size_t at) { return (bits[at >> 3] >> (7 - (at & 7))) & 1; };
-
         std::vector<float> samples;
-        const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_XMAFRAMES);
-        AVCodecContext* context = codec ? avcodec_alloc_context3(codec) : nullptr;
-        AVPacket* packet = av_packet_alloc();
-        AVFrame* frame = av_frame_alloc();
-        if (context && packet && frame)
-        {
-            context->sample_rate = kDecoderRate;
-            av_channel_layout_default(&context->ch_layout, 1);
-            context->flags2 |= AV_CODEC_FLAG2_SKIP_MANUAL;
-        }
-        if (context && packet && frame && avcodec_open2(context, codec, nullptr) >= 0)
-        {
-            // Where the first packet's first frame starts, from its header.
-            size_t at = (Big32(sound.data) >> 11) & 0x7FFF;
-            std::vector<uint8_t> one;
-            while (at + 15 <= end)
-            {
-                // A frame starts with its length in bits, itself included;
-                // all ones says there are no more.
-                size_t length = 0;
-                for (int i = 0; i < 15; i++) length = length << 1 | bit(at + i);
-                if (length < 15 || length == 0x7FFF || at + length > end) break;
-                // The decoder takes a frame behind a byte that says how many
-                // bits of padding are before it and after.
-                one.assign(1 + (length + 7) / 8 + AV_INPUT_BUFFER_PADDING_SIZE, 0);
-                for (size_t i = 0; i < length; i++)
-                    if (bit(at + i)) one[1 + (i >> 3)] |= uint8_t(0x80 >> (i & 7));
-                packet->data = one.data();
-                packet->size = int(1 + (length + 7) / 8);
-                one[0] = uint8_t(((size_t(packet->size) * 8 - 8 - length) & 7) << 2);
-                at += length;
-                if (avcodec_send_packet(context, packet) < 0) break;
-                if (avcodec_receive_frame(context, frame) < 0) continue;
-                const float* out = reinterpret_cast<const float*>(frame->data[0]);
-                samples.insert(samples.end(), out, out + frame->nb_samples);
-            }
-        }
-        av_frame_free(&frame);
-        av_packet_free(&packet);
-        avcodec_free_context(&context);
+        mw2l_decode_xma(sound.data, sound.size,
+                        [](void* context, const float* out, size_t count)
+                        { static_cast<std::vector<float>*>(context)->assign(out, out + count); },
+                        &samples);
         return samples;
     }
 
@@ -319,7 +277,6 @@ namespace
         Inflater inflater{ packed.data() + kZlib, packed.size() - kZlib };
         if (!inflater.Run(zone)) return false;
 
-        av_log_set_level(AV_LOG_QUIET);
         std::vector<float> clips[kClips];
         for (int i = 0; i < kClips; i++)
         {

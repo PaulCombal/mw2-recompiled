@@ -10,17 +10,17 @@ does, in the same order, so that it gives the same samples bit for bit.
 
 The files it was ported from carry these notices, which go with the port:
 
-- wmaprodec.c and wmaprodata.h (mod.rs, tables.rs): Copyright (c) 2007 Baptiste Coudurier,
+- wmaprodec.c and wmaprodata.h (src/lib.rs, src/tables.rs): Copyright (c) 2007 Baptiste Coudurier,
   Benjamin Larsson, Ulion; Copyright (c) 2008 - 2009 Sascha Sommer, Benjamin Larsson.
-- wma.c (mod.rs's run-level decoding): Copyright (c) 2002-2007 The FFmpeg Project.
-- get_bits.h (bits.rs): Copyright (c) 2004 Michael Niedermayer.
-- vlc.c (vlc.rs): Copyright (c) 2000, 2001 Fabrice Bellard; Copyright (c) 2002-2004 Michael
+- wma.c (src/lib.rs's run-level decoding): Copyright (c) 2002-2007 The FFmpeg Project.
+- get_bits.h (src/bits.rs): Copyright (c) 2004 Michael Niedermayer.
+- vlc.c (src/vlc.rs): Copyright (c) 2000, 2001 Fabrice Bellard; Copyright (c) 2002-2004 Michael
   Niedermayer; Copyright (c) 2010 Loren Merritt.
-- tx.c and tx_template.c (mdct.rs): Copyright (c) Lynne; Copyright (c) 2008 Loren Merritt;
+- tx.c and tx_template.c (src/mdct.rs): Copyright (c) Lynne; Copyright (c) 2008 Loren Merritt;
   Copyright (c) 2002 Fabrice Bellard.
-- float_dsp.c (mod.rs's windowing and scaling): Copyright 2005 Balatoni Denes; Copyright 2006
+- float_dsp.c (src/lib.rs's windowing and scaling): Copyright 2005 Balatoni Denes; Copyright 2006
   Loren Merritt.
-- sinewin_tablegen.h (mod.rs's sine windows): Copyright (c) 2009 Reimar Döffinger.
+- sinewin_tablegen.h (src/lib.rs's sine windows): Copyright (c) 2009 Reimar Döffinger.
 
 FFmpeg is licensed under the GNU Lesser General Public License, version 2.1 or later, and so is
-this port (LICENSE.LGPL-2.1); the game it is part of is GPL 3.0, which that licence allows.
+this port (LICENSE.LGPL-2.1); the game and the launcher it is part of are GPL 3.0, which that licence allows.

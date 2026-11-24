@@ -85,7 +85,7 @@ Build directories:
 | `--release` | `build-release/` | `build-mp-release/` |
 | `--windows` | `build-win/`, `build-win-release/` | `build-win-mp/`, `build-win-mp-release/` |
 
-A second build directory reuses the SDL3, FFmpeg and Dear ImGui sources `build/`
+A second build directory reuses the SDL3 and Dear ImGui sources `build/`
 fetched.
 
 ### Cargo
@@ -132,7 +132,7 @@ writes `link.rsp`, which rustc passes to the linker, and `build.txt`, the title,
 version and diagnostics the hook check reads. Cargo keeps a build-script run for each
 feature set, so `cargo xtask` copies the two into the build folder from the run cargo
 used, with that run's OUT_DIR in `out_dir.txt`. Cargo then builds the launcher
-([The launcher](#the-launcher)), whose C++ CMake builds with FFmpeg's XMA decoder, zlib
+([The launcher](#the-launcher)), whose C++ CMake builds with zlib
 and Dear ImGui, and `translate-shader`; CMake builds the other tools, and on Linux
 zlib's static library for `tools/inflate_diff.py`. A build directory holds CMake's
 files, cargo's in `<build>/rust/`, and the executables as `<build>/mw2`,
@@ -238,7 +238,7 @@ kernel stubs are Rust.
   of one of its backends needs too. Win32's declarations are by hand in
   `src/runtime/windows.rs`. The game links no zlib and no FFmpeg: the title's XLAST
   is gunzipped by `src/runtime/inflate.rs`, which `tools/inflate_diff.py` holds to
-  zlib, and XMA frames are decoded by `src/runtime/wmapro/`. The system's screens
+  zlib, and XMA frames are decoded by the `wmapro` crate (`wmapro/`). The system's screens
   draw their letters with `src/runtime/truetype.rs`, the part of stb_truetype (the
   copy that comes with Dear ImGui) that bakes a font into an atlas, step for step.
   `tools/font_diff.py` holds it to the C bit for bit -- the atlas, the glyphs' boxes
@@ -469,7 +469,7 @@ map does not.
 
 `mw2-launcher` (`launcher/`) is built with every build directory, beside
 `mw2`. It is one executable: Dear ImGui (fetched, like SDL3) on SDL's own
-renderer, three fonts from `third_party/fonts/` written out as arrays at
+renderer, three fonts from `assets/fonts/` written out as arrays at
 configure time, and XenonRecomp's patcher compiled in from its checkout with
 the LZX decoder and AES it uses. For the compile pass it also has zlib (fetched,
 v1.3.1), the zone definitions in `launcher/zone/defs/` written out as arrays
@@ -478,10 +478,10 @@ like the fonts, and the shaders crate the game builds its shaders with
 
 It is a cargo binary of the workspace (`launcher/Cargo.toml`), which `cargo xtask
 build` builds with the build directory's features (`diagnostics`, or `portable` for
-`--release`) and puts in the build directory as `mw2-launcher`. Its entry and its
-compile pass are Rust (`launcher/src/`); the rest is C++, the static library
+`--release`) and puts in the build directory as `mw2-launcher`. Its entry, its
+compile pass and its menu sounds' decoding are Rust (`launcher/src/`); the rest is C++, the static library
 `launcher_core` of `CMakeLists.txt`. `cargo xtask` builds it with CMake in the build
-directory it configured, with SDL3, the XMA decoder and zlib, so ninja's dependencies
+directory it configured, with SDL3 and zlib, so ninja's dependencies
 decide what is compiled again; the launcher's `build.rs` builds the same targets there
 (`MW2_BUILD_DIR`), which then has nothing left to do, runs again when one of their
 archives or a source folder changed, and links them as CMake's link of them would.
@@ -499,11 +499,17 @@ diagnostics build keeps its console. `main` is the C runtime's (`#![no_main]`), 
 C++ gets the arguments it always had and nothing of Rust's start-up runs: SIGPIPE is
 not ignored, which the game the launcher starts would inherit.
 
-Its icon is in `launcher/icon/`: `launcher.ico` is linked into the Windows
-program as a resource, and `launcher.bmp` is written out as an array like the
-fonts and given to the window on both systems. `tools/launcher_icon.py` makes
-the two from the campaign's icon in the PC game's `iw4sp.exe`: the left half as
-it is, the right half in the multiplayer's colours. `tools/steam_emblem.py`
+The icons are in `assets/icons/`, the launcher's and the game's, `sp` and `mp`,
+each an `.ico`, the `.rc` that names it and a `.bmp`. The `.rc` is compiled by
+`windres` (the launcher's in `launcher/build.rs`, the title's in `build.rs`) and
+linked into the Windows program as a resource; the `.bmp` is given to the window
+on both systems, the launcher's written out as an array like the fonts, the
+game's included by the presenter. `tools/icons.py` makes all three from the
+campaign's icon in the PC game's `iw4sp.exe`: the launcher's with the 2, its left
+half as it is and its right half in the multiplayer's colours, and the game's
+without the 2 (the numeral, its outline and glow masked, filled from the
+background around, and the waveform it hid drawn again), the campaign's as it
+is and the multiplayer's in its colours. `tools/steam_emblem.py`
 makes `steam_emblem.h`, the Steam card's emblem, from Steam's own 256-pixel
 icon: a coverage mask of its white parts, which the launcher tints. `tools/readme_art.py` draws the
 README's banner, tiles and headings into `docs/images/readme/`.
@@ -523,7 +529,7 @@ README's banner, tiles and headings into `docs/images/readme/`.
 | `update.cpp` | looks for a newer release and puts it in place of the running programs |
 | `report.cpp` | a bug report: a run with its log kept, the system's description, the new-issue page |
 | `settings.cpp` | what the player sets for the game, kept in `.env`, which the game reads as it starts |
-| `sound.cpp` | the game's two menu sounds, read out of the installed `code_post_gfx.ff` at each start and played as the entries are moved through and chosen; none without an install |
+| `sound.cpp`, `src/sound.rs` | the game's two menu sounds, read out of the installed `code_post_gfx.ff` at each start, decoded by the game's XMA decoder (the `wmapro` crate), and played as the entries are moved through and chosen; none without an install |
 | `profile.cpp` | the profile screen's changes to the files under `saves/` ([saves.md](saves.md#what-the-launcher-changes)) |
 | `maps.cpp` | custom maps: added (a PC map converted, a 360 one checked, copied, a picture made from the `.iwd`), put in or out of the game, removed ([gameplay.md](gameplay.md)) |
 | `mapport/` | the map converter: a PC map's fastfiles made the 360's ([maps.md](maps.md)); GPL v3, see its `NOTICE.md` |
@@ -603,9 +609,9 @@ with its own. The workflow gives the build its tag
 one has nothing to compare and the entry is off. The archive it wants is the
 one for its system, `mw2-<tag>-<linux|windows>`. Releases up to v0.7.x were
 built once per online service and their launchers want
-`mw2-<tag>-<system>-<steam|lan>`, so the workflow publishes the archive under
-those two names as well. The first start after such an update finds that name
-in `update/` and keeps the service as NETWORK (`update::Finish`).
+`mw2-<tag>-<system>-<steam|lan>`, which releases after v0.9.0 no longer publish:
+such a launcher finds no archive of its name and offers no update, so its player
+downloads a release by hand.
 
 Choosing UPDATE TO downloads that archive into `update/` beside the launcher,
 checks its SHA-256, unpacks it with the system's `tar` (Windows 10 and later
@@ -735,9 +741,9 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `tools/` | generators, reverse-engineering scripts, capture helpers |
 | `tools/routes/` | recorded walks and flights for `MW2_WALK_PATH` and `MW2_FLY_PATH` |
 | `launcher/` | the launcher, a cargo binary with its C++ in `launcher_core`: install, and starting the game ([The launcher](#the-launcher)) |
+| `assets/icons/` | the game's and the launcher's icons, made by `tools/icons.py` ([The launcher](#the-launcher)) |
+| `assets/fonts/` | the fonts of the launcher and the system's screens (Barlow), and Michroma for the README's titles; SIL Open Font License |
 | `relay/` | the relay server for NETWORK SERVER, and its Dockerfile ([relay.md](relay.md)) |
-| `third_party/ffmpeg-xenia/` | builds the XMA frame decoder from Xenia's FFmpeg branch, fetched at configure time, for the launcher's menu sounds (the game has `src/runtime/wmapro/`) |
-| `third_party/fonts/` | the launcher's fonts (Barlow), and Michroma for the README's titles; SIL Open Font License |
 | `docs/` | this documentation |
 
 ### The runtime
@@ -751,11 +757,11 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `src/title.rs` | the guest addresses of `runtime/title.h` for this build |
 | `src/runtime/install/` | a player's start: the executable check, XEX decryption, the hand-over to the launcher |
 | `src/runtime/kernel/` | kernel and XAM imports: memory, objects and waits, threads, files, content and profile, input, networking, video, audio and the XMA decoder's contexts |
-| `src/runtime/wmapro/` | the XMA frame decoder |
 | `src/runtime/online/` | the online services (`lan`, `server`, `steam`), chosen as the game starts |
 | `src/runtime/gpu/` | the command processor: ring and PM4 packets, interrupts, D3D9's command-buffer arena, texture fetch and tiling, the write watch, the image pool's block copy |
 | `src/runtime/gpu/vulkan/` | the Vulkan renderer: draws, targets, resolves, frames, pipelines and pipeline libraries, the texture cache, the recorder thread, the display table, the presenter window, its backdrop, the GPU's busy time and RenderDoc capture |
 | `shaders/` | the crate the game shares with the launcher: the shader translator (`src/shader/`, [shaders.md](shaders.md)), the device and pipeline layout (`src/pipeline.rs`), a shader's build (`src/shader_build.rs`) and the compile pass's marker (`src/marker.rs`); the `translate-shader` tool (`translate_shader.rs`): the translator against a real driver, without the game; `evaluate.py` runs the translator's SPIR-V against Xenia's results (with `evaluate_dump.rs`) |
+| `wmapro/` | the XMA frame decoder, a port of FFmpeg's, which the game and the launcher's menu sounds share; LGPL 2.1 or later, see its `NOTICE.md` ([audio.md](audio.md)) |
 | `src/runtime/screen.rs`, `signin.rs`, `friends.rs`, `guide.rs` | the system's screens over the title |
 | `src/runtime/console.rs` | the scripted console: commands into the title's command buffer |
 | `src/runtime/player.rs` | the headless walker and route recorder |

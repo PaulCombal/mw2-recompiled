@@ -25,3 +25,5 @@ portable = []
 [dependencies]
 ash = { version = "=0.38.0", default-features = false, features = ["std", "linked"] }
 mw2-shaders = { path = "../shaders" }
+# The game's XMA frame decoder, for the menu sounds (src/sound.rs).
+wmapro = { path = "../wmapro" }

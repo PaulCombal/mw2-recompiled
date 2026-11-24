@@ -15,7 +15,7 @@
 // once, by whichever of the three entry points runs first.
 //
 // Unsafe by nature: RenderDoc's function table is declared by hand from
-// third_party/renderdoc/renderdoc_app.h (RENDERDOC_API_1_4_1), and its pointer, which
+// RenderDoc's renderdoc_app.h (RENDERDOC_API_1_4_1), and its pointer, which
 // RenderDoc owns for the life of the process, is called from frame_boundary's thread
 // only; the device pointer it is given is the first word of the live instance.
 #![deny(unsafe_op_in_unsafe_fn)]

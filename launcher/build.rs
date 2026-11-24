@@ -74,14 +74,14 @@ fn main() {
     // again, and CMake rebuilds what changed. cargo xtask has CMake build these targets
     // first, so ninja's own dependencies decide there, and a rebuilt archive runs this
     // again.
-    for path in ["launcher", "runtime", "XenonRecomp-rs/XenonUtils", "XenonRecomp-rs/thirdparty", "third_party"] {
+    for path in ["launcher", "runtime", "XenonRecomp-rs/XenonUtils", "XenonRecomp-rs/thirdparty", "assets"] {
         watch(&root.join(path));
     }
     for path in ["cmake", "CMakeLists.txt"] {
         watch(&root.join(path));
     }
     watch(&build.join("CMakeCache.txt"));
-    let mut targets = vec!["launcher_core", "SDL3-static", "ffmpeg_xma", "zlibstatic"];
+    let mut targets = vec!["launcher_core", "SDL3-static", "zlibstatic"];
     if windows {
         targets.push("vulkan_import_library");
     }
@@ -131,7 +131,7 @@ fn main() {
         link.push("-Wno-unused-command-line-argument".into());
         // The program's icon, as Explorer and the taskbar show it: compiled as CMake's
         // RC rule compiles it, by the toolchain's windres.
-        let icon = root.join("launcher/icon/launcher.rc");
+        let icon = root.join("assets/icons/launcher.rc");
         let resource = out.join("launcher.rc.res");
         run(Command::new(mingw.join("bin/x86_64-w64-mingw32-windres")).args(["-O", "coff"]).arg(&icon).arg(&resource));
         link.push(resource.display().to_string());

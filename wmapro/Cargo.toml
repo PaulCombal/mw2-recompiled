@@ -1,0 +1,9 @@
+# The XMA frame decoder, a port of FFmpeg's (LGPL 2.1 or later, NOTICE.md): the game
+# decodes the title's sounds with it as the console's XMA hardware would, and the
+# launcher its menu sounds.
+[package]
+name = "wmapro"
+version = "0.0.0"
+edition = "2024"
+license = "LGPL-2.1-or-later"
+publish = false

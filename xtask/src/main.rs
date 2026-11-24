@@ -581,7 +581,7 @@ fn build(options: &Options, title: &Title) -> Result {
         if tag.is_some_and(|tag| fetched_sdl.contains(&format!("VERSION \"{tag}\""))) {
             fetched.push(format!("-DFETCHCONTENT_SOURCE_DIR_SDL3={}/build/_deps/sdl3-src", root().display()));
         }
-        for (name, folder) in [("FFMPEG_XMA", "ffmpeg_xma-src"), ("IMGUI", "imgui-src")] {
+        for (name, folder) in [("IMGUI", "imgui-src")] {
             if Path::new("build/_deps").join(folder).is_dir() {
                 fetched.push(format!("-DFETCHCONTENT_SOURCE_DIR_{name}={}/build/_deps/{folder}", root().display()));
             }
@@ -705,7 +705,7 @@ fn build(options: &Options, title: &Title) -> Result {
     // so ninja's dependencies of every source decide what is rebuilt, and an archive
     // rebuilt runs build.rs again (the same targets as build.rs builds).
     if launcher && !every {
-        let mut targets = vec!["launcher_core", "SDL3-static", "ffmpeg_xma", "zlibstatic"];
+        let mut targets = vec!["launcher_core", "SDL3-static", "zlibstatic"];
         if windows {
             targets.push("vulkan_import_library");
         }

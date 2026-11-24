@@ -1,6 +1,7 @@
 // The launcher's entry. The window, the install and the tools are C++ (launcher/*.cpp,
 // the library launcher_core); the compile pass is Rust (precompile.rs), on the crate the
-// game builds its shaders with, so both build every shader the same way.
+// game builds its shaders with, so both build every shader the same way, and so is the
+// menu sounds' decoding (sound.rs), on the game's XMA decoder.
 //
 // `main` is the C runtime's, as the C++ launcher's was: the arguments it hands over
 // (Windows' in the code page, which main.cpp reads the wide command line instead of),
@@ -12,6 +13,7 @@
 #![cfg_attr(not(feature = "diagnostics"), windows_subsystem = "windows")]
 
 mod precompile;
+mod sound;
 
 use std::ffi::{c_char, c_int};
 

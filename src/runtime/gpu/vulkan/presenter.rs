@@ -39,6 +39,12 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 const HEIGHT: u32 = 720;
+/// The window's icon, the title's (tools/icons.py makes it; on Windows build.rs links
+/// the .ico beside it as the program's).
+#[cfg(not(mw2_title_mp))]
+static ICON: &[u8] = include_bytes!("../../../../assets/icons/sp.bmp");
+#[cfg(mw2_title_mp)]
+static ICON: &[u8] = include_bytes!("../../../../assets/icons/mp.bmp");
 /// How long a screen takes to fade in or out, in seconds.
 const FADE: f32 = 0.15;
 const FRAMES_IN_FLIGHT: u32 = 2;
@@ -1640,6 +1646,17 @@ impl Presenter {
         if self.window.is_null() {
             log_warn!("vulkan: no window (%s)", sdl_error());
             return false;
+        }
+        // SAFETY: ICON is static, and SDL_LoadBMP_IO closes the stream it reads; the
+        // window copies the surface, which is freed here.
+        unsafe {
+            let icon = sdl::SDL_LoadBMP_IO(sdl::SDL_IOFromConstMem(ICON.as_ptr().cast(), ICON.len()), true);
+            if icon.is_null() {
+                log_warn!("vulkan: no window icon (%s)", sdl_error());
+            } else {
+                sdl::SDL_SetWindowIcon(self.window, icon);
+                sdl::SDL_DestroySurface(icon);
+            }
         }
         if !self.create_instance() {
             return false;

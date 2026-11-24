@@ -9,7 +9,7 @@ that the pictures look the same wherever GitHub shows them, with no font to
 load. The style is the game's title screen and the launcher's: grey smoke lit
 from the upper right, an amber glow in the bottom left, condensed capitals
 (Barlow, the launcher's fonts) and the title in Michroma, all from
-third_party/fonts/. The smoke is SVG noise with fixed seeds, so the output is
+assets/fonts/. The smoke is SVG noise with fixed seeds, so the output is
 the same on every run.
 """
 import os
@@ -18,7 +18,7 @@ from fontTools.pens.svgPathPen import SVGPathPen
 from fontTools.pens.transformPen import TransformPen
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FONTS = os.path.join(REPO, 'third_party/fonts')
+FONTS = os.path.join(REPO, 'assets/fonts')
 OUT = os.path.join(REPO, 'docs/images/readme')
 
 WHITE = '#ECECE8'

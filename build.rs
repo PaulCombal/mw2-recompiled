@@ -495,6 +495,19 @@ fn main() {
         watch(&exports);
         link.push(format!("-Wl,--dynamic-list={}", exports.display()));
     }
+    if let Some(mingw) = &mingw {
+        // The program's icon, as Explorer and the taskbar show it: the title's, compiled
+        // by the toolchain's windres as the launcher's is (tools/icons.py makes it).
+        let script = root.join(format!("assets/icons/{title}.rc"));
+        watch(&script);
+        watch(&root.join(format!("assets/icons/{title}.ico")));
+        let resource = out.join("icon.res");
+        run(Command::new(mingw.join("bin/x86_64-w64-mingw32-windres"))
+            .args(["-O", "coff"])
+            .arg(&script)
+            .arg(&resource));
+        link.push(resource.display().to_string());
+    }
     link.extend(objects.iter().map(|object| object.display().to_string()));
     link.extend(libraries);
     if windows {

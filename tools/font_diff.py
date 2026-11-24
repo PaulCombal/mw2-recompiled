@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Compares the game's font rasteriser (src/runtime/truetype.rs) with stb_truetype, called
 # as the system's screens (screen.rs) call the Rust (see font_diff.rs and font_diff.cpp), byte for byte:
-# the atlas, the 95 glyphs, the result and the ascent. On the three fonts of third_party/fonts
+# the atlas, the 95 glyphs, the result and the ascent. On the three fonts of assets/fonts
 # that screen.rs uses at every whole size from 1 to 600 px with screen.rs's doubling of the
 # atlas from 512 to 8192, every atlas side for a sample of sizes, sizes that are not whole,
 # zero and negative; on fonts of this machine's /usr/share/fonts chosen for what they reach
@@ -20,7 +20,7 @@
 import argparse, glob, os, random, re, shutil, struct, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FONTS = [f"{ROOT}/third_party/fonts/{name}.ttf"
+FONTS = [f"{ROOT}/assets/fonts/{name}.ttf"
          for name in ("BarlowCondensed-Medium", "BarlowCondensed-Regular", "BarlowSemiCondensed-Regular")]
 HEADER_DIR = f"{ROOT}/build/_deps/imgui-src"
 CXX = ["clang++-18", "-std=gnu++20", "-march=x86-64-v2", "-DNDEBUG", "-fno-exceptions", "-fno-rtti", "-I", HEADER_DIR]

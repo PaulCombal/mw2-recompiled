@@ -88,9 +88,6 @@ pub mod truetype;
 mod inflate;
 #[deny(unsafe_code)]
 pub mod version;
-// The XMA frame decoder, a port of FFmpeg's (LGPL 2.1 or later, wmapro/NOTICE.md).
-#[deny(unsafe_code)]
-pub mod wmapro;
 
 /// The lock for an end-of-run report, which may be written by a thread that a fault or the
 /// watchdog interrupted while it held this very lock: a short wait for the thread that

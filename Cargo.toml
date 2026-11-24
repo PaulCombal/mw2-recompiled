@@ -36,9 +36,11 @@ ash = { version = "=0.38.0", default-features = false, features = ["std", "linke
 # The shader translator, the device, the pipeline layout and the shader build the
 # launcher shares (shaders/).
 mw2-shaders = { path = "shaders" }
+# The XMA frame decoder, which the launcher shares (wmapro/).
+wmapro = { path = "wmapro" }
 
 [workspace]
-members = ["launcher", "shaders"]
+members = ["launcher", "shaders", "wmapro"]
 # Each of these is a workspace of its own.
 exclude = ["generated", "relay", "xtask"]
 

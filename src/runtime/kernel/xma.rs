@@ -7,7 +7,7 @@
 //
 // A port of Xenia's current context decoder (xma_context_new): the same context layout,
 // the same packet and frame walk, and FFmpeg's "xmaframes" codec, which takes one XMA frame
-// at a time, ported too (src/runtime/wmapro/).
+// at a time, ported too (the wmapro crate, wmapro/).
 //
 // XMA2 is WMA Pro in 2 KB packets. A packet starts with a 32-bit header (frame count, bit
 // offset of the first frame that starts in it, a skip count to the next packet of the same
@@ -83,8 +83,6 @@ macro_rules! xma_error {
         }
     };
 }
-
-use crate::runtime::wmapro;
 
 // ---- the context block ------------------------------------------------------------------
 // Sixteen big-endian words in guest memory. The fields are laid out as C bitfields on a

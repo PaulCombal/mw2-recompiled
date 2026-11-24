@@ -22,7 +22,8 @@
 // your option) any later version. It is distributed in the hope that it will be useful, but
 // WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
 // A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more details
-// (LICENSE.LGPL-2.1 in this folder, and NOTICE.md).
+// (LICENSE.LGPL-2.1 and NOTICE.md, beside src/).
+#![deny(unsafe_code)]
 
 mod bits;
 mod mdct;

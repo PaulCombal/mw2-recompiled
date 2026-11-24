@@ -110,11 +110,8 @@ jobs:
           cp out/sp/mw2-launcher $name/mw2-launcher
           strip $name/mw2-sp $name/mw2-mp $name/mw2-launcher
           cp README.md LICENSE $name/
-          cp third_party/fonts/OFL.txt $name/FONT-LICENSE.txt
+          cp assets/fonts/OFL.txt $name/FONT-LICENSE.txt
           tar czf dist/$name.tar.gz $name
-          # Launchers up to v0.7.x look for the archive of their own online
-          # service; the same archive under both names updates them.
-          for online in steam lan; do cp dist/$name.tar.gz dist/$name-$online.tar.gz; done
           echo "glibc needed: $(objdump -T out/mp/mw2 | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1)"
           ls -la dist
 
@@ -212,11 +209,8 @@ jobs:
           cp out/sp/mw2-launcher.exe $name/mw2-launcher.exe
           $LLVM_MINGW/bin/llvm-strip $name/mw2-sp.exe $name/mw2-mp.exe $name/mw2-launcher.exe
           cp README.md LICENSE $name/
-          cp third_party/fonts/OFL.txt $name/FONT-LICENSE.txt
+          cp assets/fonts/OFL.txt $name/FONT-LICENSE.txt
           zip -qr dist/$name.zip $name
-          # Launchers up to v0.7.x look for the archive of their own online
-          # service; the same archive under both names updates them.
-          for online in steam lan; do cp dist/$name.zip dist/$name-$online.zip; done
           ls -la dist
 
       - uses: actions/upload-artifact@v6
@@ -281,7 +275,7 @@ jobs:
           - Built on ${{ github.sha }}
 
           Needs your own copy of the game: an ISO of the Xbox 360 disc, version 1.0.557.
-          Take `linux` or `windows` (the `-steam` and `-lan` copies are the same file, for launchers of v0.7.x to update themselves).
+          Take `linux` or `windows`.
           Extract it anywhere and start `mw2-launcher`: it installs the game from your ISO, then starts it.
           EOF
           gh release create "${{ inputs.version }}" dist/* --repo "${{ github.repository }}" \

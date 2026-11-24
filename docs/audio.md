@@ -94,7 +94,7 @@ synchronously on the kicking thread until the output ring is full or the input
 is spent, so the context reflects the work when the store returns. A lock waits
 out a decode in flight on another thread.
 
-**Frames** are decoded by `src/runtime/wmapro/`, a Rust port of the `xmaframes`
+**Frames** are decoded by the `wmapro` crate (`wmapro/`), a Rust port of the `xmaframes`
 codec of Xenia's FFmpeg branch (`has207/FFmpeg`): libavcodec's WMA Pro decoder
 fed one XMA frame at a time. Stock FFmpeg has only a packet-level XMA2 decoder,
 which cannot follow the frame-precise bit offsets and loop points a context
@@ -102,7 +102,8 @@ works in. The port does what the C does in the same order, down to the bit
 reader, the VLC tables, and the inverse MDCT and FFT of libavutil's C (this
 build of FFmpeg has no assembly), so it gives the same floats bit for bit, logs
 what FFmpeg logged and refuses what it refused; it is LGPL 2.1 or later, as
-FFmpeg is (`src/runtime/wmapro/NOTICE.md`). Each context makes a decoder for
+FFmpeg is (`wmapro/NOTICE.md`). It is a crate of its own because the launcher
+decodes its menu sounds with it too. Each context makes a decoder for
 its stream's rate and channels, and a new one when they change; a 512-sample
 frame comes out as planar float, which the context turns into 16-bit
 big-endian PCM.
@@ -113,7 +114,7 @@ from the last one: FFmpeg's `xmaframes` has no flush.
 **Damaged streams.** On some input the title never gives, the decoder, Xenia's
 included, never returns from a kick: a loop for ever over frames that all fail
 to decode, or a packet header that sends the read offset back over a frame that
-fails. FFmpeg's decoder, which `src/runtime/wmapro/` ports, also copies out of
+fails. FFmpeg's decoder, which `wmapro/` ports, also copies out of
 bounds on some: a frame length that runs past the two packets it has, a ring of
 zero blocks, a context turned mono with a stereo frame in flight. The port stops
 at the buffer's end, takes a ring of zero blocks as full and writes silence for
