@@ -38,6 +38,7 @@ name = "mw2"
 version = "0.0.0"
 dependencies = [
  "ash",
+ "mw2-install",
  "mw2-shaders",
  "ppc_recomp",
  "ppc_rt",
@@ -46,10 +47,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mw2-install"
+version = "0.0.0"
+
+[[package]]
 name = "mw2-launcher"
 version = "0.0.0"
 dependencies = [
  "ash",
+ "mw2-install",
  "mw2-shaders",
  "wmapro",
 ]
@@ -59,6 +65,7 @@ name = "mw2-shaders"
 version = "0.0.0"
 dependencies = [
  "ash",
+ "mw2-install",
 ]
 
 [[package]]

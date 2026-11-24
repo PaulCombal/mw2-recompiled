@@ -1,11 +1,15 @@
 # cargo xtask: the build, from the disc to the executables (src/main.rs says how).
 # A workspace of its own, as the game's cannot be read before this has generated
-# the guest code it depends on. Nothing but std.
+# the guest code it depends on. Nothing but std, and the reader of the disc, the update
+# and the executables the game and the launcher share (install/).
 [package]
 name = "xtask"
 version = "0.0.0"
 edition = "2024"
 publish = false
+
+[dependencies]
+mw2-install = { path = "../install" }
 
 [workspace]
 

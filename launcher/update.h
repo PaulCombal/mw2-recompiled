@@ -7,7 +7,8 @@
 // The archive for this build's system is downloaded,
 // checked, unpacked with the system's tar, and its files swapped in; the ones
 // they replace wait in update/ until the next start removes it, since a
-// running program can be moved aside but not deleted.
+// running program can be moved aside but not deleted. The update is Rust
+// (launcher/src/update.rs); these call it (update.cpp).
 #include "setup.h"
 
 #include <cstdint>

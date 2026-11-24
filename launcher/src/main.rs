@@ -1,7 +1,10 @@
-// The launcher's entry. The window, the install and the tools are C++ (launcher/*.cpp,
-// the library launcher_core); the compile pass is Rust (precompile.rs), on the crate the
-// game builds its shaders with, so both build every shader the same way, and so is the
-// menu sounds' decoding (sound.rs), on the game's XMA decoder.
+// The launcher's entry. The window and the tools are C++ (launcher/*.cpp, the library
+// launcher_core); the compile pass is Rust (precompile.rs), on the crate the game builds
+// its shaders with, so both build every shader the same way; so are the install
+// (setup.rs, with its download, download.rs), on the crate the game and cargo xtask read
+// the disc and the update with, the self-update (update.rs, which reads a release's
+// description with the package's library, release.rs), and the menu sounds' decoding
+// (sound.rs), on the game's XMA decoder.
 //
 // `main` is the C runtime's, as the C++ launcher's was: the arguments it hands over
 // (Windows' in the code page, which main.cpp reads the wide command line instead of),
@@ -12,8 +15,11 @@
 // the terminal mode prints (main.cpp). The diagnostics build keeps its own console.
 #![cfg_attr(not(feature = "diagnostics"), windows_subsystem = "windows")]
 
+mod download;
 mod precompile;
+mod setup;
 mod sound;
+mod update;
 
 use std::ffi::{c_char, c_int};
 

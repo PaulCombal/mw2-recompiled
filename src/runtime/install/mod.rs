@@ -8,14 +8,14 @@
 // The custom maps' (src/hooks/custom_map_list.rs), which only the update's multiplayer has.
 #[cfg_attr(not(T_UI_LoadArenas), allow(dead_code))]
 pub mod arena;
-pub mod crypto;
 #[allow(unsafe_code)]
 pub mod spawn;
-pub mod xex;
 
 use crate::env;
 use crate::log::{log_error, log_info, log_warn};
 use crate::runtime::platform;
+// The executable's image and its hash, as the launcher and cargo xtask read them.
+use mw2_install::{crypto, xex};
 use spawn::c_path;
 use std::ffi::{CStr, CString};
 use std::fs;
@@ -23,10 +23,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-// The executable this build was recompiled from, by its SHA-256, which CMake reads
-// from mw2/ at configure time. Any other -- another region, another version -- has
-// other code at other addresses, so it is not run.
-const SHA256: &str = env!("MW2_XEX_SHA256");
+// The image this build was recompiled from, by its SHA-256, which build.rs reads from
+// mw2/. Every region's executable decrypts to it, though their signed headers differ;
+// another version has other code at other addresses, so it is not run.
+const IMAGE_SHA256: &str = env!("MW2_IMAGE_SHA256");
 #[cfg(mw2_title_mp)]
 const XEX: &str = "default_mp.xex";
 #[cfg(not(mw2_title_mp))]
@@ -95,24 +95,12 @@ fn program_for(xex: &[u8]) -> Option<&'static str> {
     }
 }
 
-enum Installed {
-    Yes(Vec<u8>),
-    No,
-    Unreadable(String),
-}
-
-// The title's image from game/, if the executable there is the one this build was
-// made from.
-fn load_installed() -> Installed {
-    let path = Path::new(GAME_FOLDER).join(XEX);
-    let file = fs::read(&path).unwrap_or_default();
-    if file.is_empty() || crypto::sha256_hex(&file) != SHA256 {
-        return Installed::No;
-    }
-    match xex::image(&file) {
-        Ok(image) => Installed::Yes(image),
-        Err(error) => Installed::Unreadable(format!("{}: {error}", path.display())),
-    }
+// The title's image from game/, if the executable there decrypts to the one this
+// build was made from.
+fn load_installed() -> Option<Vec<u8>> {
+    let file = fs::read(Path::new(GAME_FOLDER).join(XEX)).ok()?;
+    let image = xex::image(&file).ok()?;
+    (crypto::sha256_hex(&image) == IMAGE_SHA256).then_some(image)
 }
 
 /// Loads the installed title. None when the run should end, with `exit_code` saying
@@ -126,13 +114,8 @@ pub fn prepare(exit_code: &mut i32) -> Option<Vec<u8>> {
         let _ = std::env::set_current_dir(folder);
     }
 
-    match load_installed() {
-        Installed::Yes(image) => return Some(image),
-        Installed::Unreadable(error) => {
-            show_error(&error);
-            return None;
-        }
-        Installed::No => {}
+    if let Some(image) = load_installed() {
+        return Some(image);
     }
     // Not installed, or installed for another version of this build: both are the
     // launcher's to put right.

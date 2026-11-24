@@ -15,6 +15,10 @@ build = "build.rs"
 # Vulkan, the loader linked by name as the game links it.
 ash = { version = "=0.38.0", default-features = false, features = ["std", "linked"] }
 
+[build-dependencies]
+# The game's SHA-256, which the build id is (install/).
+mw2-install = { path = "../install" }
+
 # The translator on its own, for a fast loop against captured shaders and spirv-val
 # without launching the game (translate_shader.rs). Outside src/, so not in the shader
 # build id: it decides nothing a shader compiles to.

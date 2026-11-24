@@ -1,0 +1,15 @@
+# What reads the game off a player's disc and update, shared by the game, the launcher
+# and cargo xtask so that each reads them alike: the AES and SHA-256 an executable is
+# decrypted and known by, the XEX2 image and header, the disc's file system (an image
+# or the folder it was extracted to), the title update's package, and its patches with
+# the LZX decoder they need (a port of libmspack's, LGPL 2.1, and of XenonRecomp's
+# patcher, MIT: NOTICE.md). Nothing but std, as xtask, which builds before anything
+# else, takes it too.
+[package]
+name = "mw2-install"
+version = "0.0.0"
+edition = "2024"
+# The project's GPL 3.0, with lzx.rs under libmspack's LGPL 2.1 and patch.rs under
+# XenonRecomp's MIT and Xenia's BSD notices.
+license = "GPL-3.0-only AND LGPL-2.1-only AND MIT AND BSD-3-Clause"
+publish = false

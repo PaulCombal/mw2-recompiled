@@ -40,12 +40,15 @@ or a patch.
    neither at the commit the tree records nor at a later one of its history;
 2. builds XenonRecomp and XenonAnalyse into `out/xenonrecomp/`;
 3. extracts `default.xex` and `default_mp.xex` from the ISO into `mw2/tu0/`,
-   and every `.ff`, `.pak` and `.bik` into `mw2/game/` (`xtask/src/xdvdfs.rs`;
-   files already there are kept); then applies the title update, which writes the
+   and every `.ff`, `.pak` and `.bik` into `mw2/game/` (`xtask/src/disc.rs`, on
+   the disc reader of the `install/` crate; files already there are kept); then
+   applies the title update with the same crate's patcher, which writes the
    executables the rest works on, `mw2/default.xex` and `mw2/default_mp.xex`
    ([Title update 6](#title-update-6));
-4. writes the flat PE image (`mw2/default.pe` or `mw2/default_mp.pe`) with
-   `xtask/src/xexdump.rs`;
+4. writes the flat PE images (`mw2/default.pe` and `mw2/default_mp.pe`, and the
+   disc's in `mw2/tu0/`) as the game makes them at every start
+   (`install/src/xex.rs`): both titles' whichever is built, since the launcher,
+   built with either, knows an install by both;
 5. finds jump tables with XenonAnalyse (`config/mw2_switch_tables.toml`,
    `config/mw2mp_switch_tables.toml`);
 6. recompiles as Rust into `ppc_rs/` or `ppc_mp_rs/` with `--no-cpp-fallback`, so
@@ -311,11 +314,11 @@ The update is a package holding a patch for each executable (`default.xexp`,
 `dlc1_ui_mp.ff`, `dlc2_ui_mp.ff`). After extracting the disc's executables,
 `cargo xtask`:
 
-- unpacks the package (`xtask/src/stfs.rs`) into `mw2/update/`, or copies the
+- unpacks the package (`install/src/stfs.rs`) into `mw2/update/`, or copies the
   files from the folder `--tu` names;
-- applies each patch to the disc's executable with XenonRecomp's own patcher
-  (`tools/xexpatch.cpp`, built against its library), writing `mw2/default.xex`
-  and `mw2/default_mp.xex`;
+- applies each patch to the disc's executable (`install/src/patch.rs`, [The
+  install crate](#the-install-crate)), writing `mw2/default.xex` and
+  `mw2/default_mp.xex`;
 - copies the three fastfiles into `mw2/game/`.
 
 The update changes one of the campaign's 11,133 functions, and about 260 of the
@@ -331,8 +334,8 @@ the disc's executables at install time ([The launcher](#the-launcher)).
 carries the version: the image and a game folder in `mw2/tu0/`, the configs
 `config/MW2.tu0.toml` and `config/MW2MP.tu0.toml`, the trees `ppc_tu0_rs/` and
 `ppc_mp_tu0_rs/`, and `-tu0` on the build directory. `build.rs` takes the disc's
-blocks of `runtime/title.h` and sets the cfg `mw2_version_tu0`; CMake defines
-`MW2_VERSION_TU0` for the launcher.
+blocks of `runtime/title.h` and sets the cfg `mw2_version_tu0`, and so does the
+launcher's `build.rs`, from CMake's `MW2_VERSION`.
 
     cargo xtask build --title mp --tu0
     ./build-mp-tu0/mw2 mw2/tu0/default_mp.pe mw2/tu0/game
@@ -371,12 +374,11 @@ and the tools.
 
 | option | default | effect |
 |---|---|---|
-| `MW2_VERSION` | `tu6` | `tu6`, or `tu0` for the disc's: which executables in `mw2/` the launcher installs, by their SHA-256; `tu0` defines `MW2_VERSION_TU0`, and the launcher then installs the disc as it is |
+| `MW2_VERSION` | `tu6` | `tu6`, or `tu0` for the disc's: which executables in `mw2/` the launcher installs, by their SHA-256, which the launcher's `build.rs` reads from the cache; with `tu0` the launcher installs the disc as it is |
 | `MW2_LOGGING` | `ON` | `OFF` compiles out every log line, warnings included |
 | `MW2_PORTABLE` | `OFF` | links map-port's libstdc++ and libgcc statically (Linux) |
 | `MW2_LTO` | `ON` | ThinLTO: every target, the fetched libraries included, optimised across files at the link, with `lld` ([Optimisation](#optimisation)) |
 | `MW2_LTO_CACHE` | `<build>/lto-cache` | where the linker keeps ThinLTO's results for the next link |
-| `MW2_RELEASE_TAG` | empty | the release the build is published as, which the launcher looks for a newer one than |
 
 The game's options are environment variables of the same names that `build.rs`
 reads (`MW2_LOGGING`, `MW2_LTO`, `MW2_LTO_CACHE`),
@@ -386,10 +388,16 @@ Rust's log lines too. The game is compiled for x86-64-v2 (`-march` in `build.rs`
 store and permute of the recompiled code becomes sixteen byte moves.
 `src/runtime/cpu_level.rs` tells a player whose processor lacks the level.
 
-CMake reads the SHA-256 of the executables in `mw2/` and `mw2/tu0/` and of the
-update's fastfiles in `mw2/update/` at configure time, and `build.rs` the game's own: a game executable runs
-only the title executable it was recompiled from, and the launcher installs
-only that disc and that update.
+The launcher's `build.rs` reads the SHA-256 of the images in `mw2/` and `mw2/tu0/`
+(the `.pe` files `cargo xtask prepare` writes, both titles' and the disc's whatever is built) and
+of the update's fastfiles in `mw2/update/`, and `build.rs` the game's own image's:
+a game executable runs only the code it was recompiled from, and the launcher
+installs only a disc with that code and that disc's update. The image, not the
+file: every region's executable decrypts to the same one under its own signed
+header. Both hash with the `install` crate, which the workspace compiles
+optimised in build scripts too (`[profile.release.package.mw2-install]`):
+unoptimised, the 128 MB took 4 s at every run of the launcher's, which any
+change to its sources runs again.
 
 ### Optimisation
 
@@ -470,16 +478,17 @@ map does not.
 `mw2-launcher` (`launcher/`) is built with every build directory, beside
 `mw2`. It is one executable: Dear ImGui (fetched, like SDL3) on SDL's own
 renderer, three fonts from `assets/fonts/` written out as arrays at
-configure time, and XenonRecomp's patcher compiled in from its checkout with
-the LZX decoder and AES it uses. For the compile pass it also has zlib (fetched,
-v1.3.1), the zone definitions in `launcher/zone/defs/` written out as arrays
-like the fonts, and the shaders crate the game builds its shaders with
-(`shaders/`).
+configure time, and, for the install, the `install` crate the game reads its
+executable with ([The install crate](#the-install-crate)), whose patcher applies
+the title update. For the compile pass it also has zlib (fetched, v1.3.1), the
+zone definitions in `launcher/zone/defs/` written out as arrays like the fonts,
+and the shaders crate the game builds its shaders with (`shaders/`).
 
 It is a cargo binary of the workspace (`launcher/Cargo.toml`), which `cargo xtask
 build` builds with the build directory's features (`diagnostics`, or `portable` for
 `--release`) and puts in the build directory as `mw2-launcher`. Its entry, its
-compile pass and its menu sounds' decoding are Rust (`launcher/src/`); the rest is C++, the static library
+compile pass, its install and download and its menu sounds' decoding are Rust
+(`launcher/src/`); the rest is C++, the static library
 `launcher_core` of `CMakeLists.txt`. `cargo xtask` builds it with CMake in the build
 directory it configured, with SDL3 and zlib, so ninja's dependencies
 decide what is compiled again; the launcher's `build.rs` builds the same targets there
@@ -518,15 +527,16 @@ README's banner, tiles and headings into `docs/images/readme/`.
 |---|---|
 | `src/main.rs` | the entry: `main`, which hands the C runtime's arguments to `main.cpp`'s `launcher_run` |
 | `src/precompile.rs` | every shader of the game compiled before it is played ([rendering.md](rendering.md#every-shader-compiled-before-play)), on the shaders crate |
+| `src/setup.rs` | the install: checks the disc, gets the update, patches the executables, copies the files, on the `install` crate; its progress to `setup.cpp`'s `setup::Progress` |
+| `src/download.rs` | one file over HTTPS: `URLDownloadToFileW` (urlmon) on Windows, the `curl` program elsewhere, or `wget` where curl is not installed; the install's and the self-update's |
+| `src/update.rs` | the self-update: looks for a newer release and puts it in place of the running programs; its progress to the same `setup::Progress` as the install's |
+| `src/release.rs` | what the self-update reads in a release's description, and whether the release is newer: the package's library target, so that `cargo test -p mw2-launcher` runs its tests, which the binary, whose `main` is the C runtime's and which links only with a build folder's C++, cannot |
 | `precompile.cpp` | the compile pass's C side: the game's shaders as `zone/` reads them, the settings, the threads, its progress and result for `main.cpp` |
 | `main.cpp` | the window's loop, what each entry does, the file dialog and dropped files, and the terminal mode |
 | `single.cpp` | one window a copy: a second start brings the first up in front and ends |
 | `ui.cpp` | the one screen, drawn by hand: a computed backdrop whose smoke drifts, the column of entries, the pane, the wordmark |
-| `setup.cpp` | the install: checks the disc, gets the update, patches the executables, copies the files |
-| `disc.cpp` | reads a disc image (XDVDFS) or an extracted folder |
-| `package.cpp` | reads the update's package (STFS), as `xtask/src/stfs.rs` does |
-| `download.cpp` | one file over HTTPS: `URLDownloadToFile` on Windows, the `curl` program elsewhere |
-| `update.cpp` | looks for a newer release and puts it in place of the running programs |
+| `setup.cpp` | the install's C side: `setup.h`'s functions over `src/setup.rs` and `src/download.rs`, and what they call back to report progress |
+| `update.cpp` | the self-update's C side: `update.h`'s functions over `src/update.rs` |
 | `report.cpp` | a bug report: a run with its log kept, the system's description, the new-issue page |
 | `settings.cpp` | what the player sets for the game, kept in `.env`, which the game reads as it starts |
 | `sound.cpp`, `src/sound.rs` | the game's two menu sounds, read out of the installed `code_post_gfx.ff` at each start, decoded by the game's XMA decoder (the `wmapro` crate), and played as the entries are moved through and chosen; none without an install |
@@ -537,17 +547,48 @@ README's banner, tiles and headings into `docs/images/readme/`.
 | `zone/defs/` | the zone definitions, from the map converter (`pc2xbox360mw2ools`), which takes them from OpenAssetTools; GPL v3, see its `NOTICE.md` |
 | `playerdata_layout.h` | generated: where the multiplayer's stats file keeps what `profile.cpp` changes |
 
-An install, in order: the disc's two executables are read and checked against
-the known disc; the update is taken from the file or folder given, from a
-package left beside the launcher, or downloaded from CoD Xenon's archive of
-title updates (`codxenon/xbox360-title-updates`) at a pinned commit; its three fastfiles are checked, and each patch is applied in
-memory and the result checked against the executable the build was made from.
+An install (`src/setup.rs`), in order: the disc's two executables are read and
+their images checked against the known disc's, by the SHA-256 the launcher's
+`build.rs` takes of `mw2/tu0/*.pe` and, for what the update makes, `mw2/*.pe`; the disc is told by the media id in their
+headers (USA/Europe `2C8C0267`, Spain `11D15B16`), and each has its own title
+update 6: the same patches to the code, with fastfiles in the disc's language.
+A fastfile's header carries a mask of its languages (`1 << language`: English
+`0x01`, Spanish `0x10`); the first the title loads sets the game's language
+(`loc_language`), and a later one sharing no language with it ends the run with
+"Language mismatch on download content", so one disc's update cannot go with
+another. The update is taken from the file or folder given, from a package left
+beside the launcher, or downloaded from CoD Xenon's archive of title updates
+(`codxenon/xbox360-title-updates`, its maintainer's suggestion), for now from a
+fork that adds the other languages' (`PaulCombal/xbox360-title-updates`), at a
+pinned commit; its three fastfiles are checked against that disc's (the
+USA/Europe ones hashed from `mw2/update/` by `build.rs`, the others written in
+`setup.rs`), and each patch is applied in memory and the result's image checked
+against the one the build was made from.
 Only then are the disc's `.ff`, `.pak` and `.bik` copied into `game/` (a file
-already there, whole, is kept, so an install cut short resumes), then the
-update's fastfiles, and the two patched executables last: both present and the
-right ones is what a finished install is. With the disc's executables already
+already there, whole, is kept, so an install cut short resumes; each is written
+under a `.part` name and renamed when whole), then the update's fastfiles, and
+the two patched executables last: both present and the right ones is what a
+finished install is. With the disc's executables already
 in `game/` (an install made by the disc version), only the update is applied
 and no disc is asked for. A `--tu0` build installs the disc as it is.
+
+The window tells what `game/` holds the same way, before its first frame
+(`setup::Detect`): installed when both executables' images are the ones the
+build was made from, needing the update when each is that or the disc's, and
+not installed otherwise. Each image takes about half a second to decrypt and
+hash, so the two are hashed on two threads.
+
+The window and the terminal mode run the install on a thread of their own
+through `setup::Run`; `setup.cpp` hands it the paths as UTF-8 and the
+`setup::Progress` the window draws, which it fills through `mw2l_setup_*` calls
+(the step and its title, the file being copied, the bytes done of how many,
+and whether CANCEL was pressed), and takes its error back as text, worded as
+the player reads it. The update is downloaded as the self-update's files are
+(`src/download.rs`): Windows' own `URLDownloadToFileW`, and the `curl` program
+elsewhere, or `wget` where curl is not installed (Debian and Ubuntu ship wget and
+not curl, Fedora, Arch and openSUSE the other way round), with no HTTP or TLS code
+built into the launcher. With neither, the player is told to install one, or to
+fetch the update themselves and choose the file.
 
     mw2-launcher --install [<disc image or folder>] [--update <package or folder>]
 
@@ -598,14 +639,66 @@ takes of the sources that decide what a compiled shader is: every `*.rs` under
 they always agree. A change to any of them makes a player's copy compile
 again.
 
+### The install crate
+
+`install/` (the `mw2-install` crate) is the one reader of what a player's disc
+and update hold, so that the files `cargo xtask` builds from, the files the
+launcher installs and the executable the game checks at every start are read
+the same way. The game and the launcher take it as a dependency; `xtask/`,
+a workspace of its own, as a path dependency, which is why the crate uses
+nothing but std.
+
+| file | what |
+|---|---|
+| `crypto.rs` | AES-128 in CBC with a zero IV, to decrypt an executable, SHA-256, to know one, and SHA-1, which a patch's blocks are checked with |
+| `xex.rs` | an XEX2's memory image, decrypted with the retail key and its basic compression undone (encryption none or normal, compression none or basic: all the disc and a patched executable use), and the header fields a wrong disc is told apart by: title id, media id and version, from the execution info |
+| `xdvdfs.rs` | a disc image, or the folder a disc was extracted to: the files at its root, read by range or copied whole |
+| `stfs.rs` | a title update's package, of the read-only kind (`LIVE`, `PIRS`): its files, with the folders above them |
+| `patch.rs` | a title update's executable patch (`.xexp`) applied to the disc's executable: a port of XenonRecomp's patcher (MIT), which follows Xenia's |
+| `lzx.rs` | the LZX decoder the patch is made of: a line-by-line port of libmspack's `lzxd.c` (LGPL 2.1, see the crate's `NOTICE.md`) |
+
+A disc image's game partition starts at one of five offsets, depending on how
+the disc was dumped (a full dump carries the video partition first); its volume
+descriptor is sector 32 of it, and a folder is a binary tree of entries. Only
+the root's files are listed: everything the title reads is there, and the one
+folder a disc has beside them is the console's system update. A name that is
+not one file in a folder (a separator, a drive's colon, `..`) is no disc's and
+is skipped, since an install copies a file under the name the disc gives it.
+
+A read-only package keeps one hash table for each group of 170 blocks, and a
+second-level one every 0x70E4; a file's next block is in its entry of the
+table. A console-signed package (`CON`) keeps two tables a group and lays its
+blocks out differently, and is refused, as is one that names a file with a path.
+
+A patch is an XEX of its own whose payload is records, each of which zeroes a
+run of the executable, moves one, or decompresses one with LZX, the run it
+replaces as the window's reference data. The first records rewrite the header;
+the rest come in blocks, each checked by the SHA-1 the block before it holds,
+and rewrite the image once it is decrypted and its compression undone. The
+result is stored with neither, as an update leaves it on the console. A patch
+is for one executable: the image key it holds, decrypted with the new header's
+key, must be the executable's own, so another region's patch is refused
+(the Polish and Russian updates on the USA/Europe or Spanish disc) rather than
+applied to bytes it was not made for; the French, German, Italian, Spanish and
+USA/Europe ones apply to either disc. Both ports follow the C step by step and
+make the same bytes as XenonRecomp's patcher for each of those, and refuse what
+it refuses.
+
+A damaged disc, package or executable is an error that says what is wrong,
+never a panic: every read is checked against the data there is, a chain of
+blocks is no longer than the package, an image no larger than the
+console's memory, and a patch record or LZX match that would reach outside the
+executable or the window is refused, as libmspack refuses a damaged stream.
+
 ### Updating itself
 
-CHECK FOR UPDATES (`update.cpp`) looks only when the player asks. It fetches
+CHECK FOR UPDATES (`src/update.rs`, which the window and the terminal mode call
+through `update.h`) looks only when the player asks. It fetches
 GitHub's description of the newest published release
 (`api.github.com/repos/.../releases/latest`), which has the release's tag and,
 for each archive, its name, size, SHA-256 and address, and compares the tag
 with its own. The workflow gives the build its tag
-(`--release-tag v0.3.0`, CMake's and `build.rs`'s `MW2_RELEASE_TAG`); a build without
+(`--release-tag v0.3.0`, the game's and the launcher's `build.rs`'s `MW2_RELEASE_TAG`); a build without
 one has nothing to compare and the entry is off. The archive it wants is the
 one for its system, `mw2-<tag>-<linux|windows>`. Releases up to v0.7.x were
 built once per online service and their launchers want
@@ -732,6 +825,7 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `xtask/` | the whole build (`cargo xtask`) |
 | `Cargo.toml`, `build.rs`, `src/` | the executable |
 | `shaders/` | the shaders crate the game and the launcher share ([The renderer](#the-renderer)) |
+| `install/` | what the game, the launcher and `cargo xtask` read the disc, the update and the executables with, and apply the update's patches with ([The install crate](#the-install-crate)); its LZX decoder is LGPL 2.1 and its patcher MIT, see its `NOTICE.md` |
 | `XenonRecomp-rs/` | the recompiler, a submodule |
 | `CMakeLists.txt`, `cmake/` | the launcher's C++ (`launcher_core`) and the tools' build; the Windows toolchain, the Vulkan import library and SDL's toolchain for `sdl3-sys` |
 | `config/MW2.toml`, `config/MW2MP.toml` | recompiler config, campaign and multiplayer; `*.tu0.toml` for the disc version |
@@ -755,7 +849,7 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `src/env.rs`, `src/log.rs`, `src/runtime/settings.rs` | the switch readers, the log, the `.env` file |
 | `src/runtime/platform.rs`, `windows.rs` | what Linux and Windows spell differently |
 | `src/title.rs` | the guest addresses of `runtime/title.h` for this build |
-| `src/runtime/install/` | a player's start: the executable check, XEX decryption, the hand-over to the launcher |
+| `src/runtime/install/` | a player's start: the executable check (on the `install` crate), the hand-over to the launcher |
 | `src/runtime/kernel/` | kernel and XAM imports: memory, objects and waits, threads, files, content and profile, input, networking, video, audio and the XMA decoder's contexts |
 | `src/runtime/online/` | the online services (`lan`, `server`, `steam`), chosen as the game starts |
 | `src/runtime/gpu/` | the command processor: ring and PM4 packets, interrupts, D3D9's command-buffer arena, texture fetch and tiling, the write watch, the image pool's block copy |
@@ -783,7 +877,6 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | path | what |
 |---|---|
 | `xexinfo.py` | dumps an XEX2's headers |
-| `xexpatch.cpp` | applies an executable patch (`.xexp`) with XenonRecomp's patcher, for `cargo xtask` |
 | `title.py` | which executable the other tools work on (`MW2_TITLE=sp\|mp`, `MW2_VERSION=tu6\|tu0`) |
 | `fixbounds.py` | explicit function boundaries for leaf functions holding jump tables |
 | `extract_shaders.py` | every shader's microcode from the fastfiles |

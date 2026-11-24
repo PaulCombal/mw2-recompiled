@@ -2,7 +2,8 @@
 // Installing the game: the files from the player's disc into game/ beside the
 // launcher, and title update 6 applied to the two executables, which is the
 // version the game executables are built from. (A build of the disc version,
-// MW2_VERSION_TU0, installs the disc as it is.)
+// MW2_VERSION=tu0, installs the disc as it is.) The install is Rust
+// (launcher/src/setup.rs); these call it (setup.cpp).
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
@@ -45,8 +46,9 @@ namespace setup
     Result Run(const std::filesystem::path& disc, const std::filesystem::path& update, Progress& progress,
                std::string& error);
 
-    // Where the update is downloaded from, to tell a player who has to fetch it.
-    const char* UpdateUrl();
+    // Where the update of the last install's disc is downloaded from, to tell a
+    // player who has to fetch it.
+    std::string UpdateUrl();
     // True in a build that installs an update at all.
     bool UsesUpdate();
     std::filesystem::path GameFolder();

@@ -1,5 +1,5 @@
 #include "maps.h"
-#include "disc.h"
+#include "utf8.h"
 #include "settings.h"
 #include "setup.h"
 #include "mapport/fastfile.h"

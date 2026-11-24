@@ -1,8 +1,8 @@
-# The launcher (launcher/): what a player opens, mw2-launcher. Its entry and its
-# compile pass are Rust, on the shaders crate the game builds its shaders with
-# (shaders/); its window, the install and the map converter are the C++ library
-# launcher_core, which build.rs builds through CMake (CMakeLists.txt) in the build
-# folder cargo xtask configured, and links. cargo xtask build makes it; it is not
+# The launcher (launcher/): what a player opens, mw2-launcher. Its entry, its compile
+# pass, on the shaders crate the game builds its shaders with (shaders/), and the
+# install, on the crate the game reads its executable with (install/), are Rust; its
+# window and the map converter are the C++ library launcher_core, which build.rs builds
+# through CMake (CMakeLists.txt) in the build folder cargo xtask configured, and links. cargo xtask build makes it; it is not
 # the workspace's default member, so a plain cargo build makes the game alone.
 [package]
 name = "mw2-launcher"
@@ -11,9 +11,17 @@ edition = "2024"
 publish = false
 build = "build.rs"
 
+# What the self-update reads in a release's description (src/release.rs), apart so that
+# cargo test runs its tests: the binary's main is the C runtime's, which no test harness
+# replaces, and it links only with a build folder's C++.
+[lib]
+path = "src/release.rs"
+doctest = false
+
 [[bin]]
 name = "mw2-launcher"
 path = "src/main.rs"
+test = false
 
 [features]
 default = ["diagnostics"]
@@ -27,3 +35,11 @@ ash = { version = "=0.38.0", default-features = false, features = ["std", "linke
 mw2-shaders = { path = "../shaders" }
 # The game's XMA frame decoder, for the menu sounds (src/sound.rs).
 wmapro = { path = "../wmapro" }
+# The disc, the update's package and the executables, read as the game and cargo xtask
+# read them (install/).
+mw2-install = { path = "../install" }
+
+[build-dependencies]
+# The SHA-256 build.rs hashes the executables and the update's fastfiles the install
+# checks with.
+mw2-install = { path = "../install" }

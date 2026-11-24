@@ -11,10 +11,8 @@
 // in .cargo/config.toml there). docs/building.md has the options' whole story.
 
 mod check_hooks;
+mod disc;
 mod generate;
-mod stfs;
-mod xdvdfs;
-mod xexdump;
 
 use std::fs;
 use std::io::Write;
@@ -46,7 +44,7 @@ const ISO: &str = "/home/paul/Téléchargements/Call of Duty - Modern Warfare 2 
 // The disc's executables, which the update patches, and the update's files.
 const DISC: &str = "mw2/tu0";
 const UPDATE: &str = "mw2/update";
-// Where XenonRecomp, XenonAnalyse and xexpatch are built.
+// Where XenonRecomp and XenonAnalyse are built.
 const XENON_BUILD: &str = "out/xenonrecomp";
 
 #[derive(PartialEq)]
@@ -339,26 +337,6 @@ fn xenon_build() -> Result {
     quiet(Command::new("cmake").args(["--build", XENON_BUILD, "-j", &jobs()]))
 }
 
-fn modified(path: &str) -> Option<std::time::SystemTime> {
-    fs::metadata(path).and_then(|metadata| metadata.modified()).ok()
-}
-
-// XenonRecomp's own patcher, from the command line: XenonAnalyse reads the patched
-// executable before XenonRecomp would make it. Built again when it or its library is
-// newer.
-fn xexpatch() -> Result<String> {
-    let program = format!("{XENON_BUILD}/xexpatch");
-    let utils = format!("{XENON_BUILD}/XenonUtils/libXenonUtils.a");
-    let disasm = format!("{XENON_BUILD}/thirdparty/disasm/libdisasm.a");
-    let built = modified(&program);
-    if [&utils, &disasm, &"tools/xexpatch.cpp".into()].iter().any(|input| modified(input) >= built) {
-        run(Command::new("clang++-18")
-            .args(["-std=c++20", "-O1", "-IXenonRecomp-rs/XenonUtils", "-IXenonRecomp-rs/thirdparty/simde"])
-            .args(["tools/xexpatch.cpp", &utils, &disasm, "-o", &program]))?;
-    }
-    Ok(program)
-}
-
 fn prepare(options: &Options, title: &Title) -> Result {
     println!("==> 1. XenonRecomp-rs");
     xenon_checkout()?;
@@ -376,7 +354,7 @@ fn prepare(options: &Options, title: &Title) -> Result {
                 options.iso
             ));
         }
-        xdvdfs::extract_named(iso, Path::new(DISC), &["default.xex", "default_mp.xex"])?;
+        disc::extract_named(iso, Path::new(DISC), &["default.xex", "default_mp.xex"])?;
     }
 
     // Every fastfile on the disc, ~5.9 GB with the .pak archives beside them. A missing
@@ -387,7 +365,7 @@ fn prepare(options: &Options, title: &Title) -> Result {
     // level's briefing, which plays while it loads. Files already there are left alone.
     fs::create_dir_all("mw2/game").map_err(|e| format!("mw2/game: {e}"))?;
     if iso.is_file() {
-        xdvdfs::extract_game(iso, Path::new("mw2/game"))?;
+        disc::extract_game(iso, Path::new("mw2/game"))?;
     } else {
         println!("    no ISO: building without the game data");
     }
@@ -410,7 +388,7 @@ fn prepare(options: &Options, title: &Title) -> Result {
                     }
                 }
             } else {
-                stfs::extract(tu, update)?;
+                disc::extract_package(tu, update)?;
             }
             // A folder without them, or another title's package, says so here rather
             // than at the patch.
@@ -418,14 +396,14 @@ fn prepare(options: &Options, title: &Title) -> Result {
                 return Err(format!("{} gave no default.xexp and default_mp.xexp", tu.display()));
             }
         }
-        let patch = xexpatch()?;
         for name in ["default", "default_mp"] {
-            let patched = format!("mw2/{name}.xex");
-            if !Path::new(&patched).is_file() {
-                run(Command::new(&patch)
-                    .arg(format!("{DISC}/{name}.xex"))
-                    .arg(format!("{UPDATE}/{name}.xexp"))
-                    .arg(&patched))?;
+            let patched = PathBuf::from(format!("mw2/{name}.xex"));
+            if !patched.is_file() {
+                disc::write_patched(
+                    &Path::new(DISC).join(format!("{name}.xex")),
+                    &update.join(format!("{name}.xexp")),
+                    &patched,
+                )?;
             }
         }
         // The update's fastfiles go with the disc's.
@@ -452,9 +430,18 @@ fn prepare(options: &Options, title: &Title) -> Result {
     }
 
     println!("==> 4. decrypt/decompress XEX -> flat PE memory image (for analysis)");
-    let pe = Path::new(title.folder).join(title.pe);
-    if !pe.exists() {
-        xexdump::write(&Path::new(title.folder).join(title.xex), &pe)?;
+    // Both titles' images, whichever this build is, and the disc's too: the launcher, the
+    // same for both, knows an install by the images of the version it installs and the
+    // disc by its own (launcher/build.rs), which every region's disc shares. The release
+    // workflow builds the launcher with the campaign, before the multiplayer is prepared.
+    let folders = if title.folder == DISC { vec![DISC] } else { vec![title.folder, DISC] };
+    for folder in folders {
+        for (xex, pe) in [("default.xex", "default.pe"), ("default_mp.xex", "default_mp.pe")] {
+            let pe = Path::new(folder).join(pe);
+            if !pe.exists() {
+                disc::write_image(&Path::new(folder).join(xex), &pe)?;
+            }
+        }
     }
     Ok(())
 }
@@ -593,7 +580,6 @@ fn build(options: &Options, title: &Title) -> Result {
         command
             .arg(format!("-DMW2_VERSION={}", title.version))
             .arg(format!("-DMW2_PORTABLE={portable}"))
-            .arg(format!("-DMW2_RELEASE_TAG={}", options.release_tag))
             .args(&fetched)
             .args(&options.cmake_extra)
             .args(&toolchain);

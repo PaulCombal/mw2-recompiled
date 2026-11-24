@@ -12,7 +12,6 @@ namespace
         0x40, 0x58, 0x3F, 0xBB, 0x08, 0x96, 0xBF, 0x91,
     };
     constexpr uint32_t kFileFormatInfo = 0x000003FF;
-    constexpr uint32_t kExecutionInfo = 0x00040006;
 
     uint32_t Be32(const std::vector<uint8_t>& d, size_t at)
     {
@@ -29,18 +28,6 @@ namespace
         for (uint32_t i = 0; i < count; i++) out[Be32(d, 0x18 + i * 8)] = Be32(d, 0x18 + i * 8 + 4);
         return true;
     }
-}
-
-bool install::xex::ReadInfo(const std::vector<uint8_t>& file, Info& info)
-{
-    std::map<uint32_t, uint32_t> headers;
-    if (!Headers(file, headers)) return false;
-    const auto it = headers.find(kExecutionInfo);
-    if (it == headers.end() || it->second + 24 > file.size()) return false;
-    // { media id, version, base version, title id, ... }
-    info.version = Be32(file, it->second + 4);
-    info.titleId = Be32(file, it->second + 12);
-    return true;
 }
 
 bool install::xex::Image(const std::vector<uint8_t>& file, std::vector<uint8_t>& image, std::string& error)
@@ -62,7 +49,7 @@ bool install::xex::Image(const std::vector<uint8_t>& file, std::vector<uint8_t>&
     if (compression > 1) { error = "the XEX uses a compression neither the disc nor an update does (" + std::to_string(compression) + ")"; return false; }
     if (encryption > 1) { error = "the XEX uses an unknown encryption"; return false; }
 
-    // The payload, padded to whole AES blocks, as xtask/src/xexdump.rs does.
+    // The payload, padded to whole AES blocks, as install/src/xex.rs does.
     std::vector<uint8_t> data(file.begin() + dataOffset, file.end());
     data.resize((data.size() + 15) & ~size_t(15));
     if (encryption == 1)
@@ -74,8 +61,9 @@ bool install::xex::Image(const std::vector<uint8_t>& file, std::vector<uint8_t>&
     }
 
     image.clear();
-    // An executable a title update was applied to is stored as it is.
-    if (compression == 0) image.assign(file.begin() + dataOffset, file.end());
+    // An executable a title update was applied to is stored as it is, the padding not
+    // part of it.
+    if (compression == 0) image.assign(data.begin(), data.begin() + (file.size() - dataOffset));
     // Basic compression: runs of data, each followed by a run of zeros.
     size_t read = 0;
     for (uint32_t block = 8; compression == 1 && block + 8 <= formatSize; block += 8)

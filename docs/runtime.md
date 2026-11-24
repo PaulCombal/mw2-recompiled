@@ -82,11 +82,14 @@ physical heap, since everything the GPU is handed comes from there.
 The run (`src/runtime/run.rs`) gets the image one of two ways (`src/runtime/install/`):
 
 - **A player's start** (no arguments): the executable works from its own
-  folder. It reads `game/default.xex` or `game/default_mp.xex` and takes it
-  only if its SHA-256 is the one `build.rs` baked in from `mw2/` (another region or
-  another version has other code at other addresses), then decrypts and
-  decompresses the XEX2 in memory, where it has either (`install/xex.rs`,
-  `install/crypto.rs`). With no such executable there -- nothing installed,
+  folder. It reads `game/default.xex` or `game/default_mp.xex`, decrypts and
+  decompresses the XEX2 in memory, where it has either (the `install` crate's
+  `xex.rs` and `crypto.rs`, which the launcher and `cargo xtask` share), and
+  takes the image only if its SHA-256 is the one `build.rs` baked in from the
+  image in `mw2/`: another version has other code
+  at other addresses, while every region's disc has this code under its own
+  signed header (media id, version, region), so the file's own hash would turn
+  them away. With no such executable there -- nothing installed,
   or an install of another version -- it starts `mw2-launcher` beside it and
   ends; installing is the launcher's ([building.md](building.md#the-launcher)).
 - **A development run** names the image and the game folder:

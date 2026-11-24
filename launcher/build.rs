@@ -14,7 +14,12 @@
 // standard library's -lgcc_s: from a response file after them, lld would take the shared
 // libgcc_s's symbols for libstdc++.a's, and the executable would need it. On Windows
 // everything is static (-static) and goes in a response file, the icon too.
+//
+// It also gives the install (src/setup.rs) what it knows a player's files by, read from
+// mw2/ as the game's build.rs reads its own: see hashes below; and the self-update
+// (src/update.rs) the release the build is.
 
+use mw2_install::crypto;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -53,15 +58,68 @@ fn system_libraries(lines: &[&str]) -> Vec<String> {
     libraries
 }
 
+// What the install knows a player's files by: the SHA-256 of the images the disc's
+// executables decrypt to (mw2/tu0/*.pe) and of those title update 6 makes of them
+// (mw2/*.pe), which cargo xtask prepare writes, and of the fastfiles the update adds
+// (mw2/update/), for the USA/Europe disc the build is made from; the other discs' are
+// written in src/setup.rs. A disc-version build -- MW2_VERSION tu0 in the CMake build
+// folder, as cargo xtask build --tu0 configures it -- installs the disc as it is: the
+// executables it installs are the disc's, and it has no update (cfg mw2_version_tu0).
+fn hashes(root: &Path, build: Option<&Path>) {
+    let version = match build {
+        Some(build) => fs::read_to_string(build.join("CMakeCache.txt"))
+            .ok()
+            .and_then(|cache| cache.lines().find_map(|line| line.strip_prefix("MW2_VERSION:STRING=")).map(String::from)),
+        None => rerun_if("MW2_VERSION"),
+    }
+    .unwrap_or_else(|| "tu6".into());
+    let tu0 = version == "tu0";
+    println!("cargo:rustc-check-cfg=cfg(mw2_version_tu0)");
+    if tu0 {
+        println!("cargo:rustc-cfg=mw2_version_tu0");
+    }
+    let installed = if tu0 { "mw2/tu0" } else { "mw2" };
+    let mut files = vec![
+        ("MW2_XEX_SHA256_SP", format!("{installed}/default.pe")),
+        ("MW2_XEX_SHA256_MP", format!("{installed}/default_mp.pe")),
+        ("MW2_DISC_SHA256_SP", "mw2/tu0/default.pe".into()),
+        ("MW2_DISC_SHA256_MP", "mw2/tu0/default_mp.pe".into()),
+    ];
+    if !tu0 {
+        files.push(("MW2_UPDATE_SHA256_PATCH_MP", "mw2/update/patch_mp.ff".into()));
+        files.push(("MW2_UPDATE_SHA256_DLC1_UI_MP", "mw2/update/dlc1_ui_mp.ff".into()));
+        files.push(("MW2_UPDATE_SHA256_DLC2_UI_MP", "mw2/update/dlc2_ui_mp.ff".into()));
+    }
+    for (name, file) in files {
+        let path = root.join(file);
+        watch(&path);
+        let hash = match fs::read(&path) {
+            Ok(data) => crypto::sha256_hex(&data),
+            // A check with no build folder checks the Rust all the same; an install
+            // that knows no file by an empty hash refuses every disc.
+            Err(_) if build.is_none() => String::new(),
+            Err(e) => panic!("{}: {e} -- cargo xtask prepare makes it from the ISO and the title update", path.display()),
+        };
+        println!("cargo:rustc-env={name}={hash}");
+    }
+}
+
 fn main() {
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).parent().unwrap().to_path_buf();
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let windows = env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows";
     let portable = env::var_os("CARGO_FEATURE_PORTABLE").is_some();
+    let build = rerun_if("MW2_BUILD_DIR").map(PathBuf::from);
+    hashes(&root, build.as_deref());
+    // The release this build is, for the self-update (src/update.rs) to compare with the
+    // newest: cargo xtask's --release-tag, which the release workflow gives. A build
+    // without one does not update.
+    let release = rerun_if("MW2_RELEASE_TAG").unwrap_or_default();
+    println!("cargo:rustc-env=MW2_RELEASE_TAG={release}");
     // Without a build folder there is nothing to link: a cargo check of the workspace
     // (an editor's, say) still checks the Rust; a cargo build fails at the link, on
     // launcher_run.
-    let Some(build) = rerun_if("MW2_BUILD_DIR").map(PathBuf::from) else {
+    let Some(build) = build else {
         println!(
             "cargo:warning=MW2_BUILD_DIR is not set, so the launcher's C++ is not built or linked: \
              cargo xtask build configures the CMake build folder and sets it"
@@ -74,7 +132,7 @@ fn main() {
     // again, and CMake rebuilds what changed. cargo xtask has CMake build these targets
     // first, so ninja's own dependencies decide there, and a rebuilt archive runs this
     // again.
-    for path in ["launcher", "runtime", "XenonRecomp-rs/XenonUtils", "XenonRecomp-rs/thirdparty", "assets"] {
+    for path in ["launcher", "runtime", "assets"] {
         watch(&root.join(path));
     }
     for path in ["cmake", "CMakeLists.txt"] {
@@ -99,10 +157,9 @@ fn main() {
         text.lines().filter_map(|line| line.strip_prefix(name).and_then(|rest| rest.strip_prefix(' '))).collect()
     };
     let archives: Vec<PathBuf> = field("archive").into_iter().map(PathBuf::from).collect();
-    // The launcher's own: urlmon for the update check's download (launcher/download.cpp)
-    // on Windows, the threads elsewhere; then its libraries'.
-    let own = if windows { "urlmon" } else { "pthread" };
-    let mut uses = vec![own];
+    // The launcher's own: the threads, on Linux (urlmon, the download's on Windows, is
+    // src/download.rs's to name); then its libraries'.
+    let mut uses = if windows { vec![] } else { vec!["pthread"] };
     uses.extend(field("uses"));
     let system = system_libraries(&uses);
     let standard: Vec<String> =

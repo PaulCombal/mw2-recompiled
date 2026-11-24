@@ -16,11 +16,11 @@ option(MW2_PORTABLE "Link the C++ runtime statically, for a binary that runs on 
 # ---- which executable ------------------------------------------------------
 # The launcher is the same for the campaign's executable and the multiplayer's.
 # Which version of them it installs: the one title update 6 makes of the disc's
-# (tu6), or the disc's own (tu0), as it is.
+# (tu6), or the disc's own (tu0), as it is. The install is Rust: the launcher's
+# build.rs reads this from the cache, and hashes the files it knows the version
+# by from mw2/ (launcher/src/setup.rs).
 set(MW2_VERSION "tu6" CACHE STRING "Which version of the executable: tu6 (title update 6) or tu0 (the disc's)")
-if(MW2_VERSION STREQUAL "tu0")
-    add_compile_definitions(MW2_VERSION_TU0=1)
-elseif(NOT MW2_VERSION STREQUAL "tu6")
+if(NOT MW2_VERSION MATCHES "^(tu6|tu0)$")
     message(FATAL_ERROR "MW2_VERSION must be tu6 or tu0, not '${MW2_VERSION}'")
 endif()
 if(NOT MW2_LOGGING)
@@ -52,42 +52,6 @@ if(MW2_LTO)
     endif()
 endif()
 
-# What release this is: the release workflow gives the tag. The launcher looks
-# for a newer one; a build without a tag does not update.
-set(MW2_RELEASE_TAG "" CACHE STRING "The release tag this build is published as, e.g. v0.3.0")
-
-# The launcher installs only the disc it is an update of, and only that update:
-# each known by its SHA-256, read here from mw2/ (launcher/setup.cpp).
-if(MW2_VERSION STREQUAL "tu0")
-    set(MW2_XEX_DIR "${CMAKE_SOURCE_DIR}/mw2/tu0")
-else()
-    set(MW2_XEX_DIR "${CMAKE_SOURCE_DIR}/mw2")
-endif()
-function(mw2_sha256 variable path)
-    if(NOT EXISTS "${path}")
-        message(FATAL_ERROR "${path} is missing -- cargo xtask prepare makes it from the ISO and the title update")
-    endif()
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${path}")
-    file(SHA256 "${path}" hash)
-    set(${variable} "${hash}" PARENT_SCOPE)
-endfunction()
-mw2_sha256(MW2_XEX_SHA256_SP  "${MW2_XEX_DIR}/default.xex")
-mw2_sha256(MW2_XEX_SHA256_MP  "${MW2_XEX_DIR}/default_mp.xex")
-mw2_sha256(MW2_DISC_SHA256_SP "${CMAKE_SOURCE_DIR}/mw2/tu0/default.xex")
-mw2_sha256(MW2_DISC_SHA256_MP "${CMAKE_SOURCE_DIR}/mw2/tu0/default_mp.xex")
-set(MW2_HASH_DEFINITIONS
-    MW2_XEX_SHA256_SP="${MW2_XEX_SHA256_SP}" MW2_XEX_SHA256_MP="${MW2_XEX_SHA256_MP}"
-    MW2_DISC_SHA256_SP="${MW2_DISC_SHA256_SP}" MW2_DISC_SHA256_MP="${MW2_DISC_SHA256_MP}")
-if(NOT MW2_VERSION STREQUAL "tu0")
-    mw2_sha256(MW2_UPDATE_SHA256_PATCH_MP   "${CMAKE_SOURCE_DIR}/mw2/update/patch_mp.ff")
-    mw2_sha256(MW2_UPDATE_SHA256_DLC1_UI_MP "${CMAKE_SOURCE_DIR}/mw2/update/dlc1_ui_mp.ff")
-    mw2_sha256(MW2_UPDATE_SHA256_DLC2_UI_MP "${CMAKE_SOURCE_DIR}/mw2/update/dlc2_ui_mp.ff")
-    list(APPEND MW2_HASH_DEFINITIONS
-        MW2_UPDATE_SHA256_PATCH_MP="${MW2_UPDATE_SHA256_PATCH_MP}"
-        MW2_UPDATE_SHA256_DLC1_UI_MP="${MW2_UPDATE_SHA256_DLC1_UI_MP}"
-        MW2_UPDATE_SHA256_DLC2_UI_MP="${MW2_UPDATE_SHA256_DLC2_UI_MP}")
-endif()
-
 include(FetchContent)
 FetchContent_Declare(SDL3
     GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
@@ -113,13 +77,11 @@ endif()
 # ---- launcher --------------------------------------------------------------
 # What a player opens (launcher/): it installs the game and starts it. One
 # executable with nothing beside it, like the game's: Dear ImGui on SDL's own
-# renderer, the fonts as arrays, and XenonRecomp's patcher, which applies the
-# title update, compiled in from its checkout. The executable is cargo's
-# (launcher/Cargo.toml): its entry and its compile pass are Rust, on the shaders
-# crate the game builds its shaders with, and the rest is this library,
-# launcher_core, which its build.rs builds here and links with SDL, the XMA
-# decoder and zlib, the icon and the system's libraries.
-enable_language(C)
+# renderer, and the fonts as arrays. The executable is cargo's
+# (launcher/Cargo.toml): its entry, its compile pass, on the shaders crate the
+# game builds its shaders with, and its install, on the install crate, are Rust,
+# and the rest is this library, launcher_core, which its build.rs builds here and
+# links with SDL, the XMA decoder and zlib, the icon and the system's libraries.
 FetchContent_Declare(imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
     GIT_TAG v1.91.9b
@@ -197,7 +159,6 @@ file(GLOB ZONE_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/launcher/zone/*.cp
 # The map converter (launcher/mapport/): PC maps made into 360 ones.
 file(GLOB MAPPORT_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/launcher/mapport/*.cpp")
 
-set(XENON "${CMAKE_SOURCE_DIR}/XenonRecomp-rs")
 file(GLOB LAUNCHER_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/launcher/*.cpp")
 add_library(launcher_core STATIC ${LAUNCHER_SOURCES}
     "${MW2_FONTS_SOURCE}"
@@ -210,26 +171,9 @@ add_library(launcher_core STATIC ${LAUNCHER_SOURCES}
     "${imgui_SOURCE_DIR}/imgui_tables.cpp"
     "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
     "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
-    "${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp"
-    "${XENON}/XenonUtils/xex_patcher.cpp"
-    "${XENON}/XenonUtils/memory_mapped_file.cpp"
-    "${XENON}/thirdparty/libmspack/libmspack/mspack/lzxd.c"
-    "${XENON}/thirdparty/tiny-AES-c/aes.c")
-target_include_directories(launcher_core PRIVATE
-    "${imgui_SOURCE_DIR}" "${imgui_SOURCE_DIR}/backends"
-    "${XENON}/XenonUtils" "${XENON}/thirdparty/simde"
-    "${XENON}/thirdparty/libmspack/libmspack/mspack"
-    "${XENON}/thirdparty/tiny-AES-c" "${XENON}/thirdparty/TinySHA1")
-target_compile_definitions(launcher_core PRIVATE ${MW2_HASH_DEFINITIONS} NOMINMAX)
-# What release this is, for the launcher to look for a newer one (see
-# MW2_RELEASE_TAG above). A build without one does not update.
-if(WIN32)
-    set(MW2_RELEASE_KIND "windows")
-else()
-    set(MW2_RELEASE_KIND "linux")
-endif()
-set_source_files_properties("${CMAKE_SOURCE_DIR}/launcher/update.cpp" PROPERTIES COMPILE_DEFINITIONS
-    "MW2_RELEASE_TAG=\"${MW2_RELEASE_TAG}\";MW2_RELEASE_KIND=\"${MW2_RELEASE_KIND}\"")
+    "${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp")
+target_include_directories(launcher_core PRIVATE "${imgui_SOURCE_DIR}" "${imgui_SOURCE_DIR}/backends")
+target_compile_definitions(launcher_core PRIVATE NOMINMAX)
 target_link_libraries(launcher_core PRIVATE SDL3::SDL3-static zlibstatic)
 target_include_directories(launcher_core PRIVATE "${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}")
 if(WIN32)

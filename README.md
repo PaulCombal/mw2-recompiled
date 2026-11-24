@@ -36,7 +36,7 @@ Not supported: ranked playlists, matchmaking without a [server](#online), and ke
 
 | You need | |
 |---|---|
-| **Game** | an ISO of the Xbox 360 disc, version 1.0.557 (USA/Europe). The launcher checks it and downloads title update 6 itself. |
+| **Game** | an ISO of the Xbox 360 disc, version 1.0.557: the USA/Europe or the Spanish one. The launcher checks it and downloads title update 6 itself. |
 | **System** | Linux or Windows, 64-bit, with a processor that has SSE4.2 (Intel since 2008, AMD since 2011) |
 | **Graphics** | Vulkan 1.2 |
 | **Disk** | 8 GB |

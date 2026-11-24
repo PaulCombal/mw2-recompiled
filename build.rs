@@ -14,10 +14,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
-// src/runtime/install/crypto.rs's SHA-256, which the game checks its executable with.
-#[path = "src/runtime/install/crypto.rs"]
-#[allow(dead_code)]
-mod crypto;
+// The SHA-256 the game checks its executable with (install/).
+use mw2_install::crypto;
 
 fn run(command: &mut Command) {
     let status = command.status().unwrap_or_else(|e| panic!("{command:?}: {e}"));
@@ -369,14 +367,15 @@ fn main() {
     let release = rerun_if("MW2_RELEASE_TAG").unwrap_or_default();
     println!("cargo:rustc-env=MW2_RELEASE_TAG={release}");
 
-    // A game executable runs only the title executable it was recompiled from (src/runtime/install/).
-    let xex = match (title, version) {
-        ("mp", "tu6") => "mw2/default_mp.xex",
-        ("sp", "tu6") => "mw2/default.xex",
-        ("mp", _) => "mw2/tu0/default_mp.xex",
-        (_, _) => "mw2/tu0/default.xex",
+    // A game executable runs only the image it was recompiled from (src/runtime/install/),
+    // which every region's executable shares.
+    let image = match (title, version) {
+        ("mp", "tu6") => "mw2/default_mp.pe",
+        ("sp", "tu6") => "mw2/default.pe",
+        ("mp", _) => "mw2/tu0/default_mp.pe",
+        (_, _) => "mw2/tu0/default.pe",
     };
-    println!("cargo:rustc-env=MW2_XEX_SHA256={}", sha256_file(&root.join(xex)));
+    println!("cargo:rustc-env=MW2_IMAGE_SHA256={}", sha256_file(&root.join(image)));
 
     // What Find Game offers where no relay hands it out (src/runtime/online/steam/): the
     // relay's own file, so a release has one list.

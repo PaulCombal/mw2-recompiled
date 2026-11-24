@@ -1,5 +1,6 @@
-// The two primitives a start needs: AES-128 to decrypt an XEX, and SHA-256 to tell
-// the disc this build was made from from any other.
+// The primitives an install and a start need: AES-128 to decrypt an XEX, SHA-256 to
+// tell the image a build was made from from any other, and SHA-1, which a title
+// update's patch and a compressed executable check each of their blocks with.
 
 pub type Key = [u8; 16];
 
@@ -167,12 +168,109 @@ fn block(h: &mut [u32; 8], block: &[u8]) {
     }
 }
 
+/// SHA-256 over data given in pieces: what is too large to hold at once, a release's
+/// archive, is hashed as it is read.
+pub struct Sha256 {
+    h: [u32; 8],
+    // The bytes of a block not yet whole, and how many of them there are.
+    pending: [u8; 64],
+    held: usize,
+    length: u64,
+}
+
+impl Default for Sha256 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Sha256 {
+    pub fn new() -> Self {
+        Self {
+            h: [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19],
+            pending: [0; 64],
+            held: 0,
+            length: 0,
+        }
+    }
+
+    pub fn update(&mut self, mut data: &[u8]) {
+        self.length = self.length.wrapping_add(data.len() as u64);
+        if self.held > 0 {
+            let take = data.len().min(64 - self.held);
+            self.pending[self.held..self.held + take].copy_from_slice(&data[..take]);
+            self.held += take;
+            data = &data[take..];
+            if self.held < 64 {
+                return;
+            }
+            block(&mut self.h, &self.pending);
+            self.held = 0;
+        }
+        let mut blocks = data.chunks_exact(64);
+        for whole in blocks.by_ref() {
+            block(&mut self.h, whole);
+        }
+        let rest = blocks.remainder();
+        self.pending[..rest.len()].copy_from_slice(rest);
+        self.held = rest.len();
+    }
+
+    /// Lower-case hex, as CMake's file(SHA256) writes it.
+    pub fn finish_hex(mut self) -> String {
+        let mut last = [0u8; 128];
+        last[..self.held].copy_from_slice(&self.pending[..self.held]);
+        last[self.held] = 0x80;
+        let size = if self.held < 56 { 64 } else { 128 };
+        last[size - 8..size].copy_from_slice(&self.length.wrapping_mul(8).to_be_bytes());
+        for whole in last[..size].chunks_exact(64) {
+            block(&mut self.h, whole);
+        }
+        self.h.iter().map(|word| format!("{word:08x}")).collect()
+    }
+}
+
 /// Lower-case hex, as CMake's file(SHA256) writes it.
 pub fn sha256_hex(data: &[u8]) -> String {
-    let mut h = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    let mut hash = Sha256::new();
+    hash.update(data);
+    hash.finish_hex()
+}
+
+// SHA-1 (FIPS 180-4).
+fn sha1_block(h: &mut [u32; 5], block: &[u8]) {
+    let mut w = [0u32; 80];
+    for (word, bytes) in w.iter_mut().zip(block.chunks_exact(4)) {
+        *word = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    }
+    for i in 16..80 {
+        w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+    }
+    let [mut a, mut b, mut c, mut d, mut e] = *h;
+    for (i, &word) in w.iter().enumerate() {
+        let (f, k) = match i {
+            0..20 => ((b & c) | (!b & d), 0x5A827999),
+            20..40 => (b ^ c ^ d, 0x6ED9EBA1),
+            40..60 => ((b & c) | (b & d) | (c & d), 0x8F1BBCDC),
+            _ => (b ^ c ^ d, 0xCA62C1D6),
+        };
+        let t = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(word);
+        e = d;
+        d = c;
+        c = b.rotate_left(30);
+        b = a;
+        a = t;
+    }
+    for (state, value) in h.iter_mut().zip([a, b, c, d, e]) {
+        *state = state.wrapping_add(value);
+    }
+}
+
+pub fn sha1(data: &[u8]) -> [u8; 20] {
+    let mut h = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
     let mut blocks = data.chunks_exact(64);
     for whole in blocks.by_ref() {
-        block(&mut h, whole);
+        sha1_block(&mut h, whole);
     }
     let rest = blocks.remainder();
     let mut last = [0u8; 128];
@@ -181,9 +279,11 @@ pub fn sha256_hex(data: &[u8]) -> String {
     let size = if rest.len() < 56 { 64 } else { 128 };
     last[size - 8..size].copy_from_slice(&(data.len() as u64).wrapping_mul(8).to_be_bytes());
     for whole in last[..size].chunks_exact(64) {
-        block(&mut h, whole);
+        sha1_block(&mut h, whole);
     }
-    h.iter().map(|word| format!("{word:08x}")).collect()
+    let mut digest = [0u8; 20];
+    for (bytes, word) in digest.chunks_exact_mut(4).zip(h) {
+        bytes.copy_from_slice(&word.to_be_bytes());
+    }
+    digest
 }
-
-// xtask/src/xexdump.rs includes this file as it stands: it may use nothing of the crate.

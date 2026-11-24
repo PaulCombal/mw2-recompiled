@@ -10,10 +10,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-// The game's SHA-256.
-#[path = "../src/runtime/install/crypto.rs"]
-#[allow(dead_code)]
-mod crypto;
+// The game's SHA-256 (install/).
+use mw2_install::crypto;
 
 fn watch(path: &Path) {
     println!("cargo:rerun-if-changed={}", path.display());

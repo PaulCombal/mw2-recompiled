@@ -15,7 +15,7 @@
 // With no <disc>, --install brings the install already in game/ up to date.
 // The game starts the launcher with --play when the shaders compiled for it
 // no longer fit (src/runtime/install/), naming the device it draws on.
-#include "disc.h"
+#include "utf8.h"
 #include "precompile.h"
 #include "fonts.h"
 #include "profile.h"
@@ -152,7 +152,7 @@ namespace
         {
             std::fprintf(stderr, "Not installed: %s\n", job.error.c_str());
             if (job.result == setup::Result::NoUpdate)
-                std::fprintf(stderr, "Download it from\n  %s\nand give it with --update <file>.\n", setup::UpdateUrl());
+                std::fprintf(stderr, "Download it from\n  %s\nand give it with --update <file>.\n", setup::UpdateUrl().c_str());
             return 1;
         }
         std::printf("Installed into %s.\n", Utf8(fs::absolute(setup::GameFolder())).c_str());
@@ -1650,7 +1650,7 @@ namespace
                            std::string("Choose the image of your Xbox 360 disc (.iso), or drop it on this window.\n\n"
                                        "Its files, about 7 GB, are copied into the game folder beside the launcher") +
                                (setup::UsesUpdate() ? ", and title update 6 is downloaded (2 MB) and applied." : ".") +
-                               "\n\nThe disc is the USA/Europe one, version 1.0.557.");
+                               "\n\nThe disc is the USA/Europe or the Spanish one, version 1.0.557.");
             };
             const bool reinstall = installed && !needsUpdateFile;
             if (!reinstall) install()->shown.ruleAbove = true;
