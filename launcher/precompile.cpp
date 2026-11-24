@@ -1,34 +1,45 @@
+// The compile pass's C side. The pass itself is Rust (launcher/src/precompile.rs);
+// what it needs of the launcher's C++ -- the game's shaders as zone/ reads them,
+// the settings, the log, the threads it compiles on -- it calls here, and
+// precompile::Run calls it.
+//
+// Text crosses as bytes and a length, paths as UTF-8, which a path is made from
+// as std::filesystem::path(std::u8string) makes it: on Windows the whole name,
+// where the code page would lose what it cannot spell. Nothing thrown leaves a
+// function here (each is noexcept): a game file's error comes back as its text,
+// and a standard exception the C++ pass would have let out of precompile::Run --
+// a thread that cannot be started, memory -- is kept and the call says it failed;
+// the Rust then returns at once, and Run throws it, as the window and the
+// terminal mode expect (main.cpp).
 #include "precompile.h"
 #include "settings.h"
 #include "zone/fastfile.h"
 #include "zone/shaders.h"
 #include "zone/vertex_binding.h"
-#include "../runtime/gpu/vulkan/pipeline.h"
-#include "../runtime/gpu/vulkan/shader_build.h"
-#include "../runtime/gpu/vulkan/shader_marker.h"
 #include "../runtime/install/xex.h"
+#include "../runtime/log.h"
 
-#include <algorithm>
-#include <chrono>
-#include <cstdlib>
+#include <cstdio>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
-#include <map>
-#include <mutex>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
 
 namespace
 {
-    constexpr const char* kGameFolder = "game";
+    // What a function below hands the Rust: a shader of a file, an error's text.
+    using ShaderSink = void (*)(void* context, bool pixel, uint64_t hash, const uint32_t* code, size_t count);
+    using TextSink = void (*)(void* context, const char* text, size_t length);
 
-    double Since(std::chrono::steady_clock::time_point from)
+    fs::path Path(const char* text, size_t length)
     {
-        return std::chrono::duration<double>(std::chrono::steady_clock::now() - from).count();
+        return fs::path(std::u8string(reinterpret_cast<const char8_t*>(text), length));
     }
 
     std::string Name(const fs::path& path)
@@ -48,269 +59,194 @@ namespace
         return image;
     }
 
-    // MW2_SCALE as the game takes it: from its environment first, which a
-    // game that starts the launcher passes on, then from .env.
-    uint32_t AskedScale()
+    void Hand(const std::vector<zone::Shader>& shaders, ShaderSink sink, void* context)
     {
-        if (const char* set = std::getenv("MW2_SCALE"))
-            return uint32_t(std::clamp(std::strtol(set, nullptr, 10), 1L, long(settings::kMaxScale)));
-        return uint32_t(settings::Scale());
+        for (const zone::Shader& s : shaders) sink(context, s.pixel, s.hash, s.code.data(), s.code.size());
     }
 
-    // MW2_SHADOW_SCALE, the same way.
-    static_assert(settings::kMaxShadowScale == int(vk::shaders::kMaxShadowScale));
-    uint32_t AskedShadowScale()
-    {
-        if (const char* set = std::getenv("MW2_SHADOW_SCALE"))
-            return uint32_t(std::clamp(std::strtol(set, nullptr, 10), 1L, long(settings::kMaxShadowScale)));
-        return uint32_t(settings::ShadowScale());
-    }
+    void Say(const std::string& text, TextSink sink, void* context) { sink(context, text.data(), text.size()); }
 
-    // Whether the game draws anything larger than the title's sizes on this
-    // device, which is what its shaders depend on.
-    bool Scaled(VkPhysicalDevice physical)
-    {
-        return vk::shaders::ShadowScale(physical, AskedShadowScale(), vk::shaders::Scale(physical, AskedScale())) > 1;
-    }
+    // What a call on the pass's thread threw, for Run to throw again.
+    thread_local std::exception_ptr thrown;
 
-    // MW2_CUSTOM_MAPS, the same way.
-    bool AskedCustomMaps()
+    template <typename Work> bool Keeping(Work&& work) noexcept
     {
-        if (const char* set = std::getenv("MW2_CUSTOM_MAPS")) return *set && std::strcmp(set, "0") != 0;
-        return settings::CustomMaps();
-    }
-}
-
-#ifndef MW2_HAVE_VULKAN
-precompile::Result precompile::Run(const std::string&, bool, Progress&)
-{
-    Result result;
-    result.error = "this launcher was built without Vulkan";
-    return result;
-}
-#else
-
-#include <vulkan/vulkan.h>
-
-namespace
-{
-    // The device to compile for, and the marker a pass on it would leave
-    // now: from an instance of its own, without bringing a device up.
-    struct Target
-    {
-        std::string device, fingerprint;
-    };
-    bool FindTarget(const std::string& asked, Target& target, std::string& error)
-    {
-        VkApplicationInfo app{ VK_STRUCTURE_TYPE_APPLICATION_INFO };
-        app.pApplicationName = "mw2recomp";
-        app.apiVersion = VK_API_VERSION_1_2;
-        VkInstanceCreateInfo info{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
-        info.pApplicationInfo = &app;
-        VkInstance instance = VK_NULL_HANDLE;
-        if (vkCreateInstance(&info, nullptr, &instance) != VK_SUCCESS)
+        try
         {
-            error = "Vulkan is not available on this computer";
+            work();
+            return true;
+        }
+        catch (const std::exception&)
+        {
+            thrown = std::current_exception();
             return false;
         }
-        // The device the game named; else the one the last pass was for, which
-        // a game drawing elsewhere than the window's own choice named then.
-        std::string id = asked.empty() ? vk::shaders::ReadMarker().device : asked;
-        void* physical = id.empty() ? nullptr : vk::pipeline::ChooseDevice(instance, id, nullptr);
-        if (!physical && !asked.empty()) error = "the graphics card the game draws on is not there any more";
-        if (!physical && asked.empty()) physical = vk::pipeline::ChooseDevice(instance, "", nullptr);
-        if (physical)
-        {
-            target.device = vk::pipeline::DeviceId(physical);
-            target.fingerprint = vk::shaders::Fingerprint(physical, Scaled(static_cast<VkPhysicalDevice>(physical)),
-                                                          kGameFolder, AskedCustomMaps());
-        }
-        else if (error.empty()) error = "no graphics card here can draw the game";
-        vkDestroyInstance(instance, nullptr);
-        return physical != nullptr;
     }
+
+    enum class Count : uint32_t { Files, FilesRead, Shaders, Compiled };
+    std::atomic<uint32_t>& Field(precompile::Progress* progress, Count which)
+    {
+        switch (which)
+        {
+        case Count::Files: return progress->files;
+        case Count::FilesRead: return progress->filesRead;
+        case Count::Shaders: return progress->shaders;
+        default: return progress->compiled;
+        }
+    }
+
+    struct Text
+    {
+        const char* data;
+        size_t length;
+    };
+    struct Summary
+    {
+        bool ok, cancelled, current, noLibraries;
+        uint32_t shaders, untranslated, refused, fromCache;
+        double readSeconds, compileSeconds;
+        uint64_t cacheBytes;
+        Text error, why, device, deviceId;
+    };
 }
 
-precompile::Result precompile::Run(const std::string& asked, bool always, Progress& progress)
+// The launcher's shadow scale goes as far as the shaders crate's
+// (shaders/src/shader_build.rs, MAX_SHADOW_SCALE), which precompile.rs holds to 4.
+static_assert(settings::kMaxShadowScale == 4);
+
+// What the Rust calls.
+extern "C"
+{
+    // ---- the settings, as main has loaded them (settings::Load) ------------
+    int mw2l_scale() noexcept { return settings::Scale(); }
+    int mw2l_shadow_scale() noexcept { return settings::ShadowScale(); }
+    bool mw2l_custom_maps() noexcept { return settings::CustomMaps(); }
+    int mw2l_max_scale() noexcept { return settings::kMaxScale; }
+    int mw2l_max_shadow_scale() noexcept { return settings::kMaxShadowScale; }
+
+    // ---- the game's shaders ------------------------------------------------
+    // The size of zone::BindTables, which the Rust holds as bytes: two are the
+    // same when their bytes are, as memcmp compares them.
+    size_t mw2l_bind_tables_size() noexcept { return sizeof(zone::BindTables); }
+
+    // The shaders an executable carries (zone::ExecutableShaders) and, in
+    // `tables`, the tables it binds vertex shaders with.
+    bool mw2l_executable_shaders(const char* path, size_t length, bool multiplayer, void* tables, ShaderSink sink,
+                                 void* context, TextSink error, void* errorContext) noexcept
+    {
+        try
+        {
+            const std::vector<uint8_t> image = Image(Path(path, length));
+            const zone::BindTables read = zone::ReadBindTables(image, multiplayer);
+            Hand(zone::ExecutableShaders(image, multiplayer, read), sink, context);
+            std::memcpy(tables, &read, sizeof read);
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            Say(e.what(), error, errorContext);
+            return false;
+        }
+    }
+
+    // The shaders of a fastfile (zone::Shaders), their vertex shaders bound with
+    // `tables`.
+    bool mw2l_fastfile_shaders(const char* path, size_t length, const void* tables, ShaderSink sink, void* context,
+                               TextSink error, void* errorContext) noexcept
+    {
+        try
+        {
+            zone::BindTables bound;
+            std::memcpy(&bound, tables, sizeof bound);
+            Hand(zone::Shaders(zone::ReadFastfile(Path(path, length)), bound), sink, context);
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            Say(e.what(), error, errorContext);
+            return false;
+        }
+    }
+
+    // ---- what the pass runs on ---------------------------------------------
+    unsigned mw2l_cores() noexcept { return std::thread::hardware_concurrency(); }
+
+    // `work(context)` on `count` threads of the C++ library's, as many as the
+    // pass starts, until each returns. False when the first could not be
+    // started (a later one ends the program, as a joinable std::thread
+    // destroyed does).
+    bool mw2l_threads(unsigned count, void (*work)(void*), void* context) noexcept
+    {
+        return Keeping([&] {
+            std::vector<std::thread> threads;
+            for (unsigned t = 0; t < count; t++) threads.emplace_back([=] { work(context); });
+            for (std::thread& t : threads) t.join();
+        });
+    }
+
+    // A line of the shaders crate's log, as LOGI and the others write one.
+    void mw2l_log(const char* line) noexcept
+    {
+#ifndef MW2_NO_LOGGING
+        std::fprintf(stderr, "%s%s\n", mw2log::Stamp(), line);
+#else
+        (void)line;
+#endif
+    }
+
+    // ---- progress and result -----------------------------------------------
+    bool mw2l_progress_cancelled(precompile::Progress* progress) noexcept { return progress->cancel; }
+    void mw2l_progress_cancel(precompile::Progress* progress) noexcept { progress->cancel = true; }
+    void mw2l_progress_set(precompile::Progress* progress, Count which, uint32_t value) noexcept
+    {
+        Field(progress, which) = value;
+    }
+    void mw2l_progress_add(precompile::Progress* progress, Count which) noexcept { Field(progress, which)++; }
+    // What no longer fits, then that the marker has been looked at.
+    bool mw2l_progress_checked(precompile::Progress* progress, const char* why, size_t length) noexcept
+    {
+        return Keeping([&] {
+            progress->why.assign(why, length);
+            progress->checked = true;
+        });
+    }
+
+    bool mw2l_result(precompile::Result* result, const Summary* summary) noexcept
+    {
+        return Keeping([&] {
+            const auto text = [](const Text& t) { return std::string(t.data, t.length); };
+            result->ok = summary->ok;
+            result->cancelled = summary->cancelled;
+            result->current = summary->current;
+            result->noLibraries = summary->noLibraries;
+            result->shaders = summary->shaders;
+            result->untranslated = summary->untranslated;
+            result->refused = summary->refused;
+            result->fromCache = summary->fromCache;
+            result->readSeconds = summary->readSeconds;
+            result->compileSeconds = summary->compileSeconds;
+            result->cacheBytes = summary->cacheBytes;
+            result->error = text(summary->error);
+            result->why = text(summary->why);
+            result->device = text(summary->device);
+            result->deviceId = text(summary->deviceId);
+        });
+    }
+    bool mw2l_result_reason(precompile::Result* result, const char* text, size_t length, uint32_t count) noexcept
+    {
+        return Keeping([&] { result->reasons[std::string(text, length)] = count; });
+    }
+
+    // launcher/src/precompile.rs.
+    void mw2_precompile_run(const char* device, size_t length, bool always, precompile::Progress* progress,
+                            precompile::Result* result);
+}
+
+precompile::Result precompile::Run(const std::string& device, bool always, Progress& progress)
 {
     Result result;
-    Target target;
-    if (!FindTarget(asked, target, result.error)) return result;
-    result.deviceId = target.device;
-    if (vk::shaders::Compiled(target.fingerprint, &result.why) && !always)
-    {
-        result.ok = result.current = true;
-        result.shaders = vk::shaders::ReadMarker().shaders;
-        return result;
-    }
-    if (always) result.why = "Asked for.";
-    progress.why = result.why;
-    progress.checked = true;
-
-    // A pass that does not finish leaves no marker. The cache of the last one
-    // stays for this one to start from, when it was for the same code on the
-    // same device and driver at the same scale: only the shaders of files
-    // that changed are compiled then. Anything else in it is of no use, and
-    // would only grow the file.
-    const vk::shaders::Marker before = vk::shaders::ReadMarker();
-    vk::shaders::RemoveMarker();
-    std::error_code ec;
-    if (!before.found || !vk::shaders::SameTarget(before.fingerprint, target.fingerprint))
-        fs::remove(vk::shaders::kCacheFile, ec);
-
-    const unsigned cores = std::max(1u, std::thread::hardware_concurrency());
-    auto cancelled = [&] {
-        if (!progress.cancel) return false;
-        result.cancelled = true;
-        result.error = "The shaders were not compiled: stopped.";
-        return true;
-    };
-
-    // ---- the device the game draws on, with its pipeline cache -------------
-    // First, so a device that cannot compile a shader on its own is known
-    // before the game's files are read for nothing.
-    fs::create_directories(fs::path(vk::shaders::kCacheFile).parent_path(), ec);
-    vk::pipeline::SetCachePath(vk::shaders::kCacheFile);
-    vk::pipeline::SetDevice(target.device);
-    if (!vk::pipeline::Initialise())
-    {
-        result.error = "The graphics card could not be started to compile the shaders on.";
-        return result;
-    }
-    result.device = vk::pipeline::DeviceName();
-    const VkPhysicalDevice physical = static_cast<VkPhysicalDevice>(vk::pipeline::PhysicalDevice());
-    if (!vk::pipeline::PipelineLibraries())
-    {
-        // Without pipeline libraries a shader is compiled only as part of a
-        // whole pipeline, which needs the state of a draw to make: the game
-        // compiles them as it meets them, and there is nothing to do here.
-        vk::pipeline::Shutdown();
-        result.noLibraries = true;
-        if (!vk::shaders::WriteMarker(target.fingerprint, 0, result.error)) return result;
-        result.ok = true;
-        return result;
-    }
-    // From here every return leaves the device to the next pass's Initialise.
-    struct Down { bool on = true; ~Down() { if (on) vk::pipeline::Shutdown(); } } down;
-
-    // ---- every shader of the game, once ------------------------------------
-    // A level's zone is up to 160 MB once inflated, so only a few are read at
-    // a time.
-    const auto readFrom = std::chrono::steady_clock::now();
-    std::vector<fs::path> files;
-    for (const fs::path& file : vk::shaders::GameFiles(kGameFolder, AskedCustomMaps()))
-        if (file.extension() == ".ff") files.push_back(file);
-    progress.files = uint32_t(files.size()) + 2;
-    std::map<std::pair<bool, uint64_t>, zone::Shader> all;
-    std::mutex lock;
-    std::string failure;
-    // The two executables: the shaders they carry, and the tables vertex
-    // shaders are bound with, which must agree.
-    zone::BindTables tables;
-    try
-    {
-        bool first = true;
-        for (const bool multiplayer : { false, true })
-        {
-            const std::vector<uint8_t> image =
-                Image(fs::path(kGameFolder) / (multiplayer ? "default_mp.xex" : "default.xex"));
-            const zone::BindTables read = zone::ReadBindTables(image, multiplayer);
-            for (zone::Shader& s : zone::ExecutableShaders(image, multiplayer, read))
-                all.try_emplace({ s.pixel, s.hash }, std::move(s));
-            if (!first && std::memcmp(&tables, &read, sizeof read))
-                throw zone::Error("the two executables bind vertex shaders with different tables");
-            tables = read;
-            first = false;
-            progress.filesRead++;
-        }
-    }
-    catch (const std::exception& e)
-    {
-        result.error = e.what();
-        return result;
-    }
-    {
-        std::atomic<size_t> next{ 0 };
-        std::vector<std::thread> readers;
-        for (unsigned t = 0; t < std::min(4u, cores); t++)
-            readers.emplace_back([&] {
-                for (size_t i; !progress.cancel && (i = next++) < files.size();)
-                {
-                    try
-                    {
-                        std::vector<zone::Shader> found = zone::Shaders(zone::ReadFastfile(files[i]), tables);
-                        std::lock_guard guard(lock);
-                        for (zone::Shader& s : found) all.try_emplace({ s.pixel, s.hash }, std::move(s));
-                    }
-                    catch (const std::exception& e)
-                    {
-                        // A file of the game the pass cannot read is one whose
-                        // shaders it cannot compile: the pass fails, naming it.
-                        std::lock_guard guard(lock);
-                        if (failure.empty()) failure = Name(files[i]) + ": " + e.what();
-                        progress.cancel = true;
-                    }
-                    progress.filesRead++;
-                }
-            });
-        for (std::thread& t : readers) t.join();
-    }
-    result.readSeconds = Since(readFrom);
-    if (!failure.empty())
-    {
-        result.error = "A file of the game could not be read, so its shaders cannot be compiled: " + failure;
-        return result;
-    }
-    if (cancelled()) return result;
-    result.shaders = uint32_t(all.size());
-    progress.shaders = result.shaders;
-
-    const VkFormat depth = vk::shaders::DepthFormat(physical);
-    const bool scaled = Scaled(physical);
-
-    // ---- each built as the game builds it, on every core ---------------
-    const auto compileFrom = std::chrono::steady_clock::now();
-    std::vector<const zone::Shader*> work;
-    for (const auto& [key, s] : all) work.push_back(&s);
-    std::atomic<size_t> next{ 0 };
-    std::atomic<uint32_t> untranslated{ 0 }, refused{ 0 }, fromCache{ 0 };
-    std::vector<std::thread> compilers;
-    for (unsigned t = 0; t < cores; t++)
-        compilers.emplace_back([&] {
-            for (size_t i; !progress.cancel && (i = next++) < work.size();)
-            {
-                const zone::Shader& s = *work[i];
-                vk::shaders::Built built = vk::shaders::Build(s.pixel ? shader::Type::Pixel : shader::Type::Vertex,
-                                                              s.code.data(), s.code.size(), scaled, depth);
-                if (!built.translation.ok)
-                {
-                    untranslated++;
-                    std::lock_guard guard(lock);
-                    result.reasons[built.translation.error]++;
-                }
-                else if (!built.module || !built.library) refused++;
-                else if (built.fromCache == 1) fromCache++;
-                vk::shaders::Destroy(built);
-                progress.compiled++;
-            }
-        });
-    for (std::thread& t : compilers) t.join();
-    result.compileSeconds = Since(compileFrom);
-    result.untranslated = untranslated;
-    result.refused = refused;
-    result.fromCache = fromCache;
-
-    down.on = false;
-    vk::pipeline::Shutdown();   // writes the cache, if it got this far: what is compiled is kept
-    if (cancelled()) return result;
-    result.cacheBytes = fs::file_size(vk::shaders::kCacheFile, ec);
-    if (ec)
-    {
-        result.error = "The compiled shaders could not be written to " + std::string(vk::shaders::kCacheFile) + ".";
-        return result;
-    }
-    if (!vk::shaders::WriteMarker(target.fingerprint, result.shaders, result.error)) return result;
-    result.ok = true;
+    thrown = nullptr;
+    mw2_precompile_run(device.data(), device.size(), always, &progress, &result);
+    if (thrown) std::rethrow_exception(std::exchange(thrown, nullptr));
     return result;
 }
-#endif

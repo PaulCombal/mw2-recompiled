@@ -123,14 +123,8 @@ impl Client {
 
     fn try_join(relay: &Relay, password: &[u8], protocol: u16) -> Result<Client, String> {
         let socket = Arc::new(Client::socket(relay));
-        let mut client = Client {
-            socket,
-            token: 0,
-            id: 0,
-            sequence: 0,
-            search: 0,
-            quiet: Arc::new(AtomicBool::new(false)),
-        };
+        let mut client =
+            Client { socket, token: 0, id: 0, sequence: 0, search: 0, quiet: Arc::new(AtomicBool::new(false)) };
         for _ in 0..20 {
             client.say(HELLO, 0, &hello_body(protocol, password));
             match client.next(Duration::from_millis(300)) {
@@ -271,8 +265,7 @@ fn pause() {
     thread::sleep(Duration::from_millis(100));
 }
 
-const NUMBERS: [(u32, u32); 6] =
-    [(0x800B, 1), (0x800A, 1), (6, 1), (0x10000014, 136), (0x10000017, 1), (ROOM, 8)];
+const NUMBERS: [(u32, u32); 6] = [(0x800B, 1), (0x800A, 1), (6, 1), (0x10000014, 136), (0x10000017, 1), (ROOM, 8)];
 
 fn wants() -> Vec<(u32, u32, u8)> {
     NUMBERS.iter().map(|&(id, value)| if id == ROOM { (id, 2, 1) } else { (id, value, 0) }).collect()
@@ -372,7 +365,14 @@ fn a_stranger_is_told_to_say_hello() {
 fn a_copy_gets_its_id_back() {
     let relay = Relay::start(&[]);
     let a = Client::join(&relay);
-    let again = Client { socket: Arc::new(Client::socket(&relay)), token: 0, id: 0, sequence: 0, search: 0, quiet: Arc::new(AtomicBool::new(false)) };
+    let again = Client {
+        socket: Arc::new(Client::socket(&relay)),
+        token: 0,
+        id: 0,
+        sequence: 0,
+        search: 0,
+        quiet: Arc::new(AtomicBool::new(false)),
+    };
     a.leave();
     pause();
     let mut token = 0;

@@ -42,7 +42,7 @@ pub struct Limits {
 pub struct Relay {
     socket: UdpSocket,
     limits: Limits,
-    keys: (u64, u64), // make the tokens; new at every start
+    keys: (u64, u64),                         // make the tokens; new at every start
     copies: BTreeMap<SocketAddrV4, GameCopy>, // nothing else is kept
     ids: BTreeMap<u64, SocketAddrV4>,
     playlists: Vec<u8>,
@@ -243,7 +243,9 @@ impl Relay {
         if protocol != PROTOCOL {
             self.refuse(
                 from,
-                &format!("this relay speaks protocol {PROTOCOL}, the game {protocol}: they come from different releases"),
+                &format!(
+                    "this relay speaks protocol {PROTOCOL}, the game {protocol}: they come from different releases"
+                ),
             );
             return;
         }
@@ -275,10 +277,8 @@ impl Relay {
         while id == 0 || self.ids.contains_key(&id) {
             id = random() & ID_MASK;
         }
-        self.copies.insert(
-            from,
-            GameCopy { address: from, id, token: expected, heard: Instant::now(), searched: None },
-        );
+        self.copies
+            .insert(from, GameCopy { address: from, id, token: expected, heard: Instant::now(), searched: None });
         self.ids.insert(id, from);
         log!("{} joined ({from}), {} here", id_text(id), self.copies.len());
         self.say(from, Kind::Welcome, id, &[], 0);

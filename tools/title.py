@@ -3,13 +3,13 @@
 
 MW2_TITLE=sp (the default) is default.xex, the campaign and special ops;
 MW2_TITLE=mp is default_mp.xex, the multiplayer. Everything derived from one
-of them -- the flat image, the recompiled C++, the switch tables, the build
+of them -- the flat image, the recompiled Rust, the switch tables, the build
 directory -- lives beside the other's under its own name, so both builds can
 exist at once.
 
 MW2_VERSION=tu6 (the default) is the executable title update 6 makes of the
 disc's, under the names below. MW2_VERSION=tu0 is the disc's own, whose files
-carry the version in their names: mw2/tu0/, ppc_tu0/, config/MW2.tu0.toml.
+carry the version in their names: mw2/tu0/, ppc_tu0_rs/, config/MW2.tu0.toml.
 
 The image's section table is read here rather than hard-coded, because the
 executables lay their sections out differently.
@@ -49,7 +49,7 @@ _t = TITLES[NAME]
 
 XEX = os.path.join(ROOT, _t["xex"])
 IMAGE = os.path.join(ROOT, _t["image"])
-PPC = os.path.join(ROOT, _t["ppc"])
+PPC = os.path.join(ROOT, _t["ppc"] + "_rs")
 TOML = os.path.join(ROOT, _t["toml"])
 TABLES = os.path.join(ROOT, _t["tables"])
 BUILD = os.path.join(ROOT, _t["build"])
@@ -57,7 +57,7 @@ SYMBOLS = os.path.join(ROOT, _t["syms"])
 
 
 def ppc(name):
-    """A file in the title's recompiled-output directory."""
+    """A file in the title's recompiled Rust tree."""
     return os.path.join(PPC, name)
 
 

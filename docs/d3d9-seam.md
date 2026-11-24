@@ -4,7 +4,7 @@ MW2 links Direct3D 9 statically (LTCG, no symbols), so there is no API
 boundary to intercept. The library runs as recompiled guest code. It builds
 PM4 command streams in guest memory and submits them through a ring buffer and
 the `Vd*` kernel imports. The runtime stands in for the GPU: it executes that
-stream as the Xenos command processor would (`runtime/gpu/command_processor.cpp`),
+stream as the Xenos command processor would (`src/runtime/gpu/command_processor.rs`),
 and it hooks a few library functions by address (`runtime/title.h`). How draws
 become Vulkan work is covered in [rendering.md](rendering.md).
 
@@ -14,7 +14,7 @@ In the campaign executable the library spans `820B6098..820D4C54`: 281
 functions, with 101 entry points called from 228 engine sites
 (`tools/d3d_region.py`; `tools/classify_d3d.py` lists the device fields each
 entry point touches). It is not inlined, so any entry point can be hooked on its
-own with `GUEST_HOOK`. The multiplayer contains the same build at other
+own with `guest_hook!`. The multiplayer contains the same build at other
 addresses. Device offsets: `+10548` render-state shadow, `+13520/13524/13528`
 command buffer base/cursor/end, `+10896` arena progress block, `+13596`
 `D3DRS_PRESENTINTERVAL`.
@@ -24,18 +24,22 @@ example, are built in the title's own memory (`tools/resource_audit.py`).
 Resource creation must therefore keep running the title's code. A host backend
 can adopt the guest structs but cannot replace them.
 
+The D3D hooks below are `src/hooks/d3d_hooks.rs`, the image pool's
+`src/hooks/image_move.rs`, and the shader hooks `src/hooks/shader_preload.rs`.
+
 | Hook (`title.h`) | Campaign | MP | Purpose |
 |---|---|---|---|
 | `T_D3D_Present` | `820C3390` | `820DFD10` | notes the present for pacing and stutter tracking; under `MW2_FPS_LIMIT`, sets the present interval |
 | `T_D3D_ArenaWait` | `820B9800` | `820E1E70` | learns the arena progress block from `[r3+10896]` |
 | `T_D3D_ReplayRecording` | `820C6130` | `820E4848` | diagnostics: warns of a recorded chunk list (`[object+116]`: next +0, count +4) with a zero count or a cycle, which the do-while replay loop would never leave |
-| `T_D3D_InitPixelShader`, `T_D3D_PatchVertexFetches` | `820B8B58`, `820B6B10` | `820D7268`, `820D5220` | hand shader microcode to the renderer at load: a pixel shader as it is made, a vertex shader once D3D has bound it to a declaration (`shader_preload.cpp`, [rendering.md](rendering.md#pipelines)) |
+| `T_Image_FlushMove` | `823DE738` | `823DD658` | queues the image pool's block move for the command processor to make at its copy draw, or makes it at once when nothing consumes the stream (below) |
+| `T_D3D_InitPixelShader`, `T_D3D_PatchVertexFetches` | `820B8B58`, `820B6B10` | `820D7268`, `820D5220` | hand shader microcode to the renderer at load: a pixel shader as it is made, a vertex shader once D3D has bound it to a declaration (`shader_preload.rs`, [rendering.md](rendering.md#pipelines)) |
 
-## The `Vd*` imports (`runtime/kernel/video.cpp`)
+## The `Vd*` imports (`src/runtime/kernel/video.rs`)
 
 - `VdInitializeRingBuffer(physical, log2(bytes) - 3)`,
   `VdEnableRingBufferRPtrWriteBack` and `VdSetGraphicsInterruptCallback`
-  configure `gpu.cpp`.
+  configure the ring consumer (`src/runtime/gpu/gpu.rs`).
 - `VdQueryVideoMode`, `XGetVideoMode` and `VdGetCurrentDisplayInformation`
   report 1280x720 progressive, widescreen, HiDef, 60 Hz.
   `VdGetCurrentDisplayGamma` reports type 2 with gamma 2.2222.
@@ -43,21 +47,40 @@ can adopt the guest structs but cannot replace them.
 - `VdSwap` fills the reserved present dwords (below).
 - `MmGetPhysicalAddress` must match the masking the title also inlines.
 
-Every address handed to the GPU is physical. `kernel::FromPhysical` maps it back.
+Every address handed to the GPU is physical. `kernel::from_physical` maps it back
+(`src/runtime/kernel/video.rs`).
 
-## The ring consumer (`runtime/gpu/gpu.cpp`)
+## The ring consumer (`src/runtime/gpu/gpu.rs`)
+
+The ring consumer, the vblank and the interrupts they raise are
+`src/runtime/gpu/gpu.rs`, and the arena's progress `src/runtime/gpu/arena.rs`. The ring's
+place, size and read index, the read-pointer write-back and the interrupt callback with
+its context (one word) are atomics, as other threads write them. A second `shutdown`
+(the exit thread's while the run thread shuts down) waits for the first to finish, then
+returns.
+
+The command processor, the register file, the census and the image pool are
+`src/runtime/gpu/command_processor.rs`, `registers.rs`, `hash.rs`, `census.rs` and
+`image_move.rs`. They call the renderer the ring consumer owns directly, once a
+draw, resolve, swap, completion point and occlusion event, passed down beside the register file (`src/runtime/bridge.rs`'s
+`renderer` module, inline), and the memory watch at each `IM_LOAD`. The GPU capture,
+which is C++ (`runtime/gpu/stream_capture.cpp`, diagnostics), is called through
+`runtime/rust_calls.cpp` (`mw2_stream_*`) and reaches back for the swap count, the
+command processor's state and the replayed moves (`src/runtime/gpu/exports.rs`). The
+state is the consumer's; what the reports print are single-writer atomics, and the
+display table's finished ramp a mutex with a release flag.
 
 The ring consumer thread has its own KPCR, as a hardware thread does. It polls
 `CP_RB_WPTR` in the register aperture (`0x7FC80000 + 0x714`), executes up to
 it, and stores its read index at the read-pointer write-back address. It also
 delivers finished occlusion queries. The aperture is plain memory. The CPU
-writes some registers there directly, and `RegisterOrAperture` falls back to it
+writes some registers there directly, and `register_or_aperture` falls back to it
 for registers the stream never wrote.
 
 ## Executing PM4
 
-All state is one `gpu::RegisterFile` of `0x5003` dwords (`registers.h`).
-Writes outside it are dropped.
+All state is one `RegisterFile` of `0x5003` dwords (`registers.rs`). Writes
+outside it are dropped.
 
 | Window | Base | |
 |---|---|---|
@@ -95,7 +118,10 @@ Parsing rules:
 | `0x27` | `IM_LOAD` | `{address \| type, start<<16 \| size}`: type 0 vertex, 1 pixel |
 | `0x2B` | `IM_LOAD_IMMEDIATE` | `{type, start<<16 \| size, code...}`, refused when the size disagrees with the packet |
 | `0x2D`, `0x2F`, `0x55` | `SET_CONSTANT`, `LOAD_ALU_CONSTANT`, `SET_CONSTANT2` | constants by window type 0-4 (float, fetch, bool, loop, register), from memory, or by absolute index |
-| `0x3D`, `0x3E`, `0x45` | `MEM_WRITE`, `REG_TO_MEM`, `COND_WRITE` | memory writes; `COND_WRITE` always writes |
+| `0x3D` | `MEM_WRITE` | `{address, values...}` written to memory |
+| `0x3E` | `REG_TO_MEM` | `{register, address}`: the register as the command processor sees it (the file, or the aperture where the file holds 0), swapped as the address' low two bits say (Xenia's `GpuSwap`) |
+| `0x21` | `REG_RMW` | `{info, and, or}`: register `info & 0x1FFF` ANDed and ORed with immediates, or with registers where bits 31 and 30 say, and written back |
+| `0x45` | `COND_WRITE` | `{info, poll, reference, mask, write address, value}`: the poll read once as `WAIT_REG_MEM` reads it, and only when it holds the value written, to memory (`info` bit 8) or to a register |
 | `0x3C` | `WAIT_REG_MEM` | see below |
 | `0x26` | `WAIT_FOR_IDLE` | marks every draw so far finished |
 | `0x54` | `INTERRUPT` | `{cpu mask}` |
@@ -105,6 +131,25 @@ Parsing rules:
 | `0x64` | `XE_SWAP` | end of frame, written by `VdSwap` |
 
 The runtime ignores other known opcodes. It skips unknown ones and logs them.
+`REG_RMW`, `COND_WRITE` and `REG_TO_MEM` follow Xenia's command processor
+(`pm4_command_processor_implement.h`). MW2 issues 5 `REG_RMW`s a run (registers
+`0x81`, `0x82`, `0x1841`, `0x1E4E`) and 512 `COND_WRITE`s, each setting
+`DC_LUT_RW_INDEX` to the next display-table entry with the always-true poll
+(function 7): a register write. Each comes right after the colour write whose
+auto-increment has already set the index to that value, so it leaves the display
+table as it was. The report counts them
+(`gpu: COND_WRITE n written, n skipped ...; REG_RMW n applied; n ... reads where the aperture holds another value than the file`).
+
+`REG_RMW` and `REG_TO_MEM` read a register from the file, or from the aperture where
+the file holds 0. This is not Xenia's literal rule. Xenia keeps one register file
+that holds the latest write, whether it came from the stream or from the CPU. Here
+the CPU's writes land in the aperture, which is plain guest memory and is not
+ordered against the stream's writes, so where the two disagree Xenia's file could
+hold either. The report counts the reads where the aperture holds a value other
+than 0 and other than the file's, whichever answered. One disagreement stays unseen:
+the aperture at 0 against a file that is not, as a CPU write of 0 cannot be told
+from no write. So a count of 0 does not prove the runtime reads what Xenia would.
+In the one flight probed for it, MW2's five `REG_RMW`s found 0 in both.
 
 **Shaders and draws.** A draw uses the shaders the last `IM_LOAD`s set,
 identified by an FNV-1a hash of the microcode. Its initiator goes to
@@ -112,7 +157,7 @@ identified by an FNV-1a hash of the microcode. Its initiator goes to
 base. If `RB_MODECONTROL & 7` is 6 (`Copy`) the draw is a resolve; otherwise
 it is a draw. While the image pool has block copies pending, each draw's `c0.x`
 is checked against them. Those copies are memory-export draws, and the runtime
-makes each one on the CPU at its draw (`runtime/image_move.cpp`).
+makes each one on the CPU at its draw (`src/runtime/gpu/image_move.rs`).
 
 **Scratch write-back.** A write to `SCRATCH_REG0..7` (`0x578`+n) whose bit is
 set in `SCRATCH_UMSK` (`0x1DC`) is also stored at `SCRATCH_ADDR` (`0x1DD`) +
@@ -122,14 +167,15 @@ set in `SCRATCH_UMSK` (`0x1DC`) is also stored at `SCRATCH_ADDR` (`0x1DD`) +
 register, or on memory when `info & 0x10` is set, comparing with the function in
 `info & 7`. Memory is byte-swapped according to the address's low two bits
 (Xenia's `GpuSwap`). `COHER_STATUS_HOST` (`0x0A31`) is satisfied at once. An
-unsatisfied wait polls every 50 us and gives up with a warning after 500 ms.
+unsatisfied wait polls every 50 us (`std::this_thread::sleep_for`, which on Windows is a
+`Sleep` of a whole millisecond) and gives up with a warning after 500 ms.
 
 ### Completion points
 
 On the console, a "work done" report lands after the GPU has executed the draws
 before it, and once the title reads it, the title may reuse what those draws
 read. The parse here runs ahead of the GPU. Before such a report reaches memory,
-the command processor must therefore call `vk::renderer::BeforeCompletion`, so
+the command processor must therefore call the renderer's `before_completion`, so
 that every guest-memory read owed to earlier draws is made first
 ([rendering.md](rendering.md#submissions-segments-and-frame-slots)). Reports
 that count as completion are `EVENT_WRITE_SHD` and `EVENT_WRITE_CFL`, and any
@@ -153,15 +199,20 @@ because the renderer would take it for a texture binding.
 ## Interrupts and the vblank
 
 The title's callback runs with `r3` = source and `r4` = context, on a 64 KB
-guest stack, with `r13` set to the raising thread's KPCR. The console
+guest stack, with `r13` set to the raising thread's KPCR, in the float mode the
+host thread had, which it gets back after the call as `kernel::call_guest`'s
+caller does ([runtime.md](runtime.md#calling-guest-code-from-the-host)): the
+handler's vector code would leave the consumer and the vblank thread flushing
+denormals. The console
 delivers graphics interrupts on one hardware thread, so the two raising threads
-take turns under a mutex.
+take turns: a lock held across the call into the guest, which a thread waits for by
+spinning a little and then parking.
 
 - **Source 1, command processor.** `INTERRUPT` raises it once per processor bit
   (0-5) in its mask, with `KPCR.CurrentProcessorNumber` (+268) set to that
   processor, because the handler uses it to clear that processor's pending bit.
 - **Source 0, vblank.** The vblank thread (with its own KPCR) runs at
-  `vk::GuestBlankPeriod()`, which follows the display
+  the presenter's `guest_blank_period()`, which follows the display
   ([rendering.md](rendering.md#presenting)), or at 60 Hz. It writes 1 to the
   display status word at aperture `+0x6544` first: D3D's handler retires queued
   flips only when bit 0 is set. The blank must not depend on frame time,
@@ -194,7 +245,7 @@ frames or call the block callback itself. A second path makes the retired count
 overtake the submitted count, and D3D's present then waits on a meaningless
 difference.
 
-## The command-buffer arena (`runtime/gpu/arena.cpp`)
+## The command-buffer arena (`src/runtime/gpu/arena.rs`)
 
 D3D9's command segments come from an arena that is a ring of its own. Before
 overwriting any of it, the title polls the progress block at `[device+10896]`
@@ -204,7 +255,7 @@ until the command processor has read past:
     +4  read position, a two-bit lap counter in its low bits
 
 Each segment ends with a trailer of two `EVENT_WRITE_SHD` packets: the position,
-then the sequence. `ArenaProgress` holds the position until its sequence
+then the sequence. `arena_progress` holds the position until its sequence
 arrives. It applies both only when the sequence is 1 to 1024 ahead of the last
 one, and drops them otherwise.
 

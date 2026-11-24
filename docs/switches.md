@@ -1,13 +1,13 @@
 # Switches
 
 The runtime is configured through `MW2_*` environment variables. A flag is on
-when set to anything but empty or `0` (`runtime/env.h`).
+when set to anything but empty or `0` (`src/env.rs`).
 
 ## The settings file
 
 A file named `.env` beside the executables (in the current directory for a
 development run) holds switches as `NAME=value`, one a line. The runtime reads
-it first thing (`runtime/settings.cpp`) and sets each `MW2_` switch the
+it first thing (`src/runtime/settings.rs`) and sets each `MW2_` switch the
 environment does not already have, so a variable given on the command line
 decides. The launcher writes its own settings there (FULLSCREEN is
 `MW2_FULLSCREEN`, ASPECT RATIO and RESOLUTION are `MW2_RENDER` and `MW2_SCALE`, STRETCH is `MW2_STRETCH`, ANTIALIASING is `MW2_MSAA` or
@@ -21,7 +21,7 @@ the launcher looks for Steam's copy once a run and writes the line when it finds
 ([maps.md](maps.md#inputs)).
 
 Switches marked **R** are read by every build. The rest are diagnostic: a build
-without diagnostics (`RELEASE=1 ./build.sh`, `-DMW2_DIAGNOSTICS=OFF`) treats
+without diagnostics (`cargo xtask build --release`) treats
 them as unset whatever the environment says, and also drops the keys `F5`, `F7`,
 `F9`, `F10` and `F11`, `kill -USR2` and the end-of-run reports.
 
@@ -82,16 +82,36 @@ walking to it.
 | `MW2_TRACE_VIEWPOS=1` | logs where the player stands once a second |
 | `F9` | with the window open and `MW2_ENGINE_LOG=1`: runs the title's `viewpos` and logs the position, whose five numbers `setviewpos x y z yaw pitch` takes in single player |
 
+A release build has none of these. `tools/padwalk.py` walks a route there from
+outside the game, which runs unchanged as its child (Linux only; not through a Flatpak
+Steam, which forks the game elsewhere):
+
+    MW2_CONSOLE="3:map mp_afghan" systemd-run --user --scope -p MemoryMax=6G \
+        tools/padwalk.py --route tools/routes/route.txt,tools/routes/route2.txt \
+        --title mp --team-up 1 --quit-after-arrival 5 -- out/<build>/mw2 mw2/default_mp.pe mw2/game
+
+It makes a controller through the kernel's `uinput` (write access to `/dev/uinput`
+needed), under a test id no real device has, and the game is shown that controller alone
+(`SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT`), so a physical one plugged in is left out.
+It reads the player's position through `/proc/<pid>/mem`: the guest memory starts
+0xA0000000 below the first mapping of `mw2-physical`, the shared memory object
+`src/runtime/guest_memory.rs` places there, so a stripped executable will do, and the
+addresses are those of `runtime/title.h`. It steers as `MW2_WALK_PATH` does, with
+`--team-up`, `--reach`, `--quit-after-arrival` and `--quit-if-stuck` for the switches of
+the same names, and ends the game with SIGINT, which the game takes as its window
+closed. One difference: a menu is told by the position not moving in x and y alone, as
+the title writes the height twice a frame and a read from outside sees both values.
+
 ## The guest
 
 | switch | effect |
 |---|---|
-| `MW2_TRACE_INDIRECT` | CMake option, on by default: reports an indirect call with no recompiled target instead of jumping to null (one outside the code section is reported in every build) |
+| `MW2_TRACE_INDIRECT` | always defined by `build.rs` for the guest code (not a run-time switch): reports an indirect call with no recompiled target instead of jumping to null (one outside the code section is reported in every build) |
 | `MW2_ENGINE_LOG=1` | the title's own `Com_Printf` output in the log |
 | `MW2_TRACE_ERRORS=1` | the guest call stack under every `Com_Error`; one wrapper raises every error, so the message alone does not say where it came from |
 | `MW2_TRACE_CBUF=1` | every command queued to the title's console, which shows what a menu runs |
 | `MW2_TRACE_FILES=1` | every file opened, read and written. The files asked for and not found are listed at exit regardless |
-| `MW2_TRACE_XMA=1` | every XMA decoder kick with its buffers, and FFmpeg's log |
+| `MW2_TRACE_XMA=1` | every XMA decoder kick with its buffers |
 | `MW2_DUMP=<hex>[:words][,...]` | blocks of guest memory to print when the watchdog fires (16 words by default) |
 | `MW2_WATCH=<hex>[:bytes]` | a write watchpoint (Linux): the page is made read-only, and every guest write into the range is reported with its call stack and thread, up to `MW2_WATCH_REPORTS` (20); the command processor's writes there are reported too. It logs when it gives up on a busy page |
 
@@ -99,8 +119,9 @@ walking to it.
 
 | switch | effect |
 |---|---|
-| `MW2_DUMP_SHADERS=<dir>` | every distinct shader's microcode, for `tools/xenos_shader.py` and `translate-shader` |
+| `MW2_DUMP_SHADERS=<dir>` | every distinct shader's microcode, for `tools/xenos_shader.py` and `translate-shader`; and the built-in shaders as SPIR-V, for `spirv-val`: the window's backdrop (`builtin_backdrop_vertex.spv`, `builtin_backdrop_pixel.spv`), the display's colour table (`builtin_display_table.spv`) and the drawn depth resolve's (`builtin_drawn_resolve_cover_vertex.spv`, `builtin_drawn_resolve_fetch_depth.spv`), each when it is first made |
 | `MW2_DUMP_TEXTURES=<dir>` | every distinct bound texture, untiled, as PNM with each mip level, its fetch constant logged. `MW2_DUMP_TEXTURES_RAW=1` also writes the guest bytes; `MW2_DUMP_TEXTURES_AFTER=<seconds>` starts later, since a streamed texture is empty at its first bind |
+| `MW2_COUNT_PAST_ROWS=1` | the report counts the texture changes caught only past each level's whole rows, which the write watch and signature missed before they covered what the reader reads ([textures.md](textures.md)), zero included, so a run shows the switch was on; off by default, as it signs most new textures a second time while they are read |
 | end-of-run reports | packets by opcode, frame times, draws and presents per second, arena copies, draws per render target, texture and shader work |
 
 ## Drawing
@@ -137,6 +158,29 @@ walking to it.
 | `MW2_TRACE_PACING=<file>` | | a timeline written at exit: the consumer's batches and swaps, the title's presents, and every guest thread's engine waits, kernel waits and sleeps with their callers ([multiplayer.md](multiplayer.md)) |
 | `MW2_STUTTERS=1` | | (at the console's pacing only, not under `MW2_FPS_LIMIT`) from the first 30 consecutive world frames on, logs `STUTTER` for every world frame 25 ms or more after the previous one, with what the renderer spent the gap on, and `DISPLAY` when a frame is held or dropped by the window; totals at exit. When play stops for a second it logs `STALL` with what every guest thread waits on and every thread's stack (Linux), once a stall. The pad's Y and `F7` log a `STUTTER MARK` |
 
+## Checking the renderer
+
+What makes one build's renderer a reference for another's ([rendering.md](rendering.md#checking)).
+
+| switch | effect |
+|---|---|
+| `MW2_TRACE_COMMANDS=<file>[:<first frame>:<frames>]` | every Vulkan call the renderer makes that creates, destroys, records or submits, one normalised line each, from that frame for that many (all of them unset) |
+| `MW2_HASH_FRAMES=1` | reads every present image back and logs `renderer: frame <n> hash <fnv64>` |
+| `MW2_DETERMINISTIC=1` | none of the renderer's decisions taken by the clock: every submission waited for before it counts as done, no shader workers or optimised links, every doomed texture destroyed at once, no GPU timing |
+| `MW2_FORCE_INSTANCE_DEPTH_RESOLVE=1` | resolves a multisampled depth surface by a rendering instance where a draw would |
+| `MW2_FORCE_RESOLVE_TWIN=1` | resolves every multisampled surface into its single-sampled twin and copies from there |
+| `MW2_DRAWN_RESOLVE_SETS=<n>` | n descriptor sets for the drawn depth resolve (64), so the pool runs dry |
+| `MW2_FORCE_RESOLVE_REMAKE=<frames>` | makes every resolve image again at its first resolve after every nth frame |
+| `MW2_NO_MULTI_DRAW=1` | one call a draw, without `VK_EXT_multi_draw` |
+| `MW2_FORCE_LONE_UPLOADS=1` | submits every texture upload on its own, waited for |
+| `MW2_STAGING_LEAST_KB=<kb>` | the least an upload slot's staging buffer is (8 MB), so uploads overflow it |
+| `MW2_FORCE_REFUSED_LIBRARIES=vertex\|pixel\|all` | treats the pipeline library of every vertex, pixel or every shader as refused by the driver, so that pipelines are built whole, a library's module made again for them |
+| `MW2_FAKE_FORMAT_UNSUPPORTED=<VkFormat>[:<hex>],...` | the listed formats (VkFormat numbers) lose every feature, or with `:<hex>` those VkFormatFeatureFlags bits (`37:1000`: R8G8B8A8 not filterable), to the renderer's checks and fallbacks (docs/textures.md, docs/rendering.md); not to the depth format's choice (`shaders/src/shader_build.rs`, hashed into the shader build's id) |
+| `MW2_SUBGROUP_CHECK=1\|2` | at the renderer's start, draws 10^6 one-to-three-pixel triangles, each its own draw, and says whether a subgroup of pixel invocations ever held two draws, which the pixel shaders' record relies on (docs/shaders.md), then runs its control, every triangle in one draw, and passes only where the control shows the device puts several triangles in one subgroup (else no verdict: the check could not fail there); `2` runs the control alone |
+| `MW2_FAKE_DEVICE_LOST=<seconds>` | fails every submission from then on as a lost device, which ends the run |
+| `MW2_CAPTURE_GPU=<dir>:<after presents>:<presents>` | records the GPU's input into `<dir>`, from the batch where the command processor has met that many swap packets for that many more: a snapshot of memory and of the command processor, the ring, every page the GPU side read as the title had written it, image-pool moves and waits, each at its position (batch, packet) |
+| `MW2_REPLAY_GPU=<dir>` | runs that capture with no title: the command processor and renderer take it as the title gave it, the window shows, and the run ends with the reports and `replay: <n> divergences, <m> wait timeouts`. `tools/replay_diff.py <dir> <exe A> <exe B>` replays one capture on two executables and compares what they did |
+
 ## Frames and captures
 
 | switch | effect |
@@ -152,4 +196,4 @@ walking to it.
 
 | switch | effect |
 |---|---|
-| `MW2_TITLE=sp\|mp` | which executable the Python tools work on (`tools/title.py`); `build.sh` sets it from `TITLE` |
+| `MW2_TITLE=sp\|mp` | which executable the Python tools work on (`tools/title.py`); `cargo xtask` sets it from `--title` for what it runs |

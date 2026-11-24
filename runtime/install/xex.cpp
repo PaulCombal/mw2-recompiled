@@ -62,7 +62,7 @@ bool install::xex::Image(const std::vector<uint8_t>& file, std::vector<uint8_t>&
     if (compression > 1) { error = "the XEX uses a compression neither the disc nor an update does (" + std::to_string(compression) + ")"; return false; }
     if (encryption > 1) { error = "the XEX uses an unknown encryption"; return false; }
 
-    // The payload, padded to whole AES blocks, as tools/xexdump.py does.
+    // The payload, padded to whole AES blocks, as xtask/src/xexdump.rs does.
     std::vector<uint8_t> data(file.begin() + dataOffset, file.end());
     data.resize((data.size() + 15) & ~size_t(15));
     if (encryption == 1)

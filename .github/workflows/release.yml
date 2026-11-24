@@ -36,6 +36,8 @@ jobs:
       CCACHE_COMPILERCHECK: content
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Check out the game's executables
         uses: actions/checkout@v6
@@ -56,9 +58,10 @@ jobs:
           wget -qO llvm.sh https://apt.llvm.org/llvm.sh
           sudo bash llvm.sh 18
           # Clang builds against the newest libstdc++ it finds, and 22.04's is
-          # GCC 12's. The toolchain PPA's GCC 13 one is what the runtime is
-          # built with elsewhere; a release links it statically (MW2_PORTABLE),
-          # so the binary still asks for nothing past glibc 2.35.
+          # GCC 12's. The toolchain PPA's GCC 13 one is what the launcher is
+          # built with elsewhere; a release links it statically (the portable feature),
+          # so the launcher still asks for nothing past glibc 2.35. The game
+          # has no C++.
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
           # SDL3's video, audio, input and dialog backends, and the Vulkan loader.
           sudo apt-get update
@@ -68,11 +71,11 @@ jobs:
             libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libdrm-dev libgbm-dev \
             libasound2-dev libpulse-dev libpipewire-0.3-dev \
             libdbus-1-dev libibus-1.0-dev libudev-dev libvulkan-dev
-          # Ubuntu 22.04's Vulkan headers predate extensions the renderer asks for.
-          git clone -q --depth 1 --branch v1.3.275 https://github.com/KhronosGroup/Vulkan-Headers.git
-          cmake -S Vulkan-Headers -B Vulkan-Headers/build -G Ninja
-          sudo cmake --install Vulkan-Headers/build
-          rm -rf Vulkan-Headers llvm.sh
+          rm llvm.sh
+
+      - name: Install the Rust toolchain
+        # The one rust-toolchain.toml pins, which runs the xtask.
+        run: rustup toolchain install
 
       - name: Restore the compiler cache
         uses: actions/cache@v5
@@ -86,12 +89,14 @@ jobs:
 
       - name: Build
         run: |
-          export CMAKE_EXTRA="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DFETCHCONTENT_BASE_DIR=$PWD/out/_deps -DMW2_LTO_CACHE=$PWD/.lto-cache"
+          extra=(--cmake-extra=-DCMAKE_C_COMPILER_LAUNCHER=ccache --cmake-extra=-DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+                 --cmake-extra=-DFETCHCONTENT_BASE_DIR=$PWD/out/_deps)
           # The launcher is the same for both titles, and the tools are not shipped:
           # the campaign's build makes the game and the launcher, the multiplayer's the game.
           for title in sp mp; do
             targets="mw2"; [ $title = sp ] && targets="mw2 launcher"
-            TITLE=$title RELEASE=1 RELEASE_TAG=${{ inputs.version }} BUILD_DIR=out/$title TARGETS="$targets" ./build.sh
+            MW2_LTO_CACHE=$PWD/.lto-cache cargo xtask build --title $title --release --release-tag ${{ inputs.version }} --build-dir out/$title \
+              --targets "$targets" "${extra[@]}"
           done
           ccache --show-stats
 
@@ -131,6 +136,8 @@ jobs:
       LLVM_MINGW_RELEASE: "20260922"
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Check out the game's executables
         uses: actions/checkout@v6
@@ -149,12 +156,28 @@ jobs:
       - name: Install the toolchains
         run: |
           sudo apt-get update
-          # clang-18 builds XenonRecomp, which runs here; llvm-mingw builds the game.
+          # clang-18 builds XenonRecomp, which runs here, and the xtask's link; llvm-mingw builds the game.
           sudo apt-get install -y clang-18 lld-18 ninja-build ccache zip
           name=llvm-mingw-$LLVM_MINGW_RELEASE-ucrt-ubuntu-22.04-x86_64
           wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_RELEASE/$name.tar.xz
           tar xf $name.tar.xz -C $HOME && rm $name.tar.xz
           echo "LLVM_MINGW=$HOME/$name" >> "$GITHUB_ENV"
+
+      - name: Fetch the Vulkan headers
+        # The game's Windows build takes them from MW2_VULKAN_HEADERS: the archive
+        # and version cmake/vulkan-windows.cmake fetches for the launcher.
+        run: |
+          url=$(grep -o 'https://github.com/KhronosGroup/Vulkan-Headers/[^ ]*' cmake/vulkan-windows.cmake)
+          sum=$(grep -o 'SHA256=[0-9a-f]*' cmake/vulkan-windows.cmake | cut -d= -f2)
+          wget -q -O vulkan-headers.tar.gz "$url"
+          echo "$sum  vulkan-headers.tar.gz" | sha256sum -c -
+          mkdir -p $HOME/vulkan-headers
+          tar xzf vulkan-headers.tar.gz -C $HOME/vulkan-headers --strip-components=1 && rm vulkan-headers.tar.gz
+          echo "MW2_VULKAN_HEADERS=$HOME/vulkan-headers/include" >> "$GITHUB_ENV"
+
+      - name: Install the Rust toolchain
+        # The one rust-toolchain.toml pins, which runs the xtask.
+        run: rustup toolchain install
 
       - name: Restore the compiler cache
         uses: actions/cache@v5
@@ -168,12 +191,14 @@ jobs:
 
       - name: Build
         run: |
-          export CMAKE_EXTRA="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DFETCHCONTENT_BASE_DIR=$PWD/out/_deps -DMW2_LTO_CACHE=$PWD/.lto-cache"
+          extra=(--cmake-extra=-DCMAKE_C_COMPILER_LAUNCHER=ccache --cmake-extra=-DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+                 --cmake-extra=-DFETCHCONTENT_BASE_DIR=$PWD/out/_deps)
           # The launcher is the same for both titles, and the tools are not shipped:
           # the campaign's build makes the game and the launcher, the multiplayer's the game.
           for title in sp mp; do
             targets="mw2"; [ $title = sp ] && targets="mw2 launcher"
-            WINDOWS=1 TITLE=$title RELEASE=1 RELEASE_TAG=${{ inputs.version }} BUILD_DIR=out/$title TARGETS="$targets" ./build.sh
+            MW2_LTO_CACHE=$PWD/.lto-cache cargo xtask build --windows --title $title --release --release-tag ${{ inputs.version }} --build-dir out/$title \
+              --targets "$targets" "${extra[@]}"
           done
           ccache --show-stats
 

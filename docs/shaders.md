@@ -9,17 +9,33 @@ translation.
 
 | Piece | Where |
 |---|---|
-| Microcode field layouts | `runtime/gpu/vulkan/xenos_ucode.h` |
-| Translator | `runtime/gpu/vulkan/shader_translator.{h,cpp}` |
-| SPIR-V binary writer | `runtime/gpu/vulkan/spirv.{h,cpp}` |
-| Resource interface | `runtime/gpu/vulkan/bindings.h` |
-| Offline translator | `tools/translate_shader.cpp` (target `translate-shader`) |
+| Microcode field layouts | `shaders/src/shader/ucode.rs` |
+| Translator | `shaders/src/shader/translator*.rs`, which the game and the launcher's compile pass build shaders with (`shaders/src/shader_build.rs`) |
+| SPIR-V binary writer | `shaders/src/shader/spirv.rs` (what the translator uses) |
+| Resource interface | `shaders/src/shader/bindings.rs` |
+| The SPIR-V run against Xenia's results | `shaders/evaluate.py`: small programs translated (`shaders/evaluate_dump.rs`) and run by an interpreter (the clamped ops at their edges, what a switched-off instruction leaves, arena reads past the buffer's end) |
+| Offline translator | `shaders/translate_shader.rs` (the `translate-shader` binary of the `mw2-shaders` crate) |
 | Disassembler | `tools/xenos_shader.py` (control flow), `tools/xenos_isa.py` (ALU and fetch) |
 | Fastfile extractor | `tools/extract_shaders.py` |
 
+## One translator
+
+The game and the launcher's compile pass translate with the same crate,
+`mw2-shaders`: the launcher's pipeline cache holds exactly the modules the game
+makes, because both make them with the same code.
+
+Every `*.rs` under `shaders/src/` -- the translator in `shader/`, the pipeline
+layout and a shader's build beside it -- is in the shader build's hash, beside
+the launcher's compile pass and zone reader ([building.md](building.md)), so a
+change there makes a player's copy compile its shaders again. Files a `*.rs` includes are not
+hashed. SPIR-V builder methods that only the built-in shaders use (the
+backdrop, the display table, the drawn resolve) live in the game, outside the
+crate (`src/runtime/gpu/vulkan/spirv_builtin.rs`), so that adding one leaves
+the hash as it is.
+
 ## How shaders reach the GPU
 
-The command processor (`runtime/gpu/command_processor.cpp`) loads a program
+The command processor (`src/runtime/gpu/command_processor.rs`) loads a program
 from two packets:
 
 | Packet | Payload |
@@ -34,12 +50,14 @@ payload is command buffer rather than microcode.
 
 A shader is identified by a hash of its microcode. An `IM_LOAD`'s microcode and
 hash are kept by address, length and stage while the memory watch
-(`gpu/memory_watch.h`) says nothing has written their pages, so a frame's
+(`src/runtime/gpu/memory_watch.rs`) says nothing has written their pages, so a frame's
 thousands of loads of a few hundred shaders read and hash each one once. With diagnostics compiled in
-(the default; `-DMW2_DIAGNOSTICS=OFF` removes them, see
+(the default; `cargo xtask build --release` removes them, see
 [building.md](building.md)), `MW2_DUMP_SHADERS=<dir>` writes each distinct
 program as
-`vertex_<hash>.ucode` / `pixel_<hash>.ucode`, big-endian as the guest holds it
+`vertex_<hash>.ucode` / `pixel_<hash>.ucode`, big-endian as the guest holds it,
+and the window's backdrop shaders as `builtin_backdrop_vertex.spv` and
+`builtin_backdrop_pixel.spv`, the same words from either renderer
 (see [switches.md](switches.md)).
 
 ## Shaders in the fastfiles
@@ -111,7 +129,7 @@ three possible constant operands (`Alu::SourceConstantIsAddressed`).
 ## The module interface
 
 Every translated shader is built against one fixed interface
-(`runtime/gpu/vulkan/bindings.h`), so a single pipeline layout serves every
+(`shaders/src/shader/bindings.rs`), so a single pipeline layout serves every
 shader and nothing is reflected at bind time.
 
 ```
@@ -154,7 +172,30 @@ the draw's record, in the arena at the dword the draw passes as its base vertex
   invocation (`OpGroupNonUniformBroadcastFirst`). Without that, every
   constant read in a pixel shader would be a load per pixel. A subgroup never
   spans two draws: a texture index without `NonUniform` already relies on
-  that.
+  that. Vulkan does not promise it, so it is measured: `MW2_SUBGROUP_CHECK=1`
+  (diagnostics builds) draws, at the renderer's start, 10^6 adjacent
+  triangles of one to three pixels, each its own draw, in multi-draw runs as
+  the renderer gathers them (half without indices, half with; one call a draw
+  under `MW2_NO_MULTI_DRAW=1`), the record in `BaseVertex`, with a pixel
+  shader that writes `record << 1 | (broadcastFirst(record) != record)` into
+  an `R32_UINT` attachment read back; every pixel must hold its own
+  triangle's record, or the check gives no verdict. A device without the
+  basic and ballot subgroup operations in the fragment stage (Vulkan 1.1
+  requires them only in compute) cannot run that shader, nor the translated
+  ones: the check says it could not run. After a clean check the control
+  runs: the same triangles in one draw, a record each, which shows whether
+  the device puts several triangles in one subgroup at all. The check passes
+  only where the control shows it does; where it does not, the check could
+  not have failed and says so ("no verdict"). `MW2_SUBGROUP_CHECK=2` runs the
+  control alone.
+
+  | Device | Subgroup | The check (multi-draw, one call a draw) | The control |
+  |---|---|---|---|
+  | AMD Radeon (RADV, Renoir) | 64 | passed: no subgroup held two draws | 1,921,575 of 2,000,000 pixels saw another triangle's record |
+  | lavapipe (llvmpipe, LLVM 20) | 8 | no subgroup held two draws, no verdict | none: a subgroup is one triangle's, so the check cannot fail there |
+
+  A device that fails needs the record taken per pixel (`OpLoad` of the
+  flat input alone), a translator change and so a new shader build.
 - **Each record word is loaded once**, where a driver would sink the load:
   in the narrowest block that dominates every read of it, ahead of the first
   (`RecordWord`, `PlaceRecordLoads`). A straight-line program is one block,
@@ -260,16 +301,48 @@ loop constant (step and start are signed 8-bit), clamped to [-256, 256].
 
 ### Predication
 
-Predication is not branching: a predicated instruction executes and only its
-write is suppressed. Every store is a select under the condition in force —
-the instruction's own predicate, a `cond_exec_pred*` block's predicate, or a
-`cond_exec` boolean constant (uniform for the draw). The same applies to fetch
-results and `set_lod`.
+Predication is not branching: a predicated instruction is built as running and
+everything it writes is suppressed. Every store is a select under the
+condition in force — the instruction's own predicate, a `cond_exec_pred*`
+block's predicate, or a `cond_exec` boolean constant (uniform for the draw).
+That covers registers and exports, fetch results and `set_lod`, kills, and the
+state an instruction leaves for the next: the previous scalar result (`ps`,
+which `retain_prev` and the `*_prev` ops read), a0 (`maxas`, `maxasf`) and the
+predicate itself (`setp*`). An instruction the condition switches off leaves
+all three as they were, which is Xenia's rule: it runs the instruction inside
+the condition's `if` (`UpdateInstructionPredication` and the exec's
+conditional in `spirv_shader_translator.cc`). 4,517 of the game's 15,044
+shaders have a scalar instruction under a condition; 4,005 read `ps` after
+one.
 
 The `setp` family writes the predicate and a result together: the predicate
 takes the comparison against zero, the destination 0 where it holds and 1 where
 not (`setp_rstr` keeps the source, `setp_clr` writes FLT_MAX). Scalar
 comparisons test one component against zero.
+
+Every predicated instruction reads the predicate as last stored, so an
+instruction after a `setp*` in the same exec sees the new value. Xenia does
+the same through `predicate_written` (re-checking after any `setp`), except
+for `setp_clr`: its `kSetpClr` case stores false without setting
+`predicate_written`, so inside a `cond_exec_pred*` block, or a run of
+instructions predicated alike, a later predicated instruction still runs on
+the predicate read before the `setp_clr`. The translator does not copy that:
+it is a deviation from Xenia, named here, and contradicts Xenia's own
+comment that the predicate "may be different" after a `setp`. No shader in
+`diagnosis/` has a predicated instruction after a `setp_clr` in such a region
+(470 of 192,624 programs use `setp_clr` at all). The evaluation rig holds the
+translator's rule.
+
+The clamped and floored reciprocals and logarithm follow Xenia's
+`ProcessScalarAluOperation` (`spirv_shader_translator_alu.cc`): `logc` turns
+-inf into -FLT_MAX; `rcpc` and `rsqc` turn -inf and +inf into -FLT_MAX and
++FLT_MAX; `rcpf` and `rsqf` turn them into -0 and +0 (the -0 made from its
+bits, since a constant -0.0 compares equal to 0.0). NaN and every finite
+result go through, and `rcp`, `rsq` and `log` are the plain operations. None
+of the game's shaders uses the five; the fuzzer and the evaluation rig reach
+them. Xenia also rounds these results to 21 mantissa bits
+(`ReduceFloatPrecision`), for the plain operations as well; the translator
+does not.
 
 Kills are deferred: the discard is recorded and performed after the sequencer
 finishes, because `OpKill` would terminate a block inside the dispatch switch.
@@ -401,15 +474,15 @@ the sampler comes from the fetch constant alone.
 ## Validating a translation
 
 ```
-cmake --build build --target translate-shader
+cargo xtask build --keep-generated --targets translate-shader
 ./build/translate-shader [--compile] vertex_<hash>.ucode out.spv
-spirv-val --target-env vulkan1.0 out.spv
+spirv-val --target-env vulkan1.1 out.spv
 ```
 
 The shader type comes from the file name (`pixel`/`ps_` means pixel). Run both
 checks: `spirv-val` checks the binary against the specification, `--compile`
-hands it to the real driver against the actual pipeline layout
-(`runtime/gpu/vulkan/pipeline.cpp`). A driver accepting a module is not
+hands it to the real driver, on a device brought up as the game's
+(`shaders/src/pipeline.rs`). A driver accepting a module is not
 evidence that it is valid — drivers accept, for example, duplicate
 `OpTypeImage` declarations and implicit-LOD sampling in a vertex shader, both
 invalid SPIR-V.

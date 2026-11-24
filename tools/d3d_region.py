@@ -40,10 +40,10 @@ for a in range(TVA, TVA + TSZ, 4):
     callees.setdefault(c, set()).add(t)
 
 # ---- import stubs, by name --------------------------------------------------
-mapping = title.ppc("ppc_func_mapping.cpp")
+mapping = title.ppc("ppc_recomp/src/lib.rs")
 IMPORTS = {}
 if os.path.exists(mapping):
-    for m in re.finditer(r'\{ (0x[0-9A-F]+), __imp__(\w+) \}', open(mapping).read()):
+    for m in re.finditer(r'PPCFuncMapping \{ guest: (0x[0-9A-F]+), host: Some\(__imp__(\w+)\) \}', open(mapping).read()):
         IMPORTS[int(m.group(1), 16)] = m.group(2)
 
 # ---- seeds ------------------------------------------------------------------

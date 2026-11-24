@@ -1,0 +1,27 @@
+# The launcher (launcher/): what a player opens, mw2-launcher. Its entry and its
+# compile pass are Rust, on the shaders crate the game builds its shaders with
+# (shaders/); its window, the install and the map converter are the C++ library
+# launcher_core, which build.rs builds through CMake (CMakeLists.txt) in the build
+# folder cargo xtask configured, and links. cargo xtask build makes it; it is not
+# the workspace's default member, so a plain cargo build makes the game alone.
+[package]
+name = "mw2-launcher"
+version = "0.0.0"
+edition = "2024"
+publish = false
+build = "build.rs"
+
+[[bin]]
+name = "mw2-launcher"
+path = "src/main.rs"
+
+[features]
+default = ["diagnostics"]
+# On Windows, the console window a terminal run prints to.
+diagnostics = []
+# The C++ standard library linked in, for a binary that runs on other machines.
+portable = []
+
+[dependencies]
+ash = { version = "=0.38.0", default-features = false, features = ["std", "linked"] }
+mw2-shaders = { path = "../shaders" }

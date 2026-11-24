@@ -3,7 +3,7 @@
 //
 // A material's techniques carry their shaders inline. Each is in two parts:
 // the D3D shader object (the "cached" part) and the program the GPU runs (the
-// "physical" part). When the game loads one, runtime/shader_preload.cpp reads
+// "physical" part). When the game loads one, src/hooks/shader_preload.rs reads
 // the object's header to find where in the program the microcode is, and
 // hands the renderer those bytes. The same rule over the same two parts in the
 // file gives the same bytes, and so the same name (vk::renderer::ShaderHash).

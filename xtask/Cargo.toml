@@ -1,0 +1,14 @@
+# cargo xtask: the build, from the disc to the executables (src/main.rs says how).
+# A workspace of its own, as the game's cannot be read before this has generated
+# the guest code it depends on. Nothing but std.
+[package]
+name = "xtask"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+# AES over an executable's 5 MB and a disc's 6 GB of copying: not at debug speed.
+[profile.dev]
+opt-level = 2

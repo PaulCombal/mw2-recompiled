@@ -1,6 +1,6 @@
 #pragma once
 // A title update's package: the console's content container (STFS), of the
-// read-only kind a downloaded update is (LIVE or PIRS), as tools/stfs.py reads
+// read-only kind a downloaded update is (LIVE or PIRS), as xtask/src/stfs.rs reads
 // it.
 #include <cstdint>
 #include <map>

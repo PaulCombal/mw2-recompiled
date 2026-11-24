@@ -11,7 +11,7 @@ onto that one flat directory.
 
 | files | status |
 |---|---|
-| `.ff` fastfiles, `.pak` image archives, `.bik` Bink movies | all of them are extracted, by `build.sh` from the ISO or by the launcher (`launcher/`) |
+| `.ff` fastfiles, `.pak` image archives, `.bik` Bink movies | all of them are extracted, by `cargo xtask` from the ISO or by the launcher (`launcher/`) |
 
 Every fastfile is needed, not only the current level's: a zone whose file is
 missing makes the title report a dirty disc and fail, and the multiplayer picks
@@ -19,10 +19,10 @@ its own zones.
 
 The multiplayer's fastfiles are signed, and it refuses one that is not with the
 same dirty-disc report. With `MW2_CUSTOM_MAPS=1` (the launcher's MAPS → CUSTOM
-MAPS), `runtime/unsigned_fastfiles.cpp` lets it load them, which is what a map
+MAPS), `src/hooks/unsigned_fastfiles.rs` lets it load them, which is what a map
 converted from the PC game is: its two files (`<map>.ff`, `<map>_load.ff`) in
 the game root, and its menu picture (`<map>_preview.ff`). Its `<map>.arena` beside them, which the PC map comes with,
-puts it in the menus (`runtime/custom_map_list.cpp`), for every map whose two
+puts it in the menus (`src/hooks/custom_map_list.rs`), for every map whose two
 files are there:
 
 - **The arena table**, where the lobby looks a map's name and picture up: the
@@ -86,7 +86,7 @@ The time is wall-clock seconds since the runtime started (the clock
 separates the time, so a command may contain spaces. It is kept in release
 builds.
 
-`runtime/console.cpp` calls the title's `Cbuf_AddText` (`T_Cbuf_AddText` in
+`src/runtime/console.rs` calls the title's `Cbuf_AddText` (`T_Cbuf_AddText` in
 [`runtime/title.h`](../runtime/title.h)) from `XamInputGetState`, which the title
 polls once a frame on its main thread, so a live guest context is always
 available. `Cbuf_AddText` copies its text, so the string only has to outlive the
@@ -103,7 +103,7 @@ multiplayer refuses it ([switches.md](switches.md)).
 
 ## Controllers
 
-`runtime/kernel/input.cpp` backs `XamInputGetState`, `XamInputGetCapabilities`
+`src/runtime/kernel/input.rs` backs `XamInputGetState`, `XamInputGetCapabilities`
 and `XamInputSetState` with SDL3 gamepads; controller *n* is SDL's *n*-th
 gamepad, looked for again once a second while absent. Capabilities report a
 wired 360 pad: every control at full range and both motors at `0xFFFF`.
@@ -125,7 +125,7 @@ fire (`MW2_INPUT_SCRIPT`).
 
 Every player is a profile of this machine: a line of `saves/profiles.txt`,
 twelve hexadecimal digits -- the number the title knows him by -- and a name
-(`runtime/signin.cpp`).
+(`src/runtime/signin.rs`).
 
 The first controller's profile is signed in from the start. It is made the
 first time the game runs, named after the login (or `MW2_NAME`), and is the
@@ -138,7 +138,7 @@ machine ([saves.md](saves.md)), whichever service he plays through.
 The file's `machine` line is a hash of the machine's own id (`MachineGuid`,
 `/etc/machine-id`). Read on another machine, where a copied game folder ends
 up, every profile gets a new number and what was kept under the old one is
-renamed (`kernel::MovePlayerData`): two machines playing as one player is two
+renamed (`kernel::xam::move_player_data`): two machines playing as one player is two
 of the same player in a match, and the title drops the host when a player it
 already has connects again.
 
@@ -151,14 +151,14 @@ LINK. The Guide button at the second to fourth controllers opens it too, as on
 the console, or Back and Start together where the system keeps that button.
 
 At the first controller the Guide button (or the keyboard's Home) opens the
-guide (`guide.h`): the player's name, the time, what the title says they are
+guide (`src/runtime/guide.rs`): the player's name, the time, what the title says they are
 doing, the network and the friends on it, then Resume, Invite friends and Quit
 to desktop, which asks once more. "What the title says" is its rich presence,
 as the console's guide showed it ("Playing Team Deathmatch in Afghan"): the
 title sets contexts with `XUserSetContext`, and the strings for each are in its
-XLAST, gzipped in the SPA resource of its image (`presence.h`). The system's
+XLAST, gzipped in the SPA resource of its image (`src/runtime/presence.rs`). The system's
 screens are drawn over a blurred and darkened copy of the game
-(`gpu/vulkan/backdrop.h`).
+(`src/runtime/gpu/vulkan/backdrop.rs`).
 
 The console's screen also signs a guest in beside a player on Live. This one
 does not: the title's split screen is offline only, and its system link takes
@@ -186,7 +186,7 @@ The campaign asks which storage device to save to until each controller has
 one. `Memcard_InitializeSystem` keeps the choice in a table of one word per
 controller, and zero means "not chosen". On the console the choice lives in the
 profile and is made once; here the table starts empty every launch. The runtime
-hooks `Memcard_InitializeSystem` (`runtime/kernel/content.cpp`) and, after it
+hooks `Memcard_InitializeSystem` (`src/runtime/kernel/content.rs`) and, after it
 returns, writes the hard disk's device id into every empty slot, so the prompt
 does not appear. `MW2_NO_AUTO_SAVE_DEVICE=1` leaves the prompt to the title.
 The table's address is known only for the campaign (`T_DATA_DeviceTable` is zero
@@ -215,7 +215,7 @@ mapped over the same pages ([runtime.md](runtime.md)).
 **Packed vertex formats.** Level geometry is packed and unpacked on the CPU
 (skinning among others) with the VMX128 `vpkd3d128`/`vupkd3d128` instructions,
 in formats upstream XenonRecomp does not implement.
-`patches/xenonrecomp-mw2.patch` adds type 2 -- three 10-bit signed normalised
+XenonRecomp-rs adds type 2 -- three 10-bit signed normalised
 components with `w` in the top two bits, laid out like D3DCOLOR; like that case
 the instruction only moves each field into the mantissa of `3.0f`, and the
 caller's multiply-add by `(511 * 2^-22, -3.0)` finishes it, which is why full
@@ -223,7 +223,7 @@ scale is 511 -- and the `float16_2` pack.
 
 ## Field of view
 
-`MW2_FOV` (`runtime/field_of_view.cpp`) widens the view. The number is counted
+`MW2_FOV` (`src/hooks/field_of_view.rs`) widens the view. The number is counted
 as the title's own `cg_fov` is: the angle across a 4:3 picture, 65 by default.
 The title makes the 16:9 picture as tall as the 4:3 one and wider (the angle's
 tangent times 0.75 is the half height, and that times the picture's shape the

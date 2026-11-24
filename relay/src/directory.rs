@@ -151,10 +151,7 @@ mod tests {
         directory.put(3, 1, listing(5, 8, &[(7, 1), (9, 1)]));
         directory.put(4, 1, listing(5, 0, &[(7, 1), (9, 8)]));
         directory.put(5, 1, listing(5, 8, &[(9, 8)]));
-        let wants = [
-            Wanted { id: 7, value: 1, at_least: false },
-            Wanted { id: 9, value: 2, at_least: true },
-        ];
+        let wants = [Wanted { id: 7, value: 1, at_least: false }, Wanted { id: 9, value: 2, at_least: true }];
         let mut tally = Tally::default();
         assert_eq!(hosts(directory.search(0, 1, &wants, 50, &mut tally)), [1]);
         assert_eq!(tally.listed, 5);

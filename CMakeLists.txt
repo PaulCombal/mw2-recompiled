@@ -1,226 +1,63 @@
 cmake_minimum_required(VERSION 3.20)
 project(mw2recomp CXX)
 
+# The launcher and the tools. The game is Cargo's (Cargo.toml, build.rs), and
+# cargo xtask build hands CMake the rest: the launcher, what it fetches, and the
+# tools below.
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-option(MW2_USE_SDL "Use SDL3 for gamepad input (and later window/audio)" ON)
-option(MW2_TRACE_INDIRECT "Report indirect calls with no recompiled target instead of jumping to null" ON)
-option(MW2_LOGGING "Emit the runtime's log" ON)
+option(MW2_LOGGING "Emit the log" ON)
 option(MW2_PORTABLE "Link the C++ runtime statically, for a binary that runs on other machines" OFF)
-option(MW2_DIAGNOSTICS "Build the traces, dumps, statistics, reports and test harness (runtime/diagnostics.h)" ON)
-
-# The x86-64 level the game is compiled for. The 360's vector unit reads memory
-# big-endian, so nearly every vector load, store and permute of the recompiled
-# code is a byte shuffle: one pshufb from SSSE3 on, sixteen single-byte moves
-# below it, where SIMDe has nothing better. x86-64-v2 adds SSSE3, SSE4.1, SSE4.2
-# and POPCNT: Intel Core processors since 2008, AMD since 2011. The game says
-# so on an older one (runtime/cpu_level.cpp) rather than stopping on the first
-# instruction it lacks.
-set(MW2_X86_LEVEL "x86-64-v2" CACHE STRING "The -march the game is compiled for")
 
 # ---- which executable ------------------------------------------------------
-# The disc carries two: default.xex (the campaign and special ops) and
-# default_mp.xex (the multiplayer). Each is recompiled into its own tree by
-# build.sh (TITLE=sp|mp), and the runtime names the title's functions through
-# runtime/title.h, which this definition selects.
-set(MW2_TITLE "sp" CACHE STRING "Which executable to build: sp (default.xex) or mp (default_mp.xex)")
-if(MW2_TITLE STREQUAL "sp")
-    set(MW2_PPC_DIR "${CMAKE_SOURCE_DIR}/ppc")
-elseif(MW2_TITLE STREQUAL "mp")
-    set(MW2_PPC_DIR "${CMAKE_SOURCE_DIR}/ppc_mp")
-    add_compile_definitions(MW2_TITLE_MP=1)
-else()
-    message(FATAL_ERROR "MW2_TITLE must be sp or mp, not '${MW2_TITLE}'")
-endif()
-# And which version of it: the one title update 6 makes of the disc's (tu6),
-# or the disc's own (tu0), recompiled into ppc_tu0/ and ppc_mp_tu0/.
+# The launcher is the same for the campaign's executable and the multiplayer's.
+# Which version of them it installs: the one title update 6 makes of the disc's
+# (tu6), or the disc's own (tu0), as it is.
 set(MW2_VERSION "tu6" CACHE STRING "Which version of the executable: tu6 (title update 6) or tu0 (the disc's)")
 if(MW2_VERSION STREQUAL "tu0")
-    set(MW2_PPC_DIR "${MW2_PPC_DIR}_tu0")
     add_compile_definitions(MW2_VERSION_TU0=1)
 elseif(NOT MW2_VERSION STREQUAL "tu6")
     message(FATAL_ERROR "MW2_VERSION must be tu6 or tu0, not '${MW2_VERSION}'")
 endif()
-
-# ---- how the code is optimised ---------------------------------------------
-# Every target below, the libraries fetched included, is compiled for ThinLTO,
-# optimised across files at the link, and with the profile in pgo/: the counts
-# of a recorded play (tools/pgo_record.sh) that tell the compiler which
-# branches are taken and which calls are hot. Together they take ~13% off the
-# CPU time of the thread that limits the frame rate (docs/building.md).
-# MW2_PGO_TRAINING builds the counting executable the profile is recorded with.
-option(MW2_LTO "Optimise across files at the link (ThinLTO)" ON)
-option(MW2_PGO "Optimise with the recorded profile in pgo/, when there is one" ON)
-option(MW2_PGO_TRAINING "Build the executable that records a profile (tools/pgo_record.sh)" OFF)
-# Where the linker keeps what ThinLTO made of each module, for the next link to
-# reuse what did not change. A result taken from it is the one the linker would
-# have made, so a folder kept between builds (the release workflow's) only
-# makes the link faster.
-set(MW2_LTO_CACHE "${CMAKE_BINARY_DIR}/lto-cache" CACHE PATH "The ThinLTO cache folder")
-if(MW2_PGO_TRAINING)
-    add_compile_options(-fprofile-instr-generate)
-    add_link_options(-fprofile-instr-generate)
-else()
-    if(MW2_LTO)
-        add_compile_options(-flto=thin)
-        add_link_options(-flto=thin "-Wl,--thinlto-cache-dir=${MW2_LTO_CACHE}")
-        if(NOT WIN32)
-            # The system linker reads no LLVM bitcode; llvm-mingw's already is lld.
-            add_link_options(-fuse-ld=lld)
-        endif()
-        # Static libraries of bitcode need LLVM's archiver to be indexed; CMake
-        # takes it with clang.
-        if(NOT CMAKE_AR MATCHES "llvm-ar")
-            message(FATAL_ERROR "ThinLTO needs llvm-ar, not ${CMAKE_AR}: build with clang (build.sh), or -DMW2_LTO=OFF")
-        endif()
-    endif()
-    # The profile of this executable, unpacked into the build folder under a
-    # name its hash makes, so that a new one rebuilds everything with it. The
-    # disc's version (tu0) is other code, and has none.
-    set(MW2_PGO_ARCHIVE "${CMAKE_SOURCE_DIR}/pgo/${MW2_TITLE}.tar.xz")
-    if(MW2_PGO AND MW2_VERSION STREQUAL "tu6" AND EXISTS "${MW2_PGO_ARCHIVE}")
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MW2_PGO_ARCHIVE}")
-        file(SHA256 "${MW2_PGO_ARCHIVE}" hash)
-        string(SUBSTRING "${hash}" 0 16 hash)
-        set(profile_dir "${CMAKE_BINARY_DIR}/pgo-${hash}")
-        if(NOT EXISTS "${profile_dir}/${MW2_TITLE}.profdata")
-            file(ARCHIVE_EXTRACT INPUT "${MW2_PGO_ARCHIVE}" DESTINATION "${profile_dir}")
-        endif()
-        # A function changed since the recording is compiled without its counts.
-        add_compile_options("-fprofile-instr-use=${profile_dir}/${MW2_TITLE}.profdata"
-                            -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date)
-        message(STATUS "Profile: ${MW2_PGO_ARCHIVE}")
-    else()
-        message(STATUS "Profile: none")
-    endif()
-endif()
-
-# ---- recompiled guest code -------------------------------------------------
-file(GLOB PPC_SOURCES CONFIGURE_DEPENDS "${MW2_PPC_DIR}/ppc_recomp.*.cpp")
-list(APPEND PPC_SOURCES "${MW2_PPC_DIR}/ppc_func_mapping.cpp")
-if(NOT PPC_SOURCES)
-    message(FATAL_ERROR "${MW2_PPC_DIR} is empty -- run TITLE=${MW2_TITLE} VERSION=${MW2_VERSION} ./build.sh first to generate it")
-endif()
-
-add_library(ppc_recomp STATIC ${PPC_SOURCES})
-target_include_directories(ppc_recomp PUBLIC
-    "${MW2_PPC_DIR}"
-    "${CMAKE_SOURCE_DIR}/XenonRecomp/thirdparty/simde")
-# The generated code is machine output; its warnings are noise. Guest arithmetic
-# wraps as the console's does: without -fwrapv a mulld that overflows a signed
-# register is undefined, and the compiler miscompiles it.
-target_compile_options(ppc_recomp PRIVATE -w -fwrapv -march=${MW2_X86_LEVEL})
-# The console's hardware registers are plain memory in this address space. The
-# recompiler marks the stores that address them (eieio follows), and this header
-# routes those through a hook so the XMA decoder sees its kick, lock and clear
-# registers written. Force-included: ppc/ is regenerated by build.sh.
-target_compile_options(ppc_recomp PRIVATE -include "${CMAKE_SOURCE_DIR}/runtime/mmio_hook.h")
 if(NOT MW2_LOGGING)
     # Compiles every LOGI/LOGW/LOGE/LOGK call to nothing, warnings included.
     add_compile_definitions(MW2_NO_LOGGING=1)
 endif()
 
-if(MW2_TRACE_INDIRECT)
-    target_compile_definitions(ppc_recomp PUBLIC MW2_TRACE_INDIRECT=1)
+# ---- how the code is optimised ---------------------------------------------
+# Every target below, the libraries fetched included, is compiled for ThinLTO,
+# optimised across files at the link (docs/building.md, "Optimisation"). The
+# game's C++ is compiled the same way by build.rs.
+option(MW2_LTO "Optimise across files at the link (ThinLTO)" ON)
+# Where the linker keeps what ThinLTO made of each module, for the next link to
+# reuse what did not change. A result taken from it is the one the linker would
+# have made, so a folder kept between builds (the release workflow's) only
+# makes the link faster.
+set(MW2_LTO_CACHE "${CMAKE_BINARY_DIR}/lto-cache" CACHE PATH "The ThinLTO cache folder")
+if(MW2_LTO)
+    add_compile_options(-flto=thin)
+    add_link_options(-flto=thin "-Wl,--thinlto-cache-dir=${MW2_LTO_CACHE}")
+    if(NOT WIN32)
+        # The system linker reads no LLVM bitcode; llvm-mingw's already is lld.
+        add_link_options(-fuse-ld=lld)
+    endif()
+    # Static libraries of bitcode need LLVM's archiver to be indexed; CMake
+    # takes it with clang.
+    if(NOT CMAKE_AR MATCHES "llvm-ar")
+        message(FATAL_ERROR "ThinLTO needs llvm-ar, not ${CMAKE_AR}: build with clang (cargo xtask), or -DMW2_LTO=OFF")
+    endif()
 endif()
 
-# ---- runtime ---------------------------------------------------------------
-file(GLOB RUNTIME_SOURCES CONFIGURE_DEPENDS
-     "${CMAKE_SOURCE_DIR}/runtime/*.cpp"
-     "${CMAKE_SOURCE_DIR}/runtime/kernel/*.cpp"
-     "${CMAKE_SOURCE_DIR}/runtime/gpu/*.cpp"
-     "${CMAKE_SOURCE_DIR}/runtime/apu/*.cpp"
-     "${CMAKE_SOURCE_DIR}/runtime/install/*.cpp"
-     "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/*.cpp")
-
-# What this build's shaders come out as (runtime/gpu/vulkan/shader_build.h):
-# a SHA-256 of the sources that decide it, the translator's and the pipeline
-# layout's, and the launcher's reader of which shaders the game has. The
-# compile pass's cache is for one of these, and a player's copy compiles
-# again when it changes.
-file(GLOB MW2_SHADER_BUILD_INPUTS RELATIVE "${CMAKE_SOURCE_DIR}" CONFIGURE_DEPENDS
-     "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_translator.*"
-     "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/spirv.*"
-     "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/bindings.h"
-     "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/xenos_ucode.h"
-     "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_build.*"
-     "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/pipeline.*"
-     "${CMAKE_SOURCE_DIR}/launcher/precompile.*"
-     "${CMAKE_SOURCE_DIR}/launcher/zone/*.cpp"
-     "${CMAKE_SOURCE_DIR}/launcher/zone/*.h"
-     "${CMAKE_SOURCE_DIR}/launcher/zone/defs/*.h"
-     "${CMAKE_SOURCE_DIR}/launcher/zone/defs/*.txt"
-     "${CMAKE_SOURCE_DIR}/launcher/zone/defs/assets/*.txt")
-list(SORT MW2_SHADER_BUILD_INPUTS)
-set(shader_build_text "")
-foreach(input ${MW2_SHADER_BUILD_INPUTS})
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/${input}")
-    file(SHA256 "${CMAKE_SOURCE_DIR}/${input}" input_hash)
-    string(APPEND shader_build_text "${input} ${input_hash}\n")
-endforeach()
-string(SHA256 MW2_SHADER_BUILD "${shader_build_text}")
-set_source_files_properties("${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_build.cpp" PROPERTIES COMPILE_DEFINITIONS
-    "MW2_SHADER_BUILD=\"${MW2_SHADER_BUILD}\"")
-
-# The glue build.sh generates from the recompiled output -- a stub for every
-# kernel import the runtime lacks, a tracing hook for every D3D9 entry point --
-# lives beside that output, since it is different for each title.
-# ---- online service --------------------------------------------------------
-# What release this is: the release workflow gives the tag. The game plays only
-# with copies of the same release (runtime/version.cpp), and the launcher looks
-# for a newer one; a build without a tag plays with other such builds and does
-# not update.
+# What release this is: the release workflow gives the tag. The launcher looks
+# for a newer one; a build without a tag does not update.
 set(MW2_RELEASE_TAG "" CACHE STRING "The release tag this build is published as, e.g. v0.3.0")
-set_source_files_properties("${CMAKE_SOURCE_DIR}/runtime/version.cpp" PROPERTIES COMPILE_DEFINITIONS
-    "MW2_RELEASE_TAG=\"${MW2_RELEASE_TAG}\"")
-# What the title's network calls reach (runtime/online/service.h). Every build
-# has every backend, and the player chooses one as the game starts (MW2_NETWORK).
-set(MW2_ONLINE_SOURCES
-    "${CMAKE_SOURCE_DIR}/runtime/online/service.cpp"
-    "${CMAKE_SOURCE_DIR}/runtime/online/players.cpp"
-    "${CMAKE_SOURCE_DIR}/runtime/online/lan.cpp"
-    "${CMAKE_SOURCE_DIR}/runtime/online/server.cpp"
-    "${CMAKE_SOURCE_DIR}/runtime/online/steam.cpp")
 
-add_executable(mw2 ${RUNTIME_SOURCES}
-    ${MW2_ONLINE_SOURCES}
-    "${MW2_PPC_DIR}/stubs_generated.cpp")
-target_link_libraries(mw2 PRIVATE ppc_recomp)
-target_compile_options(mw2 PRIVATE -march=${MW2_X86_LEVEL})
-# The one file that must run on any x86-64 processor: it checks for the others.
-# Compiled to machine code at once, so the link-time optimiser cannot mix it
-# with code of the higher level.
-set_source_files_properties("${CMAKE_SOURCE_DIR}/runtime/cpu_level.cpp" PROPERTIES COMPILE_OPTIONS "-march=x86-64;-fno-lto")
-if(MW2_PGO_TRAINING)
-    # The runtime leaves with _exit, which writes no profile: this writes it first.
-    target_sources(mw2 PRIVATE "${CMAKE_SOURCE_DIR}/runtime/pgo/training.cpp")
-    target_link_options(mw2 PRIVATE -Wl,--wrap=_exit)
-endif()
-if(MW2_DIAGNOSTICS)
-    target_compile_definitions(mw2 PRIVATE MW2_DIAGNOSTICS=1)
-else()
-    target_compile_definitions(mw2 PRIVATE MW2_DIAGNOSTICS=0)
-endif()
-target_include_directories(mw2 PRIVATE "${CMAKE_SOURCE_DIR}/runtime")
-
-# What Find Game offers where no relay hands it out: the relay's own file, so a
-# release has one list.
-set(playlists_path "${CMAKE_SOURCE_DIR}/relay/playlists.info")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${playlists_path}")
-file(READ "${playlists_path}" playlists_hex HEX)
-string(LENGTH "${playlists_hex}" playlists_length)
-math(EXPR playlists_size "${playlists_length} / 2")
-string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," playlists_bytes "${playlists_hex}")
-file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/generated/playlists_data.h" CONTENT
-     "// Generated by CMake from relay/playlists.info.\nstatic const unsigned char kPlaylists[] = { ${playlists_bytes} };\nstatic constexpr unsigned kPlaylistsSize = ${playlists_size};\n")
-target_include_directories(mw2 PRIVATE "${CMAKE_BINARY_DIR}/generated")
-# A game executable runs only the title executable it was recompiled from, and
-# the launcher installs only the disc it is an update of: each known by its
-# SHA-256, read here from mw2/ (runtime/install/install.cpp, launcher/setup.cpp).
+# The launcher installs only the disc it is an update of, and only that update:
+# each known by its SHA-256, read here from mw2/ (launcher/setup.cpp).
 if(MW2_VERSION STREQUAL "tu0")
     set(MW2_XEX_DIR "${CMAKE_SOURCE_DIR}/mw2/tu0")
 else()
@@ -228,7 +65,7 @@ else()
 endif()
 function(mw2_sha256 variable path)
     if(NOT EXISTS "${path}")
-        message(FATAL_ERROR "${path} is missing -- build.sh makes it from the ISO and the title update")
+        message(FATAL_ERROR "${path} is missing -- cargo xtask prepare makes it from the ISO and the title update")
     endif()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${path}")
     file(SHA256 "${path}" hash)
@@ -250,288 +87,200 @@ if(NOT MW2_VERSION STREQUAL "tu0")
         MW2_UPDATE_SHA256_DLC1_UI_MP="${MW2_UPDATE_SHA256_DLC1_UI_MP}"
         MW2_UPDATE_SHA256_DLC2_UI_MP="${MW2_UPDATE_SHA256_DLC2_UI_MP}")
 endif()
-target_compile_definitions(mw2 PRIVATE ${MW2_HASH_DEFINITIONS})
-if(WIN32)
-    # One executable with nothing beside it: the C++ runtime and the threads
-    # linked in. The recompiled code nests deep on the host stack, and a thread
-    # Windows starts gets the size the executable asks for: 16 MB, where Linux
-    # gives 8.
-    target_link_libraries(mw2 PRIVATE ws2_32 iphlpapi winmm bcrypt)
-    target_link_options(mw2 PRIVATE -static -Wl,--stack,16777216)
-    # A player's build opens no console window (runtime/platform.cpp).
-    if(NOT MW2_DIAGNOSTICS)
-        target_link_options(mw2 PRIVATE -mwindows)
-    endif()
-else()
-    # The sub_XXXXXXXX guest functions exported so backtrace_symbols can name
-    # them, and nothing else (runtime/exports.list).
-    target_link_options(mw2 PRIVATE
-        -Wl,--dynamic-list=${CMAKE_CURRENT_SOURCE_DIR}/runtime/exports.list)
-    set_property(TARGET mw2 APPEND PROPERTY LINK_DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/exports.list)
-    if(MW2_PORTABLE)
-        target_link_options(mw2 PRIVATE -static-libstdc++ -static-libgcc)
-    endif()
-endif()
 
-if(MW2_USE_SDL)
-    include(FetchContent)
-    FetchContent_Declare(SDL3
-        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-        GIT_TAG release-3.2.8
-        GIT_SHALLOW TRUE)
-    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-    set(SDL_STATIC ON  CACHE BOOL "" FORCE)
-    set(SDL_TEST   OFF CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(SDL3)
-    target_link_libraries(mw2 PRIVATE SDL3::SDL3-static)
-    target_compile_definitions(mw2 PRIVATE MW2_USE_SDL=1)
-endif()
+include(FetchContent)
+FetchContent_Declare(SDL3
+    GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+    GIT_TAG release-3.4.18
+    GIT_SHALLOW TRUE)
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON  CACHE BOOL "" FORCE)
+set(SDL_TEST   OFF CACHE BOOL "" FORCE)
+# Only asks X11 not to blank the screen, which SDL's other ways do as well, and
+# an optional library that would have to be installed to build this.
+set(SDL_X11_XSCRNSAVER OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(SDL3)
+# The game has the SDL sdl3-sys builds (cmake/sdl.cmake), of the same version.
 
 # ---- XMA decoder ----------------------------------------------------------
+# FFmpeg's, for the launcher's menu sounds. The game has its own port of it
+# (src/runtime/wmapro/).
 add_subdirectory(third_party/ffmpeg-xenia)
-target_link_libraries(mw2 PRIVATE ffmpeg_xma)
 
 # ---- Vulkan ----------------------------------------------------------------
-# Loaded through the loader rather than linked to a driver, so a machine without
-# a device still builds and runs; the presenter falls back to headless.
+# The launcher's compile pass is Rust (launcher/src/precompile.rs), linked to the
+# loader by name; for Windows its import library is made here from the headers
+# of the version the game's build.rs checks for.
 if(WIN32)
     include(cmake/vulkan-windows.cmake)
-    add_dependencies(mw2 vulkan_import_library)
-else()
-    find_package(Vulkan)
-endif()
-if(Vulkan_FOUND)
-    target_link_libraries(mw2 PRIVATE Vulkan::Vulkan)
-    target_compile_definitions(mw2 PRIVATE MW2_HAVE_VULKAN=1)
-    message(STATUS "Vulkan found: ${Vulkan_LIBRARY}")
-else()
-    message(STATUS "Vulkan not found -- building without a window")
-endif()
-
-if(NOT WIN32)
-    target_link_libraries(mw2 PRIVATE pthread)
-endif()
-
-# The two tools below are for working on the renderer, on Linux.
-if(NOT WIN32)
-# ---- offline shader translation -------------------------------------------
-# The translator has to live in the runtime, because the title hands the GPU
-# microcode while it runs. Building it as a tool too gives a fast loop against
-# captured shaders and spirv-val, without launching the game.
-add_executable(translate-shader
-    "${CMAKE_SOURCE_DIR}/tools/translate_shader.cpp"
-    "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_translator.cpp"
-    "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/pipeline.cpp"
-    "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/spirv.cpp")
-target_include_directories(translate-shader PRIVATE "${CMAKE_SOURCE_DIR}/runtime")
-# --compile puts a translated module in front of the real driver, which is a
-# stronger check than spirv-val: it is the compiler that would run the shader.
-if(Vulkan_FOUND)
-    target_link_libraries(translate-shader PRIVATE Vulkan::Vulkan)
-    target_compile_definitions(translate-shader PRIVATE MW2_HAVE_VULKAN=1)
-endif()
-
-# ---- offline texture upload ------------------------------------------------
-# The upload hands the driver the guest's own block bytes, so reading the image
-# back returns exactly what went in. That is a test, and it needs neither the
-# game nor a picture -- unlike the untiler, which needs both.
-add_executable(upload-texture
-    "${CMAKE_SOURCE_DIR}/tools/upload_texture.cpp"
-    "${CMAKE_SOURCE_DIR}/runtime/gpu/texture.cpp"
-    "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/texture_cache.cpp"
-    "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/image_memory.cpp"
-    "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/texture_formats.cpp"
-    "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/pipeline.cpp"
-    "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_translator.cpp"
-    "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/spirv.cpp")
-target_include_directories(upload-texture PRIVATE "${CMAKE_SOURCE_DIR}/runtime")
-if(Vulkan_FOUND)
-    target_link_libraries(upload-texture PRIVATE Vulkan::Vulkan)
-    target_compile_definitions(upload-texture PRIVATE MW2_HAVE_VULKAN=1)
-endif()
 endif()
 
 # ---- launcher --------------------------------------------------------------
 # What a player opens (launcher/): it installs the game and starts it. One
 # executable with nothing beside it, like the game's: Dear ImGui on SDL's own
 # renderer, the fonts as arrays, and XenonRecomp's patcher, which applies the
-# title update, compiled in from its checkout.
-if(MW2_USE_SDL)
-    enable_language(C)
-    FetchContent_Declare(imgui
-        GIT_REPOSITORY https://github.com/ocornut/imgui.git
-        GIT_TAG v1.91.9b
-        GIT_SHALLOW TRUE)
-    FetchContent_MakeAvailable(imgui)
+# title update, compiled in from its checkout. The executable is cargo's
+# (launcher/Cargo.toml): its entry and its compile pass are Rust, on the shaders
+# crate the game builds its shaders with, and the rest is this library,
+# launcher_core, which its build.rs builds here and links with SDL, the XMA
+# decoder and zlib, the icon and the system's libraries.
+enable_language(C)
+FetchContent_Declare(imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG v1.91.9b
+    GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(imgui)
 
-    # third_party/fonts/*.ttf as C arrays.
-    set(MW2_FONTS_SOURCE "${CMAKE_BINARY_DIR}/launcher_fonts.cpp")
-    set(fonts_text "// Generated by CMake from third_party/fonts/.\n")
-    foreach(font "Menu=BarlowCondensed-Regular" "Heading=BarlowCondensed-Medium" "Body=BarlowSemiCondensed-Regular")
-        string(REPLACE "=" ";" font "${font}")
-        list(GET font 0 font_name)
-        list(GET font 1 font_file)
-        set(font_path "${CMAKE_SOURCE_DIR}/third_party/fonts/${font_file}.ttf")
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${font_path}")
-        file(READ "${font_path}" font_hex HEX)
-        string(LENGTH "${font_hex}" font_length)
-        math(EXPR font_size "${font_length} / 2")
-        string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," font_bytes "${font_hex}")
-        string(APPEND fonts_text "extern const unsigned char kFont${font_name}[] = { ${font_bytes} };\n"
-                                 "extern const unsigned kFont${font_name}Size = ${font_size};\n")
+# third_party/fonts/*.ttf as C arrays.
+set(MW2_FONTS_SOURCE "${CMAKE_BINARY_DIR}/launcher_fonts.cpp")
+set(fonts_text "// Generated by CMake from third_party/fonts/.\n")
+foreach(font "Menu=BarlowCondensed-Regular" "Heading=BarlowCondensed-Medium" "Body=BarlowSemiCondensed-Regular")
+    string(REPLACE "=" ";" font "${font}")
+    list(GET font 0 font_name)
+    list(GET font 1 font_file)
+    set(font_path "${CMAKE_SOURCE_DIR}/third_party/fonts/${font_file}.ttf")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${font_path}")
+    file(READ "${font_path}" font_hex HEX)
+    string(LENGTH "${font_hex}" font_length)
+    math(EXPR font_size "${font_length} / 2")
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," font_bytes "${font_hex}")
+    string(APPEND fonts_text "extern const unsigned char kFont${font_name}[] = { ${font_bytes} };\n"
+                             "extern const unsigned kFont${font_name}Size = ${font_size};\n")
+endforeach()
+# The window's icon the same way (tools/launcher_icon.py makes it).
+set(icon_path "${CMAKE_SOURCE_DIR}/launcher/icon/launcher.bmp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${icon_path}")
+file(READ "${icon_path}" icon_hex HEX)
+string(LENGTH "${icon_hex}" icon_length)
+math(EXPR icon_size "${icon_length} / 2")
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," icon_bytes "${icon_hex}")
+string(APPEND fonts_text "extern const unsigned char kIcon[] = { ${icon_bytes} };\n"
+                         "extern const unsigned kIconSize = ${icon_size};\n")
+file(GENERATE OUTPUT "${MW2_FONTS_SOURCE}" CONTENT "${fonts_text}")
+
+# The fastfile reader (launcher/zone/): zlib for the zone's stream, and
+# the definitions it walks a zone by, embedded as the fonts are.
+FetchContent_Declare(zlib
+    GIT_REPOSITORY https://github.com/madler/zlib.git
+    GIT_TAG v1.3.1
+    GIT_SHALLOW TRUE
+    EXCLUDE_FROM_ALL)
+set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(zlib)
+# The 360's under their own names, the PC game's (defs_pc/, read by the map
+# converter, launcher/mapport/) under pc/.
+set(MW2_ZONE_DEFS_SOURCE "${CMAKE_BINARY_DIR}/launcher_zone_defs.cpp")
+set(zone_text "// Generated by CMake from launcher/zone/defs/ and defs_pc/.\n")
+set(zone_table "")
+set(zone_index 0)
+foreach(zone_set "defs:" "defs_pc:pc/")
+    string(REPLACE ":" ";" zone_set "${zone_set}")
+    list(GET zone_set 0 zone_folder)
+    list(LENGTH zone_set zone_set_length)
+    set(zone_prefix "")
+    if(zone_set_length GREATER 1)
+        list(GET zone_set 1 zone_prefix)
+    endif()
+    set(zone_defs_dir "${CMAKE_SOURCE_DIR}/launcher/zone/${zone_folder}")
+    file(GLOB zone_defs RELATIVE "${zone_defs_dir}" CONFIGURE_DEPENDS
+        "${zone_defs_dir}/*.h" "${zone_defs_dir}/*.txt" "${zone_defs_dir}/assets/*.txt")
+    foreach(def ${zone_defs})
+        file(READ "${zone_defs_dir}/${def}" def_hex HEX)
+        string(LENGTH "${def_hex}" def_length)
+        math(EXPR def_size "${def_length} / 2")
+        string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," def_bytes "${def_hex}")
+        string(APPEND zone_text "static const unsigned char kDef${zone_index}[] = { ${def_bytes} };\n")
+        string(APPEND zone_table "    { \"${zone_prefix}${def}\", kDef${zone_index}, ${def_size} },\n")
+        math(EXPR zone_index "${zone_index} + 1")
     endforeach()
-    # The window's icon the same way (tools/launcher_icon.py makes it).
-    set(icon_path "${CMAKE_SOURCE_DIR}/launcher/icon/launcher.bmp")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${icon_path}")
-    file(READ "${icon_path}" icon_hex HEX)
-    string(LENGTH "${icon_hex}" icon_length)
-    math(EXPR icon_size "${icon_length} / 2")
-    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," icon_bytes "${icon_hex}")
-    string(APPEND fonts_text "extern const unsigned char kIcon[] = { ${icon_bytes} };\n"
-                             "extern const unsigned kIconSize = ${icon_size};\n")
-    file(GENERATE OUTPUT "${MW2_FONTS_SOURCE}" CONTENT "${fonts_text}")
+endforeach()
+string(APPEND zone_text "struct ZoneDefinition { const char* name; const unsigned char* data; unsigned size; };\n"
+                        "extern const ZoneDefinition kZoneDefinitions[] = {\n${zone_table}};\n"
+                        "extern const unsigned kZoneDefinitionCount = ${zone_index};\n")
+file(GENERATE OUTPUT "${MW2_ZONE_DEFS_SOURCE}" CONTENT "${zone_text}")
+file(GLOB ZONE_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/launcher/zone/*.cpp")
+# The map converter (launcher/mapport/): PC maps made into 360 ones.
+file(GLOB MAPPORT_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/launcher/mapport/*.cpp")
 
-    # The game draws the system's screens (runtime/screen.cpp) with the same
-    # fonts, rasterised by the stb_truetype that comes with Dear ImGui.
-    target_sources(mw2 PRIVATE "${MW2_FONTS_SOURCE}")
-    target_include_directories(mw2 PRIVATE "${imgui_SOURCE_DIR}")
-    target_compile_definitions(mw2 PRIVATE MW2_SCREENS=1)
+set(XENON "${CMAKE_SOURCE_DIR}/XenonRecomp-rs")
+file(GLOB LAUNCHER_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/launcher/*.cpp")
+add_library(launcher_core STATIC ${LAUNCHER_SOURCES}
+    "${MW2_FONTS_SOURCE}"
+    ${ZONE_SOURCES} ${MAPPORT_SOURCES} "${MW2_ZONE_DEFS_SOURCE}"
+    "${CMAKE_SOURCE_DIR}/runtime/install/crypto.cpp"
+    "${CMAKE_SOURCE_DIR}/runtime/install/xex.cpp"
+    "${CMAKE_SOURCE_DIR}/runtime/install/spawn.cpp"
+    "${imgui_SOURCE_DIR}/imgui.cpp"
+    "${imgui_SOURCE_DIR}/imgui_draw.cpp"
+    "${imgui_SOURCE_DIR}/imgui_tables.cpp"
+    "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
+    "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
+    "${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp"
+    "${XENON}/XenonUtils/xex_patcher.cpp"
+    "${XENON}/XenonUtils/memory_mapped_file.cpp"
+    "${XENON}/thirdparty/libmspack/libmspack/mspack/lzxd.c"
+    "${XENON}/thirdparty/tiny-AES-c/aes.c")
+target_include_directories(launcher_core PRIVATE
+    "${imgui_SOURCE_DIR}" "${imgui_SOURCE_DIR}/backends"
+    "${XENON}/XenonUtils" "${XENON}/thirdparty/simde"
+    "${XENON}/thirdparty/libmspack/libmspack/mspack"
+    "${XENON}/thirdparty/tiny-AES-c" "${XENON}/thirdparty/TinySHA1")
+target_compile_definitions(launcher_core PRIVATE ${MW2_HASH_DEFINITIONS} NOMINMAX)
+# What release this is, for the launcher to look for a newer one (see
+# MW2_RELEASE_TAG above). A build without one does not update.
+if(WIN32)
+    set(MW2_RELEASE_KIND "windows")
+else()
+    set(MW2_RELEASE_KIND "linux")
+endif()
+set_source_files_properties("${CMAKE_SOURCE_DIR}/launcher/update.cpp" PROPERTIES COMPILE_DEFINITIONS
+    "MW2_RELEASE_TAG=\"${MW2_RELEASE_TAG}\";MW2_RELEASE_KIND=\"${MW2_RELEASE_KIND}\"")
+# FFmpeg's XMA decoder, for the menu sounds (launcher/sound.cpp).
+target_link_libraries(launcher_core PRIVATE SDL3::SDL3-static ffmpeg_xma zlibstatic)
+target_include_directories(launcher_core PRIVATE "${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}")
+if(WIN32)
+    target_include_directories(launcher_core PRIVATE "${CMAKE_SOURCE_DIR}/launcher/compat")
+    # The import library the launcher's link takes vulkan-1 from.
+    add_dependencies(launcher_core vulkan_import_library)
+endif()
+# What the launcher's build.rs links, as this target's link would take it: the
+# archives, the system libraries each asks for (a name, or $<LINK_ONLY:name>) and
+# the compiler's standard ones, the Vulkan import library on Windows, and the
+# link's options.
+set(launcher_link "archive $<TARGET_FILE:launcher_core>
+archive $<TARGET_FILE:SDL3-static>
+archive $<TARGET_FILE:ffmpeg_xma>
+archive $<TARGET_FILE:zlibstatic>
+uses $<JOIN:$<TARGET_PROPERTY:SDL3-static,INTERFACE_LINK_LIBRARIES>, >
+uses $<JOIN:$<TARGET_PROPERTY:ffmpeg_xma,INTERFACE_LINK_LIBRARIES>, >
+uses $<JOIN:$<TARGET_PROPERTY:zlibstatic,INTERFACE_LINK_LIBRARIES>, >
+standard ${CMAKE_CXX_STANDARD_LIBRARIES}
+lto ${MW2_LTO} ${MW2_LTO_CACHE}
+")
+if(WIN32)
+    string(APPEND launcher_link "vulkan ${Vulkan_LIBRARY}\n")
+endif()
+file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/launcher_core.txt" CONTENT "${launcher_link}")
 
-    # The fastfile reader (launcher/zone/): zlib for the zone's stream, and
-    # the definitions it walks a zone by, embedded as the fonts are.
-    FetchContent_Declare(zlib
-        GIT_REPOSITORY https://github.com/madler/zlib.git
-        GIT_TAG v1.3.1
-        GIT_SHALLOW TRUE
-        EXCLUDE_FROM_ALL)
-    set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(zlib)
-    # The game too: the title's XLAST is gzipped in its image (runtime/presence.cpp).
-    target_link_libraries(mw2 PRIVATE zlibstatic)
-    target_include_directories(mw2 PRIVATE "${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}")
-    # The 360's under their own names, the PC game's (defs_pc/, read by the map
-    # converter, launcher/mapport/) under pc/.
-    set(MW2_ZONE_DEFS_SOURCE "${CMAKE_BINARY_DIR}/launcher_zone_defs.cpp")
-    set(zone_text "// Generated by CMake from launcher/zone/defs/ and defs_pc/.\n")
-    set(zone_table "")
-    set(zone_index 0)
-    foreach(zone_set "defs:" "defs_pc:pc/")
-        string(REPLACE ":" ";" zone_set "${zone_set}")
-        list(GET zone_set 0 zone_folder)
-        list(LENGTH zone_set zone_set_length)
-        set(zone_prefix "")
-        if(zone_set_length GREATER 1)
-            list(GET zone_set 1 zone_prefix)
-        endif()
-        set(zone_defs_dir "${CMAKE_SOURCE_DIR}/launcher/zone/${zone_folder}")
-        file(GLOB zone_defs RELATIVE "${zone_defs_dir}" CONFIGURE_DEPENDS
-            "${zone_defs_dir}/*.h" "${zone_defs_dir}/*.txt" "${zone_defs_dir}/assets/*.txt")
-        foreach(def ${zone_defs})
-            file(READ "${zone_defs_dir}/${def}" def_hex HEX)
-            string(LENGTH "${def_hex}" def_length)
-            math(EXPR def_size "${def_length} / 2")
-            string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," def_bytes "${def_hex}")
-            string(APPEND zone_text "static const unsigned char kDef${zone_index}[] = { ${def_bytes} };\n")
-            string(APPEND zone_table "    { \"${zone_prefix}${def}\", kDef${zone_index}, ${def_size} },\n")
-            math(EXPR zone_index "${zone_index} + 1")
-        endforeach()
-    endforeach()
-    string(APPEND zone_text "struct ZoneDefinition { const char* name; const unsigned char* data; unsigned size; };\n"
-                            "extern const ZoneDefinition kZoneDefinitions[] = {\n${zone_table}};\n"
-                            "extern const unsigned kZoneDefinitionCount = ${zone_index};\n")
-    file(GENERATE OUTPUT "${MW2_ZONE_DEFS_SOURCE}" CONTENT "${zone_text}")
-    file(GLOB ZONE_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/launcher/zone/*.cpp")
-    # The map converter (launcher/mapport/): PC maps made into 360 ones.
-    file(GLOB MAPPORT_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/launcher/mapport/*.cpp")
-
-    set(XENON "${CMAKE_SOURCE_DIR}/XenonRecomp")
-    file(GLOB LAUNCHER_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/launcher/*.cpp")
-    add_executable(launcher ${LAUNCHER_SOURCES}
-        "${MW2_FONTS_SOURCE}"
-        ${ZONE_SOURCES} ${MAPPORT_SOURCES} "${MW2_ZONE_DEFS_SOURCE}"
-        # The game's own shader build, for the compile pass (launcher/precompile.cpp).
-        "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/pipeline.cpp"
-        "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_build.cpp"
-        "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_marker.cpp"
-        "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_translator.cpp"
-        "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/spirv.cpp"
-        "${CMAKE_SOURCE_DIR}/runtime/install/crypto.cpp"
-        "${CMAKE_SOURCE_DIR}/runtime/install/xex.cpp"
-        "${CMAKE_SOURCE_DIR}/runtime/install/spawn.cpp"
-        "${imgui_SOURCE_DIR}/imgui.cpp"
-        "${imgui_SOURCE_DIR}/imgui_draw.cpp"
-        "${imgui_SOURCE_DIR}/imgui_tables.cpp"
-        "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
-        "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
-        "${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp"
-        "${XENON}/XenonUtils/xex_patcher.cpp"
-        "${XENON}/XenonUtils/memory_mapped_file.cpp"
-        "${XENON}/thirdparty/libmspack/libmspack/mspack/lzxd.c"
-        "${XENON}/thirdparty/tiny-AES-c/aes.c")
-    set_target_properties(launcher PROPERTIES OUTPUT_NAME mw2-launcher)
-    target_include_directories(launcher PRIVATE
-        "${imgui_SOURCE_DIR}" "${imgui_SOURCE_DIR}/backends"
-        "${XENON}/XenonUtils" "${XENON}/thirdparty/simde"
-        "${XENON}/thirdparty/libmspack/libmspack/mspack"
-        "${XENON}/thirdparty/tiny-AES-c" "${XENON}/thirdparty/TinySHA1")
-    target_compile_definitions(launcher PRIVATE ${MW2_HASH_DEFINITIONS} NOMINMAX)
-    # What release this is, for the launcher to look for a newer one (see
-    # MW2_RELEASE_TAG above). A build without one does not update.
-    if(WIN32)
-        set(MW2_RELEASE_KIND "windows")
-    else()
-        set(MW2_RELEASE_KIND "linux")
-    endif()
-    set_source_files_properties("${CMAKE_SOURCE_DIR}/launcher/update.cpp" PROPERTIES COMPILE_DEFINITIONS
-        "MW2_RELEASE_TAG=\"${MW2_RELEASE_TAG}\";MW2_RELEASE_KIND=\"${MW2_RELEASE_KIND}\"")
-    # The decoder the game has for its sound, for the menu sounds (launcher/sound.cpp).
-    target_link_libraries(launcher PRIVATE SDL3::SDL3-static ffmpeg_xma zlibstatic)
-    if(Vulkan_FOUND)
-        target_link_libraries(launcher PRIVATE Vulkan::Vulkan)
-        target_compile_definitions(launcher PRIVATE MW2_HAVE_VULKAN=1)
-        if(WIN32)
-            add_dependencies(launcher vulkan_import_library)
-        endif()
-    endif()
-    target_include_directories(launcher PRIVATE "${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}")
-    if(WIN32)
-        # The program's icon, as Explorer and the taskbar show it.
-        enable_language(RC)
-        target_sources(launcher PRIVATE "${CMAKE_SOURCE_DIR}/launcher/icon/launcher.rc")
-        target_include_directories(launcher PRIVATE "${CMAKE_SOURCE_DIR}/launcher/compat")
-        target_link_libraries(launcher PRIVATE urlmon)
-        target_link_options(launcher PRIVATE -static)
-        if(NOT MW2_DIAGNOSTICS)
-            target_link_options(launcher PRIVATE -mwindows)
-        endif()
-    else()
-        target_link_libraries(launcher PRIVATE pthread)
-        if(MW2_PORTABLE)
-            target_link_options(launcher PRIVATE -static-libstdc++ -static-libgcc)
-        endif()
-    endif()
-
-    # The launcher's fastfile reader on its own: every shader of the files it
-    # is given, to check the reader against the game's files.
-    if(NOT WIN32)
-        add_executable(zone-shaders "${CMAKE_SOURCE_DIR}/tools/zone_shaders.cpp"
-            ${ZONE_SOURCES} "${MW2_ZONE_DEFS_SOURCE}"
-            "${CMAKE_SOURCE_DIR}/runtime/install/xex.cpp" "${CMAKE_SOURCE_DIR}/runtime/install/crypto.cpp")
-        target_link_libraries(zone-shaders PRIVATE zlibstatic)
-        target_include_directories(zone-shaders PRIVATE "${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}")
-    endif()
-
-    # The map converter on its own, and the checks it is built against.
-    add_executable(map-port "${CMAKE_SOURCE_DIR}/tools/map_port.cpp"
-        ${ZONE_SOURCES} ${MAPPORT_SOURCES} "${MW2_ZONE_DEFS_SOURCE}"
+# The launcher's fastfile reader on its own: every shader of the files it
+# is given, to check the reader against the game's files.
+if(NOT WIN32)
+    add_executable(zone-shaders "${CMAKE_SOURCE_DIR}/tools/zone_shaders.cpp"
+        ${ZONE_SOURCES} "${MW2_ZONE_DEFS_SOURCE}"
         "${CMAKE_SOURCE_DIR}/runtime/install/xex.cpp" "${CMAKE_SOURCE_DIR}/runtime/install/crypto.cpp")
-    target_link_libraries(map-port PRIVATE zlibstatic)
-    target_include_directories(map-port PRIVATE "${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}")
-    if(NOT WIN32)
-        target_link_libraries(map-port PRIVATE pthread)   # (std::async: stock files are read on worker threads)
-    endif()
-    if(MW2_PORTABLE)
-        target_link_options(map-port PRIVATE -static-libstdc++ -static-libgcc)
-    endif()
+    target_link_libraries(zone-shaders PRIVATE zlibstatic)
+    target_include_directories(zone-shaders PRIVATE "${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}")
+endif()
+
+# The map converter on its own, and the checks it is built against.
+add_executable(map-port "${CMAKE_SOURCE_DIR}/tools/map_port.cpp"
+    ${ZONE_SOURCES} ${MAPPORT_SOURCES} "${MW2_ZONE_DEFS_SOURCE}"
+    "${CMAKE_SOURCE_DIR}/runtime/install/xex.cpp" "${CMAKE_SOURCE_DIR}/runtime/install/crypto.cpp")
+target_link_libraries(map-port PRIVATE zlibstatic)
+target_include_directories(map-port PRIVATE "${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}")
+if(NOT WIN32)
+    target_link_libraries(map-port PRIVATE pthread)   # (std::async: stock files are read on worker threads)
+endif()
+if(MW2_PORTABLE)
+    target_link_options(map-port PRIVATE -static-libstdc++ -static-libgcc)
 endif()

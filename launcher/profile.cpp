@@ -138,7 +138,7 @@ namespace
     }
 
     // --- the campaign's progress ------------------------------------------
-    // profile.bin is the settings the title wrote (runtime/kernel/profile.cpp):
+    // profile.bin is the settings the title wrote (src/runtime/kernel/profile.rs):
     // "MW2PROF1", a count, then id, source, length and bytes of each. The
     // title's own settings are lists of numbered fields: "SEMV" and two words, then for
     // each field its number, its type and its value -- a byte (types 1 and 2),
@@ -289,7 +289,7 @@ namespace
 
 namespace
 {
-    // saves/profiles.txt, the game's (runtime/signin.h): a line per profile,
+    // saves/profiles.txt, the game's (src/runtime/signin.rs): a line per profile,
     // twelve hexadecimal digits, a space, the name; `first`, the profile at
     // the first controller; and lines of the game's own, kept as they are.
     struct Named { uint64_t id; std::string name; };

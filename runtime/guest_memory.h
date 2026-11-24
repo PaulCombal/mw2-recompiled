@@ -23,6 +23,12 @@
 // reads its own structures back through them. So the second window has to be
 // the same memory here, aliased rather than translated on access: the
 // recompiled code dereferences a guest pointer directly, with nothing to hook.
+// The space is src/runtime/guest_memory.rs's.
+extern "C"
+{
+    extern uint8_t* mw2_guest_base;
+}
+
 namespace guest
 {
     inline constexpr uint32_t kHeapBase      = 0x84600000u;
@@ -31,15 +37,8 @@ namespace guest
     inline constexpr uint32_t kPhysicalEnd   = 0xC0000000u;
     inline constexpr uint32_t kApertureBase  = 0xC0000000u;   // the same memory again
 
-    // Reserves the 4 GiB space and commits the regions above.
-    uint8_t* Initialise();
-    uint8_t* Base();
-
-    // Used for stacks and late allocations.
-    bool Commit(uint32_t address, uint32_t size);
-    // From the fault handler: backs a page of the space that is reserved and
-    // not yet committed, as Linux does on first touch. Windows only.
-    bool CommitOnTouch(const void* hostAddress);
+    // A variable, and read here: every guest pointer the C++ follows comes through.
+    inline uint8_t* Base() { return mw2_guest_base; }
 
     inline void* Translate(uint32_t address) { return Base() + address; }
 }

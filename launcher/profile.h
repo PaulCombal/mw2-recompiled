@@ -16,7 +16,7 @@ namespace profile
     // One player's multiplayer stats.
     struct Player
     {
-        // A profile (saves/profiles.txt, runtime/signin.h) has a name and a
+        // A profile (saves/profiles.txt, src/runtime/signin.rs) has a name and a
         // number there, and no stats file until its first match ends. A
         // stats file with neither is one no profile owns any more.
         std::string name;

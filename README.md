@@ -127,6 +127,6 @@ Building, the source layout and how the runtime works: [docs/building.md](docs/b
 
 <a id="license" href="#license"><img src="docs/images/readme/h-license.svg" alt="License" height="56"></a>
 
-[GPL-3.0-only](LICENSE) (`SPDX-License-Identifier: GPL-3.0-only`). It covers this project's own code: the runtime, tools, patches and build files. It grants nothing for the game: Activision's code and data, and the C++ generated from the game's executables, are not part of this repository and not under this license.
+[GPL-3.0-only](LICENSE) (`SPDX-License-Identifier: GPL-3.0-only`). It covers this project's own code: the runtime, tools, patches and build files. It grants nothing for the game: Activision's code and data, and the Rust generated from the game's executables, are not part of this repository and not under this license.
 
 No game code or data is included; the builds only run with files from your own disc. Not affiliated with Activision, Infinity Ward, Microsoft or Valve.

@@ -14,7 +14,7 @@
 //
 // With no <disc>, --install brings the install already in game/ up to date.
 // The game starts the launcher with --play when the shaders compiled for it
-// no longer fit (runtime/install/install.h), naming the device it draws on.
+// no longer fit (src/runtime/install/), naming the device it draws on.
 #include "disc.h"
 #include "precompile.h"
 #include "fonts.h"
@@ -253,7 +253,7 @@ namespace
 
     // Starts a program beside the launcher and leaves it running. A game is
     // told the device its shaders were compiled for (`shadersFor`), so that it
-    // does not start the launcher again for them (runtime/install/install.h).
+    // does not start the launcher again for them (src/runtime/install/).
     bool Start(const char* program, const std::string& shadersFor = "")
     {
         std::error_code ec;
@@ -2016,7 +2016,9 @@ namespace
     }
 }
 
-int main(int argc, char** argv)
+// The launcher's main, which its Rust entry calls with the C runtime's own
+// arguments (launcher/src/main.rs).
+extern "C" int launcher_run(int argc, char** argv)
 {
     // The command line as paths. Windows hands main() the arguments in the
     // system's code page, which loses what it cannot spell; the wide command

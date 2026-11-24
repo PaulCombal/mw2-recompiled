@@ -1,7 +1,7 @@
 #pragma once
 // What the player sets in the launcher for the game: kept in
 // .env beside the launcher, a line each of NAME=value. The game reads the file as
-// it starts (runtime/settings.cpp), however it is started, so a change is
+// it starts (src/runtime/settings.rs), however it is started, so a change is
 // for the next start. The file can hold any of the game's switches; the
 // launcher changes its own and keeps the rest.
 #include <optional>
@@ -97,7 +97,7 @@ namespace settings
     void SetStretch(bool on);
 
     // MW2_CUSTOM_MAPS: the multiplayer loads fastfiles nobody signed, a map
-    // converted from the PC game (runtime/unsigned_fastfiles.cpp).
+    // converted from the PC game (src/hooks/unsigned_fastfiles.rs).
     bool CustomMaps();
     void SetCustomMaps(bool on);
 

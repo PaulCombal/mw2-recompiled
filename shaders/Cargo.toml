@@ -1,0 +1,23 @@
+# What the game and the launcher share to build their shaders the same way: the
+# shader translator, the Vulkan device and pipeline layout every translated shader is
+# built against, a shader's pipeline library, and the marker the launcher's compile
+# pass leaves for the game. A driver finds a shader in the pipeline cache the launcher
+# filled only when the game asks for exactly what the launcher compiled, so both build
+# them here (docs/shaders.md).
+[package]
+name = "mw2-shaders"
+version = "0.0.0"
+edition = "2024"
+publish = false
+build = "build.rs"
+
+[dependencies]
+# Vulkan, the loader linked by name as the game links it.
+ash = { version = "=0.38.0", default-features = false, features = ["std", "linked"] }
+
+# The translator on its own, for a fast loop against captured shaders and spirv-val
+# without launching the game (translate_shader.rs). Outside src/, so not in the shader
+# build id: it decides nothing a shader compiles to.
+[[bin]]
+name = "translate-shader"
+path = "translate_shader.rs"

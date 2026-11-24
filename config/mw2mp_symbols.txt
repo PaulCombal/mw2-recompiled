@@ -1,6 +1,6 @@
 # Analyst symbol map for the multiplayer image (default_mp.xex, TU6).
 #
-# The recompiled C++ in ppc_mp/ is generated and keyed by address, so it only
+# The recompiled Rust in ppc_mp_rs/ is generated and keyed by address, so it only
 # knows functions as sub_<ADDR>. This sidecar gives them readable names for the
 # analysis tools (tools/xref.py and tools/callgraph.py, through tools/title.py's
 # symbol lookup). It changes nothing in the build; edit freely.
@@ -131,7 +131,7 @@
 # --- From codxe (~/git/codxe, MIT: src/game/iw4/mp_tu6/symbols.h and
 # components/fastfiles.cpp) ---
 # Names as codxe gives them, not checked one by one. Every function address
-# below is a recompiled function start in ppc_mp/.
+# below is a recompiled function start in ppc_mp_rs/.
 820FE5F0  BG_PlayerHasWeapon
 821142C0  BG_GetWeaponCompleteDef
 821143F0  BG_GetNumWeapons

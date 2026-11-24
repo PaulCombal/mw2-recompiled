@@ -6,13 +6,12 @@ would sample at the moment a draw executes.
 
 | Piece | Where |
 |---|---|
-| Fetch constant, tiling, level layout, untiling | `runtime/gpu/texture.{h,cpp}` |
-| Xenos to Vulkan formats and swizzles | `runtime/gpu/vulkan/texture_formats.{h,cpp}` |
-| Images, samplers, the texture set, re-reads | `runtime/gpu/vulkan/texture_cache.{h,cpp}` |
-| The images' memory, in blocks | `runtime/gpu/vulkan/image_memory.{h,cpp}` |
-| Write watch on guest pages | `runtime/gpu/memory_watch.{h,cpp}` |
-| The image pool's block copy | `runtime/image_move.{h,cpp}` |
-| Upload round-trip test | `tools/upload_texture.cpp` (target `upload-texture`) |
+| Fetch constant, tiling, level layout, untiling | `src/runtime/gpu/texture.rs` |
+| Xenos to Vulkan formats and swizzles | `src/runtime/gpu/vulkan/texture_formats.rs` |
+| Images, samplers, the texture set, re-reads | `src/runtime/gpu/vulkan/texture_cache.rs`, part of the renderer the ring consumer owns. A range the image pool writes on a guest thread is queued and applied at the consumer's next batch (`memory_written_elsewhere`) |
+| The images' memory, in blocks | `src/runtime/gpu/vulkan/image_memory.rs` |
+| Write watch on guest pages | `src/runtime/gpu/memory_watch.rs`, with the fix for a write that faulted for ever on a page loosened while it was being copied ([rendering.md](rendering.md#the-shadow-of-guest-memory)) |
+| The image pool's block copy | `src/runtime/gpu/image_move.rs` and the hook `src/hooks/image_move.rs` |
 
 ## The fetch constant
 
@@ -21,7 +20,7 @@ thirty-two slots, in the register file at `0x4800`. A shader's `tfetch` only
 names the slot. The same window also holds vertex fetch constants (three per
 six-dword group); the low two bits of dword 0 say which a slot holds (2
 texture, 3 vertex). Field layout follows Xenia's `xe_gpu_texture_fetch_t`
-(`gpu::TextureFetch`):
+(`TextureFetch`):
 
 | Dword | Bits | Field |
 |---|---|---|
@@ -47,14 +46,14 @@ texture, 3 vertex). Field layout follows Xenia's `xe_gpu_texture_fetch_t`
 | 5 | 12..31 | mip address >> 12 (physical) |
 
 Addresses are GPU physical addresses, not addresses in the runtime's flat
-guest space; they must be resolved with `kernel::FromPhysical`. Read as flat
+guest space; they must be resolved with `kernel::from_physical`. Read as flat
 addresses they land in untouched memory, which looks exactly like a texture
 the title has not filled yet.
 
 ## Layout in guest memory
 
-`gpu::ExtentsOf` (Xenia's `GetSubresourcesFromFetchConstant` and
-`GetGuestTextureLayout`) says where the levels are; `gpu::ReadTexture` reads
+`extents_of` (Xenia's `GetSubresourcesFromFetchConstant` and
+`GetGuestTextureLayout`) says where the levels are; `read_texture` reads
 them into a linear, host-endian buffer, still in the guest's block format, one
 level after another.
 
@@ -64,6 +63,34 @@ the base were a power of two on each side, so a level's stride is not its own
 size. Pitch and height are rounded up to a 32x32-block tile, for linear
 textures too; a linear mip's rows are also 256-byte aligned. Each cube face or
 array slice of a level starts on a 4 KB boundary.
+
+**What the extents cover.** The base's byte count is the base level's reach and
+the chain's the furthest any stored level reaches from the mip address, as
+Xenia's `GetGuestTextureLayout` computes `level_data_extent_bytes` and
+`mips_total_extent_bytes`, on this reader's layout. That layout differs from
+Xenia's in two places, so the extents follow Xenia's formula but not always its
+bytes: a stacked 2D texture's mip levels step by the slice count, where Xenia
+aligns it to four (`mip_array_size`), and every level of a volume is strided by
+the base's depth aligned to four, where Xenia's mips use the next power of two
+of the depth shifted by the level, aligned to four.
+
+- a level's extent in blocks is its own size, or, for a packed tail, the
+  furthest any level packed in it reaches at its offset (from the packing's
+  first level to the last level read; the base's tail holds level 0 alone);
+- a tiled slice ends at its highest tiled address: the origin of the 32x32
+  tile holding the last block plus that tile's reach (0xA00 bytes at one byte a
+  block, 0xC00 at two, 32x32 blocks otherwise; Xenia's
+  `GetTiledAddressUpperBound2D`), a volume at the highest of every run of
+  eight blocks in its last 32 rows and 4 slices (`GetTiledAddressUpperBound3D`);
+- a linear slice ends at its last row's last block, not at whole 32-row tiles;
+- every array slice but the last adds its 4 KB-aligned stride.
+
+So the write watch and the source signature cover every byte the reader reads.
+They name more than is read only where Xenia's rule does: a stacked texture's
+slices past the first, the rest of a tiled slice's last tile, the levels of a
+tail below the lowest one read. Ending each slice at rows x pitch would miss
+writes: a tiled slice under 4 KB (a 32x32 8-bit one reads 2560 bytes of its
+1024) and a 1D texture's packed tail read past it.
 
 Which levels exist:
 
@@ -97,9 +124,9 @@ its slices as a 3D image, a stacked 2D texture its first slice. 96-bit formats
 
 ## Formats
 
-`vk::formats::VulkanFormatFor`. The block-compressed formats go across
-byte for byte, so the untiler's output is the upload and nothing is decoded on
-the CPU.
+`vulkan_format_for`. The block-compressed formats go across
+byte for byte, so where the device samples them the untiler's output is the
+upload and nothing is decoded on the CPU.
 
 | Xenos (id) | Vulkan |
 |---|---|
@@ -122,23 +149,48 @@ the CPU.
 - **DXT3A** is sixteen explicit four-bit values per block (the alpha block of
   DXT2/3), not BC4's endpoints and indices. Both are eight bytes a block, so
   treating one as the other passes every size check and decodes to noise.
-  `ReadTexture` expands it to one byte a texel. MW2 stores the world's light
+  `read_texture` expands it to one byte a texel. MW2 stores the world's light
   map in it.
 - **Gamma.** A fetch constant whose colour components are signed `gamma` asks
   the sampler to linearise. The image view uses the sRGB counterpart
-  (`SrgbFormatFor`: R8G8B8A8, BC1, BC2, BC3); Xenos' piecewise curve and sRGB
+  (`srgb_format_for`: R8G8B8A8, BC1, BC2, BC3); Xenos' piecewise curve and sRGB
   agree to within a code value. Alpha stays linear.
 - **Not supported:** CTX1 (60), which no BC format matches;
   DXT3A_AS_1_1_1_1 (61); the signed, biased and integer component modes.
+
+**Where the device cannot** (`format_support.rs`). Each rule is Xenia's
+(`VulkanTextureCache::Initialize`, `GetSamplerParameters`):
+
+| Direct format | Used where the device can | Otherwise |
+|---|---|---|
+| BC1, BC2, BC3 | sample and filter it | decompressed on upload to R8G8B8A8 |
+| BC4 (DXT5A), BC5 (DXN) | sample and filter it | decompressed to R8 / R8G8 |
+| R16, R16G16, R16G16B16A16 unorm | sample it | converted to the sfloat format of as many channels (Xenia's precision over filtering) |
+| R4G4B4A4 | sample and filter it | B4G4R4A4, which every device has, red and blue swapped |
+| any other | sample it | refused: "device cannot sample this format" |
+
+- The decompression and conversions are Xenia's texture loads done on the CPU
+  (`texture_convert.rs`): 5:6:5 endpoints widened with their low bits
+  replicated, thirds, halves, fifths and sevenths truncated, a half rounded to
+  nearest even. A decompressed level is as many texels wide and high as its
+  blocks cover.
+- An sRGB counterpart is used only where it can be sampled; otherwise the
+  texture is not linearised (counted with those that have no counterpart,
+  once per lookup that gets past the Vulkan format, refused or not, so a
+  failure made again each frame is counted each frame).
+- **Filtering.** A sampler asks for linear filtering only of an image whose
+  format can be filtered linearly: otherwise its magnification, minification
+  and linear mip filter are point and it has no anisotropy. The same holds for
+  a resolve's copy (`Adopt`).
 
 **Swizzle.** The fetch constant's swizzle (3 bits per component: 0..3 a
 channel, 4 zero, 5 one) maps onto the image view's component mapping. It is
 not optional: a font atlas with its glyphs in one channel samples as zero
 without it. The identity is `0x688`; zero means "X in all four". A guest
 format with fewer channels than its host format repeats its last channel
-(`HostSwizzleFor`): one-channel formats read R in all four, two-channel ones
+(`host_swizzle_for`): one-channel formats read R in all four, two-channel ones
 (including DXN, whose Y the title reads from alpha) read RGGG. The guest
-swizzle is composed through that (`ComposeSwizzle`).
+swizzle is composed through that (`compose_swizzle`).
 
 ## Images and samplers
 
@@ -151,19 +203,43 @@ describes, uploading it the first time it is seen.
   ([shaders.md](shaders.md#the-module-interface)). An entry is written when
   the image is made, or when a resolve's copy lends a new view, and the set
   stays bound: a draw only names, per slot, an image and a sampler
-  (`Handle`). An id is given to another image only once the old one has been
-  unbound for 600 frames, so no pending draw reads an entry being rewritten,
-  and a resolve's copies are replaced only with the device idle.
+  (`Handle`). An id is given to another image only once the old one is idle
+  (below), so no pending draw reads an entry being rewritten, and a resolve's
+  copies are replaced only with the device idle.
 - **Kinds.** 1D textures are 2D images one row tall (the translator samples
   every 1D fetch as 2D). Cubes are cube images, volumes 3D images. A view
   must match the kind the shader declares; where the title binds a 2D texture
   to a slot the program reads as a cube or volume, the declared kind's 1x1
   stand-in (element 0, 1 or 2 of the image array: 2D, cube, volume) is named
   instead. So are unbound slots.
-- **Size limit.** An extent beyond `maxImageDimension2D` is rejected before
-  anything is created: creating one is undefined behaviour, not an error, and
-  a misparsed fetch constant can describe one. Failures are cached per fetch
-  constant.
+- **Size limit.** An extent beyond the device's limit for the image's kind is
+  rejected before anything is created: creating one is undefined behaviour,
+  not an error, and a misparsed fetch constant can describe one. A 2D image's
+  sides are within `maxImageDimension2D` and its layers within
+  `maxImageArrayLayers`, a cube's side within `maxImageDimensionCube`, a
+  volume's sides and depth within `maxImageDimension3D` (Xenia's
+  `GetMaxHostTextureWidthHeight`). A failure, a sampler that cannot be made included, is cached
+  per fetch constant for the rest of its frame, so a fetch constant bound
+  every draw fails once a frame, and at the next frame's start every failed
+  lookup is forgotten, so its next bind makes it again whatever its memory
+  did: a failure the device caused (no room in the bindless set, an
+  allocation) recovers the frame after, and one the fetch constant causes
+  fails again once a frame. This is the runtime's own rule, not Xenia's. Xenia
+  caches nothing by key: a failed `FindOrCreateTexture` leaves the fetch
+  slot's binding empty, and `RequestTextures` looks the texture up again
+  whenever that slot's key changes, at `BeginFrame`, when trimming destroys a
+  texture, and when any watched texture is written. Its first attempt in a
+  frame is made here too, and the others are not: a fetch constant failing in
+  a slot that alternates with another, or bound in another slot, fails once a
+  frame here and once per binding change there; this cache releases images
+  only at the frame's start, and a write is seen at that texture's own bind by
+  its watch stamp. A failure the device caused can so last one frame longer
+  than in Xenia. What the fetch constant and the device alone refuse (no Vulkan
+  format, past the size limits, a format the device cannot sample, a cube map
+  that is not square) is refused before the memory is watched or read, as
+  Xenia's `FindOrCreateTexture` and `CreateTexture` refuse before
+  `LoadTexturesData`, so such a failure made again each frame reads nothing.
+  The report counts the lookups made again and what they came to.
 - **Sampler**, one per distinct state, from the fetch constant:
   - mag/min filter; mip filter linear or nearest. `BaseMap` samples the lowest
     level alone: `maxLod = minLod + 0.25`, so the min filter can still be
@@ -181,16 +257,25 @@ describes, uploading it the first time it is seen.
   dwords less the sampler's bits (clamps, filters, anisotropy, border colour)
   name the image, so a texture bound under several sampler states is held
   once.
-- **Memory** comes from 64 MB blocks (`image_memory.cpp`), a range per image.
+- **Memory** comes from 64 MB blocks (`src/runtime/gpu/vulkan/image_memory.rs`), a range per image.
   A level streams tens of thousands of small textures through the cache, and
   an allocation each is what a driver is worst at: freeing one took over half
   a millisecond with forty thousand live. Anything over a quarter of a block
   gets an allocation of its own.
 - **Letting go.** The console holds no copies: when the title puts another
-  texture where one was, the old one is gone. `NewFrame` looks over the cache
+  texture where one was, the old one is gone. `new_frame` looks over the cache
   once every 64 frames, a slice of the images a frame:
-  - An image is *idle* once unbound for 600 frames, which is past any
-    submission still running.
+  - An image is *idle* once ten seconds have passed since the start of the
+    submission it was last bound in, and the GPU has finished that submission
+    (so the recorder has made it). This is Xenia's rule (`texture_cache.cc`:
+    `MarkAsUsed` stamps a texture with the submission and its start time,
+    `BeginSubmission`'s clock reading; `CompletedSubmissionUpdated` lets it go
+    once that submission is completed and the time is a lifetime ago). Xenia's
+    lifetime is 30 s and applies past a memory limit; this one is 10 s. A
+    submission begins at `begin_uploads`, which is told its serial and the last
+    one completed. It counts time, not frames, so the frame rate does not change
+    it. With `MW2_DETERMINISTIC` a frame is 1/60 s, so the lifetime is 600
+    frames.
   - An idle image whose pages the write watch saw written, and whose bytes
     then sign differently, is released. Bound again it would have had to be
     read again anyway. This is what keeps the cache near what the level is
@@ -210,8 +295,8 @@ which each model owns a 4x4 patch) leaves the fetch constant unchanged, so the
 bytes themselves must be watched.
 
 **Write watch.** Where the texture's pages are in the physical bank,
-`gpu::watch::Track` is called *before* the read and returns a stamp; while
-`gpu::watch::Unwritten` says no page has been written since, the texture is
+`memory_watch::track` is called *before* the read and returns a stamp; while
+`memory_watch::unwritten` says no page has been written since, the texture is
 unchanged for certain and nothing is hashed. The watch makes a page read-only
 and takes one fault on the first write (see
 [rendering.md](rendering.md#the-shadow-of-guest-memory)). Unlike the vertex
@@ -223,7 +308,7 @@ signed at most once per frame, then every 2, 4, ... up to 16 frames. A texture
 that has ever changed, or that came up empty, is signed every frame. A watched
 texture whose pages were written is signed at once, whatever the schedule.
 
-**Ranges written by the runtime.** `vk::textures::MemoryWritten` marks any
+**Ranges written by the runtime.** The texture cache's `memory_written` marks any
 texture read from a range the runtime itself just wrote (the pool copy below)
 for signing at its next bind.
 
@@ -243,15 +328,15 @@ processor parses it. Two rules follow:
 A draw binding a slot to the same six fetch dwords as the last draw that bound
 it keeps that draw's image, without a lookup, and so does one binding fetch
 dwords another slot was answered for (64 recent answers, by a hash of the
-dwords), until `vk::textures::Epoch` moves: at a new frame or segment, when an image is let go, and at
-`MemoryWritten`. Until then a lookup would answer the same and find nothing
+dwords), until the texture cache's `epoch` moves: at a new frame or segment, when an image is let go, and at
+`memory_written`. Until then a lookup would answer the same and find nothing
 more to check (the watch is consulted once a frame, and rewritten textures
 once a segment). A resolve also ends it, since it can change which copy an
 address names.
 
 A submission is therefore cut into **segments** at every point where the
 command processor tells the title that work has finished
-(`vk::renderer::BeforeCompletion`, called from `command_processor.cpp`):
+(the renderer's `before_completion`, called from `src/runtime/gpu/command_processor.rs`):
 
 - `EVENT_WRITE_SHD` and `EVENT_WRITE_CFL` (end-of-pipe writes; D3D's fence is
   one);
@@ -261,7 +346,7 @@ A plain `MEM_WRITE`, scratch write-back or read-pointer write happens when the
 packet is fetched, ahead of earlier draws, so it tells the title nothing and is
 not a completion point.
 
-At each segment end `vk::textures::EndSegment` re-reads the segment's
+At each segment end the texture cache's `end_segment` re-reads the segment's
 rewritten and empty textures and re-stages any that changed. Each segment's
 uploads go into a command buffer of their own, submitted ahead of the
 segment's draws and after the previous segment, so the frame remains one
@@ -270,7 +355,7 @@ versioned. There are four upload slots, each with a staging buffer that a
 submission's uploads are sub-allocated from; an upload outside a submission is
 submitted and waited for on its own.
 
-**Empty blocks.** `EmptyPercent` counts 64-byte spans that are entirely zero
+**Empty blocks.** `empty_percent` counts 64-byte spans that are entirely zero
 (memory nothing has written is zero in long runs; a dark or black compressed
 texture is not). Above 60% a texture is marked as read from an empty block and
 re-read at segment end until it drops to 25% or less. With diagnostics,
@@ -293,24 +378,24 @@ c0.x = 0x40000000 | (destination physical address / 4)
 ```
 
 The translator drops memory exports ([shaders.md](shaders.md#exports)), so
-`runtime/image_move.cpp` makes the copy on the CPU, at that draw:
+`src/runtime/gpu/image_move.rs` makes the copy on the CPU, at that draw:
 
 1. A hook on `T_Image_FlushMove` records `{destination, source, size, stream
    constant}` before the title's own call writes the draw, so the parse never
    meets the draw first.
 2. At every draw while copies are pending, the command processor calls
-   `imagepool::AtDraw(c0.x, vertex shader hash)`. A match makes the copy there:
+   `image_move::at_draw(c0.x, vertex shader hash)`. A match makes the copy there:
    every draw queued before it sees the old bytes, every one after the new.
    Once the copy shader is known, a matching `c0.x` under another shader is not
    a copy, because `c0` outlives the draw that set it.
-3. `imagepool::AtFrameEnd` makes any copy whose frame the parse has left
+3. `image_move::at_frame_end` makes any copy whose frame the parse has left
    without meeting its draw, so a block is never left uncopied. With nothing
    consuming the command stream the copy is made immediately.
 
-Before copying, `vk::renderer::BeforeStreamWrite` ends the current segment if
+Before copying, the renderer's `before_stream_write` ends the current segment if
 it samples the destination, so draws before the copy keep the old texture. The
-copy uses `gpu::watch::WillWrite` to unprotect the range in one call and then
-`vk::textures::MemoryWritten`.
+copy uses `memory_watch::will_write` to unprotect the range in one call and then
+the texture cache's `memory_written`.
 
 The copy must be made at its draw. Made when the pool asks, it lands ahead of
 draws the title has already queued that still name the block, and those draw
@@ -319,15 +404,10 @@ whatever it held before, since the image is not streamed again.
 
 ## Checking the path
 
-- **Upload round trip.** Because block formats go across untouched, an image
-  copied back off the device must return the uploaded bytes exactly.
-  `upload-texture [--format=<n>] [--size=<w>x<h>]` does this for every format
-  with a Vulkan equivalent; sizes that are not a multiple of the block size
-  (`--size=17x9`) exercise the copy-region row length.
 - **By eye.** A wrong tiling function produces a buffer of the right size full
   of plausible bytes, so only a picture confirms it. `MW2_DUMP_TEXTURES=<dir>`
   writes each distinct texture as PNM, each mip level beside it
-  (`gpu::DecodeToRgba`, which exists only for this); `MW2_DUMP_TEXTURES_RAW=1`
+  (`texture::decode_to_rgba`, which exists only for this); `MW2_DUMP_TEXTURES_RAW=1`
   also writes the guest bytes for offline layout experiments. A reimplemented
   offline untiler must first reproduce a known-good texture before its output
   is trusted.

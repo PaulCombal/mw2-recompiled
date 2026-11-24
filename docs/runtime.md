@@ -59,7 +59,7 @@ both `0xA0000000` and `0xC0000000`.
 
 ### Heaps
 
-`kernel.cpp` keeps two heaps, virtual and physical. Freed blocks are merged
+`kernel/memory.rs` keeps two heaps, virtual and physical. Freed blocks are merged
 with their neighbours and reused first-fit, and are zeroed when handed out
 again, as the console's pages come. Everything above a heap's high-water mark
 has never been used and is already zero.
@@ -72,26 +72,26 @@ all of its memory, asked for with 4 KB alignment, and on a base that is only
 4 KB aligned its own sub-allocators corrupt the script compiler's data during
 level loads.
 
-`MmGetPhysicalAddress` (`kernel::ToPhysical`) is exactly the sequence the title
+`MmGetPhysicalAddress` (`kernel::to_physical`) is exactly the sequence the title
 inlines: `(va & 0x1FFFFFFF) + (((va >> 20) + 0x200) & 0x1000)`.
-`kernel::FromPhysical` goes the other way for the GPU side; it prefers the
+`kernel::from_physical` goes the other way for the GPU side; it prefers the
 physical heap, since everything the GPU is handed comes from there.
 
 ## Loading the image
 
-`main.cpp` gets the image one of two ways (`runtime/install/`):
+The run (`src/runtime/run.rs`) gets the image one of two ways (`src/runtime/install/`):
 
 - **A player's start** (no arguments): the executable works from its own
   folder. It reads `game/default.xex` or `game/default_mp.xex` and takes it
-  only if its SHA-256 is the one CMake baked in from `mw2/` (another region or
+  only if its SHA-256 is the one `build.rs` baked in from `mw2/` (another region or
   another version has other code at other addresses), then decrypts and
-  decompresses the XEX2 in memory, where it has either (`install/xex.cpp`,
-  `install/crypto.cpp`). With no such executable there -- nothing installed,
+  decompresses the XEX2 in memory, where it has either (`install/xex.rs`,
+  `install/crypto.rs`). With no such executable there -- nothing installed,
   or an install of another version -- it starts `mw2-launcher` beside it and
   ends; installing is the launcher's ([building.md](building.md#the-launcher)).
 - **A development run** names the image and the game folder:
   `./build/mw2 mw2/default.pe mw2/game`. The image is the flat PE that
-  `tools/xexdump.py` writes; the disc version also takes the disc's XEX
+  `cargo xtask` writes; the disc version also takes the disc's XEX
   itself, decrypted on the way in.
 
 The campaign and the multiplayer are two executables, and the title's menus
@@ -100,7 +100,7 @@ other should know with `XamLoaderSetLaunchData` (1000 bytes it reads back at
 its own start). Here they are two programs: the call ends the run, and once
 the window and the sound are let go it starts `mw2-sp` or `mw2-mp` beside the
 running one, with the launch data in the `MW2_LAUNCH_DATA` environment
-variable (`kernel/misc.cpp`, `install/install.cpp`). A development run only
+variable (`src/runtime/kernel/misc.rs`, `src/runtime/install/`). A development run only
 logs the request, since nothing tells it where the other build and its image
 are.
 
@@ -109,14 +109,14 @@ The image is copied to `PPC_IMAGE_BASE`, and every recompiled function from
 finds its target with `PPC_LOOKUP_FUNC`. The main thread then gets a 1 MB guest
 stack and a thread block, and enters the XEX entry point (`T_ENTRY_POINT` in
 `title.h`). The guest never returns in practice. A run ends through
-`crash::RequestExit` (the window closed, a run deadline), through a fault, or
+`run::request_exit` (the window closed, a run deadline), through a fault, or
 when the title calls `HalReturnToFirmware`; the first two print the same
 end-of-run reports.
 
 ## r13, the KPCR and thread ids
 
 `r13` is the Xbox 360 thread pointer: it points into the KPCR, and the
-recompiled code makes around 1100 r13-relative accesses. `kernel::CreateThreadBlock`
+recompiled code makes around 1100 r13-relative accesses. `kernel::create_thread_block`
 allocates one block per guest thread:
 
 | part | size | notes |
@@ -152,32 +152,32 @@ Rules the block has to satisfy:
 
 ## Kernel and XAM imports
 
-Every import is a function `__imp__<Name>` the recompiled code calls. The
-runtime implements them with `PPC_FUNC(__imp__<Name>)` in `runtime/kernel/`:
+Every import is a function `__imp__<Name>` the recompiled code calls. The kernel
+defines them with `kernel_import!(<Name>, ...)` in `src/runtime/kernel/`:
 
 | file | what |
 |---|---|
-| `memory.cpp`, `kernel.cpp` | virtual and physical memory, the heaps, thread blocks, APCs, the time stamp bundle |
-| `objects.*`, `sync_objects.cpp` | the object table; events, semaphores, mutants, timers and the waits on them |
-| `sync.cpp` | critical sections, spinlocks, TLS slots |
-| `threads.cpp` | thread creation, resume, affinity |
-| `misc.cpp` | clocks, delays, module queries |
-| `files.cpp` | file I/O |
-| `content.cpp`, `profile.cpp` | content packages and the profile ([saves.md](saves.md)) |
-| `xam.cpp` | users, XOVERLAPPED, notifications, UI calls, sessions and Live stand-ins |
-| `input.cpp` | gamepad |
-| `net.cpp` | XNet and Winsock |
-| `video.cpp` | `Vd*`, the GPU's kernel surface ([d3d9-seam.md](d3d9-seam.md)) |
-| `audio.cpp` | `XAudio*`, `XMA*` ([audio.md](audio.md)) |
+| `memory.rs`, `mod.rs` | virtual and physical memory, the heaps, thread blocks, APCs, the time stamp bundle |
+| `objects.rs`, `sync_objects.rs` | the object table; events, semaphores, mutants, timers and the waits on them |
+| `sync.rs` | critical sections, spinlocks, TLS slots |
+| `threads.rs` | thread creation, resume, affinity |
+| `misc.rs` | clocks, the timebase, delays, module queries, launch data |
+| `files.rs` | file I/O |
+| `content.rs`, `profile.rs` | content packages and the profile ([saves.md](saves.md)) |
+| `input.rs` | gamepad |
+| `video.rs` | `Vd*`, the GPU's kernel surface ([d3d9-seam.md](d3d9-seam.md)) |
+| `xam.rs` | users, notifications, UI calls, sessions, enumerators and Live stand-ins |
+| `net.rs` | XNet and Winsock |
+| `audio.rs`, `xma.rs` | `XAudio*`, `XMA*`, the render driver and the XMA decoder's contexts ([audio.md](audio.md)) |
 
-`build.sh` runs `tools/genshared.py`, which writes `ppc_recomp_shared.h` and the
-list of imports the title uses, then `tools/gen_kernel_stubs.py`, which writes
-`stubs_generated.cpp` beside the recompiled tree: every import no
-`runtime/kernel/*.cpp` defines becomes a stub that logs its name once, counts
-its calls and returns 0. The end-of-run report lists the stubs a run reached.
+`cargo xtask` writes `kernel_stubs.rs` into the recompiled Rust tree (`xtask/src/generate.rs`):
+every import the recompiled code declares and no `src/runtime/kernel/*.rs` defines (with
+`kernel_import!`) becomes a stub, defined with `kernel_import!` too, that logs its name once, counts
+its calls and returns 0. `src/runtime/kernel/stubs.rs` includes the file. The end-of-run report lists
+the stubs a run reached.
 
 Two kernel exports are data, not functions, and nothing resolves them, so
-`kernel::Initialise` writes them into the image:
+`kernel::initialise` writes them into the image:
 
 - **The time stamp bundle** (`T_DATA_TimeStampBundlePtr`): interrupt time,
   system time and a millisecond tick count, kept current by the runtime.
@@ -196,7 +196,7 @@ ticks to milliseconds with a constant 1/50000. System time is 100 ns ticks since
 
 ### Calling guest code from the host
 
-`kernel::CallGuest` runs a guest function on the caller's stack, below its frame
+`kernel::call_guest` runs a guest function on the caller's stack, below its frame
 and red zone, with the caller's r13. It restores MXCSR afterwards: the console
 keeps the scalar and vector float modes in separate registers, x86 has one,
 and the recompiled code tracks which mode it last set, so a callee that leaves
@@ -216,14 +216,18 @@ keeps its registers in the context, where the host `longjmp` restores them,
 although the others keep theirs in locals ([building.md](building.md)).
 
 A host `longjmp` skips every host frame between the two, destructors included.
-Runtime code that calls back into guest code -- a hook's `GUEST_ORIG`, an APC,
+Runtime code that calls back into guest code -- a hook's `.original()`, an APC,
 the scripted console -- must not hold a lock or an owning object across the
 call.
 
 ## Threads
 
-Each guest thread is a detached host thread with its own guest stack (at least
-512 KB), thread block and `PPCContext` (`threads.cpp`).
+Each guest thread is a detached host thread with its own guest stack (what it
+asked for, and at least 512 KB), thread block and `PPCContext` (`kernel/threads.rs`). Its host stack is
+the size a C++ `std::thread` gets, as the recompiled code nests deep on it:
+glibc's default on Linux, which `RLIMIT_STACK` sets (8 MB), and on Windows what
+the executable asks for (16 MB, `build.rs`). Rust's own default, 2 MB, is
+not enough.
 
 - `ExCreateThread` enters XAPI's thread-startup shim (its fourth argument) with
   the routine and context as arguments, not the routine itself: the shim
@@ -235,8 +239,8 @@ Each guest thread is a detached host thread with its own guest stack (at least
 
 ## Objects and waits
 
-`objects.*` is one object table for handles and guest objects, as the console
-keeps it. `Nt*` calls name an object by handle and `Ke*` calls by the address
+`kernel/objects.rs` is one object table for handles and guest objects, as the
+console keeps it. `Nt*` calls name an object by handle and `Ke*` calls by the address
 of its dispatcher header in guest memory; a header names its object by holding
 the handle and a signature in its wait list. A header the title initialises
 inline, with no kernel call, is taken up as a new object with the type and
@@ -249,6 +253,14 @@ thread sleeps until something it waits on is signalled. Timeouts follow NT's
 convention: null waits forever, negative is relative, positive is an absolute
 system time. Waiting on something that is not a dispatcher object (a file) is
 always satisfied.
+
+The one lock also holds the handle table and the headers, so a call takes it
+once. A waiting thread has a condition variable of its own, registered with
+every object it waits on, and is woken once a sleep however many of them are
+signalled: a wake is a system call, and one for a thread that is awake already
+costs most where the lock is wanted most. An object that is not a dispatcher
+object (a file, a session, an enumerator) sits in the table as `Kind::Other`,
+boxed as `dyn Any` (`src/runtime/kernel/objects.rs`).
 
 Critical sections are the console's `RTL_CRITICAL_SECTION` in guest memory,
 taken with an atomic on the lock count; only a thread that finds one held
@@ -268,30 +280,32 @@ flight while it decompresses the other buffer.
 
 Asynchronous XAM calls take the console's `XOVERLAPPED`, which is not Win32's:
 the result is at +0, the length at +4 and the event to signal at +12.
-`kernel::CompleteOverlapped` fills it and signals the event, so a call that
+`kernel::complete_overlapped` fills it and signals the event, so a call that
 completes inline still looks finished to a caller that polls or waits.
 
 ## Files
 
 Guest paths look like `game:\zone\common.ff` or `\Device\Cdrom0\...`
-(`files.cpp`). The device prefix is split off and looked up in a mount table:
+(`src/runtime/kernel/files.rs`). The device prefix is split off and looked up in a mount table:
 
 - A path under a mounted content package (`save0:` and the like, mounted by
-  `content.cpp`) resolves under that package's directory and may be created,
+  `content.rs`) resolves under that package's directory and may be created,
   written, truncated and deleted.
 - Everything else resolves under the game root, which is the disc and
   read-only. Truncation depends on the path being writable, not on the
   disposition, so a disc file opened with `FILE_OVERWRITE_IF` is not emptied.
 
 Resolution is case-insensitive, one component at a time. Deletion follows NT:
-a file marked for deletion goes when its last handle closes. Reads go through a
+a file marked for deletion goes when its last handle closes. A read sees what
+any handle wrote before it, as NT's does: nothing is read ahead or kept between
+calls. Reads go through a
 host buffer and are copied into guest memory, because a system call writing
 into a page the GPU watch has made read-only fails instead of faulting (see
 [the write watch](#the-fault-handler-and-the-write-watch)).
 
 ## Input
 
-`input.cpp` answers `XamInputGetState` from SDL3 gamepads, one per user index.
+`src/runtime/kernel/input.rs` answers `XamInputGetState` from SDL3 gamepads, one per user index.
 With the window open, the keyboard also drives the pad: Return is Start, Escape
 Back, arrows the d-pad, Z/X/C/V are A/B/X/Y, Q/E the bumpers. The packet number
 changes only when the state does, since the title reads a new packet as
@@ -300,20 +314,23 @@ walker ([switches.md](switches.md)).
 
 ## Networking
 
-`net.cpp` implements XNet and Winsock. Every call answers definitively, since
-the title spins on "pending" answers (single player polls
+`src/runtime/kernel/net.rs` implements XNet and Winsock. Every call answers
+definitively, since the title spins on "pending" answers (single player polls
 `XNetGetTitleXnAddr`). The Ethernet link is reported down in the campaign and
 up in the multiplayer, which refuses to start a match without one
-(`MW2_NET_LINK` overrides). With an online service built in, the title's
-sockets and addresses go through it; see [multiplayer.md](multiplayer.md).
+(`MW2_NET_LINK` overrides). With an online service chosen, the title's sockets
+and addresses go through it; see [multiplayer.md](multiplayer.md). Without one,
+a title socket is a host UDP socket of the standard library's, made when it is
+first bound or used, as a host binds a socket that sends before it is bound.
+Ports below 1024 are shifted up by 30000, since binding them needs privileges.
 
 ## The fault handler and the write watch
 
-`crash.cpp` installs signal handlers on Linux and a vectored exception handler
+`crash.rs` installs signal handlers on Linux and a vectored exception handler
 on Windows. A fault is offered in turn to:
 
 1. the `MW2_WATCH` write watchpoint (diagnostic builds, Linux only);
-2. the GPU's write watch (`gpu/memory_watch.*`);
+2. the GPU's write watch (`src/runtime/gpu/memory_watch.rs`);
 3. on Windows, the first-touch commit of a reserved page.
 
 What is left is a real fault. The report gives the guest address, what region
@@ -325,7 +342,7 @@ backtrace is the guest call stack; runtime frames print as `mw2-sp(+offset)`; on
 `SIGFPE` is an integer divide by zero whose guarding trap the recompiler drops.
 An indirect call to an address outside the code section is reported, and ends
 the process, instead of reading past the function table
-([security.md](security.md)). With `MW2_TRACE_INDIRECT` (on by default), so is
+([security.md](security.md)). With `MW2_TRACE_INDIRECT`, which `build.rs` always defines, so is
 one to an address inside it with no recompiled function, instead of jumping to
 null.
 
@@ -344,15 +361,15 @@ and received packets are copied in from a buffer of the runtime's own.
 `title.h` names every guest function and global the runtime hooks or reads,
 once for each executable, since the campaign and the multiplayer are the same
 engine built twice with every function somewhere else. XenonRecomp emits each
-function as a weak `sub_XXXXXXXX` that calls `__imp__sub_XXXXXXXX`;
-`GUEST_HOOK(T_x)` defines a strong `sub_` in its place, and `GUEST_ORIG(T_x)`
-calls the original. The hooks cover D3D9's present and command-buffer paths,
-the engine's print, error and console paths, the job system's spin waits, and
-the memcard setup.
+function as `__imp__sub_XXXXXXXX` with a weak alias `sub_XXXXXXXX`;
+`guest_hook!(T_x, ...)` defines a strong `sub_` in its place, and
+`T_x.original(ctx, memory)` calls the original. The hooks cover D3D9's present and
+command-buffer paths, the engine's print, error and console paths, the job
+system's spin waits, and the memcard setup.
 
 Stores the recompiler marks as hardware-register writes (a store followed by
-`eieio`) go through `PPC_MM_STORE_U32` from `mmio_hook.h`, force-included into
-the recompiled code. The store still lands in memory; stores into the XMA
+`eieio`) go through `ppc_mm_store_u32` from `config/mw2_hooks.rs`, which the
+recompiled code is generated with. The store still lands in memory; stores into the XMA
 window at `0x7FEA0000` are also passed to the decoder ([audio.md](audio.md)).
 
 ## Platform layer
@@ -363,4 +380,4 @@ short sleeps), attaching a release build to the terminal it was started from,
 thread ids, names and priorities, backtraces, and loading shared libraries. It
 also supplies `roundevenf`, which the UCRT lacks. The other platform
 differences are in the places that cannot go through it: guest memory, the
-fault handler, sockets (`net.cpp`, `online/`) and the Steam client's ABI.
+fault handler, sockets (`kernel/net.rs`, `online/`) and the Steam client's ABI.

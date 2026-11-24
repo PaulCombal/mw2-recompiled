@@ -51,7 +51,7 @@ if pgrep -x mw2 >/dev/null; then
     echo "mw2 is already running; close it first" >&2
     exit 1
 fi
-[ -x build-mp/mw2 ] || { echo "build it first: TITLE=mp ./build.sh" >&2; exit 1; }
+[ -x build-mp/mw2 ] || { echo "build it first: cargo xtask build --title mp" >&2; exit 1; }
 
 out="diagnosis/hunt/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$out"

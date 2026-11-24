@@ -6,14 +6,18 @@
 // first in play is compiled there and then -- on a cold driver cache, tens of
 // milliseconds of a frame each, hundreds in a level. The shaders are all in
 // the game's files, so the launcher reads them out (zone/), builds each the
-// way the game would (runtime/gpu/vulkan/shader_build.h) into the pipeline
-// cache the game starts with, and the game finds every one there.
+// way the game would (the shaders crate, shaders/src/shader_build.rs) into the
+// pipeline cache the game starts with, and the game finds every one there.
 //
 // It is not optional: the launcher runs it after an install and whenever
-// the marker it leaves (runtime/gpu/vulkan/shader_marker.h) no longer fits
-// -- another version, driver, graphics card, resolution or game file -- before
-// it starts the game, and a game started on its own starts the launcher for
-// it.
+// the marker it leaves (shaders/src/marker.rs) no longer fits -- another
+// version, driver, graphics card, resolution or game file -- before it starts
+// the game, and a game started on its own starts the launcher for it.
+//
+// The pass is Rust (launcher/src/precompile.rs), on the crate the game builds
+// its shaders with; this is how the window and the terminal mode run it.
+// precompile.cpp hands it the game's files as zone/ reads them and the
+// settings, and brings back its progress and its result.
 #include <atomic>
 #include <cstdint>
 #include <map>
@@ -38,7 +42,7 @@ namespace precompile
         std::string error;            // why not, when not
         std::string why;              // why it ran: what no longer fit
         std::string device;           // the GPU it compiled for, by name
-        std::string deviceId;         // and by vk::pipeline::DeviceId
+        std::string deviceId;         // and by its id (shaders/src/pipeline.rs, device_id)
         bool noLibraries = false;     // the device compiles shaders only with a draw's state: none could be
         uint32_t shaders = 0;         // distinct shaders in the game
         uint32_t untranslated = 0;    // the translator cannot make (the game cannot draw them either)
@@ -51,7 +55,7 @@ namespace precompile
 
     // Brings the compiled shaders up to date: checks the marker and, unless
     // it fits (or `always`), reads game/ and builds every shader in it, on
-    // every core. `device` (vk::pipeline::DeviceId) is the one the game
+    // every core. `device` (a device_id) is the one the game
     // draws on when it named one; else the one the marker names, if the
     // machine still has it; else the one the game's window would pick.
     // Blocks until done. Run from the folder the launcher is in.

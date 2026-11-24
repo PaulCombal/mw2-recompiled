@@ -87,10 +87,8 @@ fn answer_status(listening: &TcpListener, relay: &Relay) {
         if client.set_nonblocking(true).is_err() {
             continue;
         }
-        let answer = format!(
-            "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
-            relay.status()
-        );
+        let answer =
+            format!("HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}", relay.status());
         let mut ignored = [0; 512];
         let _ = client.read(&mut ignored);
         let _ = client.write_all(answer.as_bytes());

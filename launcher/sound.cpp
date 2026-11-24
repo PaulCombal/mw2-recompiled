@@ -11,7 +11,7 @@
 //
 // and then the name's characters, the buffer and the seek table. The buffer is
 // XMA in 2 KB packets, the same the title hands the console's decoder while it
-// runs (runtime/apu/xma.cpp), and the same FFmpeg decodes it here.
+// runs (src/runtime/kernel/xma.rs), and FFmpeg decodes it here.
 //
 // A sound is looked up by its name's characters rather than by walking the
 // assets before it, which would take the layout of every kind of asset there

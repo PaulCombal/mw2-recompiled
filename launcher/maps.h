@@ -6,7 +6,7 @@
 // picture in the game's menus, <name>_preview.ff. A map made for the PC game
 // is converted when it is added, its picture made of its loading screen. The ones in the game folder are
 // in the game: the multiplayer lists them in its BONUS MAPS menu, which has
-// room for kInGame (runtime/custom_map_list.cpp). The others wait in maps/
+// room for kInGame (src/hooks/custom_map_list.rs). The others wait in maps/
 // beside the launcher, which also keeps each map's picture, <name>.bmp, made
 // from the PC map's .iwd when it was added.
 #include <cstddef>
