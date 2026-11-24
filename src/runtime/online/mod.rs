@@ -143,6 +143,9 @@ pub struct FriendList {
 pub trait Service: Send + Sync {
     /// Logs in. False leaves the title offline, as if no backend were built.
     fn start(&mut self) -> bool;
+    /// The title is leaving for its other executable, which opens the same ports at
+    /// its start: lets go of them. Nothing goes out or comes in after it.
+    fn release_ports(&self) {}
 
     /// Where other players reach this one: unique among everyone it can reach, and
     /// stable for the run.
@@ -301,6 +304,14 @@ fn started() -> Option<&'static Started> {
 /// when there is none or none could start.
 pub fn get() -> Option<&'static dyn Service> {
     started().map(|started| &*started.service)
+}
+
+/// Lets go of the service's ports before the other executable starts; nothing if it
+/// was never started.
+pub fn release_ports() {
+    if let Some(Some(started)) = SERVICE.get() {
+        started.service.release_ports();
+    }
 }
 
 /// Its backend's name, "steam", "lan" or "server"; None without one.

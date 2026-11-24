@@ -1445,6 +1445,7 @@ namespace
                 job->thread.join();
                 const precompile::Result result = job->compiled;
                 const Action then = Action(job->then);
+                const bool compiling = job->compile.checked;
                 job.reset();
                 focusPlaced = false;
                 if (result.ok)
@@ -1466,6 +1467,8 @@ namespace
                     }
                     else if (then != Action::None) Launch(then, result.deviceId);
                 }
+                else if (result.cancelled && !compiling)
+                    message.clear();   // the start was cancelled before any compiling
                 else if (result.cancelled)
                 {
                     message = then == Action::None ? "The shaders were not compiled. The game compiles them before it is played."
@@ -1537,8 +1540,19 @@ namespace
         }
 
         // A look at the compiled shaders that finds them up to date is over in
-        // a moment: the screen stays as it was meanwhile.
+        // a moment: the screen stays as it was meanwhile, unless it starts a game.
         bool JobShown() const { return job && (job->kind != Job::Kind::Compile || job->compile.checked); }
+        // A start the player asked for, while that look is taken: said at once, so that the
+        // press is seen to have done something.
+        bool Starting() const
+        {
+            return job && job->kind == Job::Kind::Compile && !job->compile.checked && Action(job->then) != Action::None;
+        }
+        bool StartsCampaign() const
+        {
+            const Action then = Action(job->then);
+            return then == Action::PlayCampaign || then == Action::ReportCampaign;
+        }
 
         std::vector<Entry> Entries() const
         {
@@ -1589,6 +1603,12 @@ namespace
                 entries.push_back(std::move(entry));
                 return &entries.back();
             };
+            if (Starting())
+            {
+                add(Action::Cancel, "CANCEL", true, StartsCampaign() ? "CAMPAIGN" : "MULTIPLAYER",
+                    StartsCampaign() ? "Starting the campaign..." : "Starting the multiplayer...");
+                return entries;
+            }
             if (JobShown())
             {
                 add(Action::Cancel, "CANCEL", true,
@@ -1780,7 +1800,7 @@ namespace
             // While a name is typed the keys are its letters, and the entry stays.
             if (app.typing || typed) { app.focus = focusBefore; chosen = -1; }
             if (app.typing || typed) {}
-            else if (app.JobShown() && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false)) app.job->Cancel();
+            else if ((app.JobShown() || app.Starting()) && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false)) app.job->Cancel();
             else if (app.driverWarned != Action::None && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false))
             {
                 sound::Play(sound::Clip::Click);

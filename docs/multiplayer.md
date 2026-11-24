@@ -142,7 +142,9 @@ steam joins the Flatpak Steam's namespace at the start
 With `none` there is no service, and the title's sockets are host UDP sockets, enough
 for system link on one machine. Only one copy can have the title's ports then;
 a second one's binds fail, which the title takes for a fatal error and restarts
-on, so `NetDll_bind` leaves its sockets unbound and it plays without a network.
+on, so `NetDll_bind` leaves its sockets unbound and it plays without a network:
+a receive on such a socket finds nothing waiting, where Winsock would refuse a
+socket never bound, which the title would take for a fatal error too.
 
 The player's rank is the profile's, whichever service he plays through
 ([gameplay.md](gameplay.md#signing-in)): the offline stats under his offline

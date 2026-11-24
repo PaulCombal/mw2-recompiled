@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use std::ffi::CStr;
 use std::net::{SocketAddr, SocketAddrV4, UdpSocket};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -68,7 +68,8 @@ struct Matching {
 struct Link {
     where_: Vec<u8>,
     relay: SocketAddrV4,
-    socket: UdpSocket,
+    /// None once released (release_ports)
+    socket: RwLock<Option<UdpSocket>>,
     id: u64,
     /// when this copy last sent the relay anything, in ms since `epoch`
     said: AtomicU64,
@@ -118,7 +119,8 @@ impl Link {
         packet.extend_from_slice(&wire::header(kind, peer, self.token.load(Relaxed)));
         packet.extend_from_slice(bytes);
         self.said.store(self.milliseconds(), Relaxed);
-        self.socket.send_to(&packet, self.relay).is_ok()
+        let socket = self.socket.read().unwrap_or_else(PoisonError::into_inner);
+        socket.as_ref().is_some_and(|socket| socket.send_to(&packet, self.relay).is_ok())
     }
 
     fn say_hello(&self, had: u64) {
@@ -139,8 +141,10 @@ impl Link {
     }
 
     fn relay_packet_into(&self, raw: &mut [u8], packet: &mut [u8]) -> Option<(usize, wire::Header)> {
+        let socket = self.socket.read().unwrap_or_else(PoisonError::into_inner);
+        let socket = socket.as_ref()?;
         loop {
-            let (got, from) = self.socket.recv_from(raw).ok()?;
+            let (got, from) = socket.recv_from(raw).ok()?;
             if from != SocketAddr::V4(self.relay) || got < wire::HEADER {
                 continue;
             }
@@ -357,7 +361,7 @@ impl Transport for Server {
         let mut link = Link {
             where_: text.to_vec(),
             relay,
-            socket,
+            socket: RwLock::new(Some(socket)),
             id: 0,
             said: AtomicU64::new(0),
             token: AtomicU64::new(0),
@@ -432,6 +436,18 @@ impl Transport for Server {
 
     fn slot(&self) -> u32 {
         self.slot
+    }
+
+    // The other executable takes the same own port, and with it this copy's slot. It
+    // says Hello for itself, so the relay is told this copy is gone.
+    fn release_ports(&self) {
+        let Some(link) = &self.link else { return };
+        *link.stopping.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        link.stop.notify_all();
+        if link.id != 0 {
+            link.say(wire::BYE, link.id, &[]);
+        }
+        link.socket.write().unwrap_or_else(PoisonError::into_inner).take();
     }
 
     fn send_to(&self, peer: u64, bytes: &[u8]) -> bool {

@@ -61,6 +61,9 @@ pub fn request_exit(why: &CStr) {
         crate::runtime::stutters::ending();
         renderer::gpu_shutdown();
         report_all();
+        // The other executable binds the same ports as soon as it starts.
+        kernel::release_ports();
+        online::release_ports();
         install::start_next_title();
         platform::exit_now(0);
     });

@@ -214,6 +214,11 @@ pub fn free_guest(address: u32) -> bool {
     memory::VIRTUAL.free(address)
 }
 
+/// Before the other executable starts: the ports this title bound are free for it.
+pub fn release_ports() {
+    net::release_ports();
+}
+
 #[cfg_attr(not(feature = "diagnostics"), allow(dead_code, reason = "the report and the diagnostic keys' alone"))]
 pub fn report_memory() {
     if cfg!(feature = "diagnostics") {

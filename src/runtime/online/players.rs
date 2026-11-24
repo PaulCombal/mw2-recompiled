@@ -40,6 +40,8 @@ pub trait Transport: Send + Sync {
     /// The next packet that arrived and who from, without waiting: its size, or None
     /// when nothing is waiting.
     fn next(&self, bytes: &mut [u8]) -> Option<(usize, u64)>;
+    /// Closes its sockets, as Service::release_ports.
+    fn release_ports(&self);
 
     // Optional, as on Service: what only a server everyone shares can do.
     fn matchmaking(&self) -> bool {
@@ -278,6 +280,10 @@ impl Players {
 }
 
 impl Service for Players {
+    fn release_ports(&self) {
+        self.transport.release_ports();
+    }
+
     fn start(&mut self) -> bool {
         if !self.transport.open() {
             return false;

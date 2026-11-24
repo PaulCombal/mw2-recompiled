@@ -15,6 +15,7 @@ use crate::env;
 use crate::log::{c_string, log_error, log_info};
 use std::ffi::CStr;
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
+use std::sync::{PoisonError, RwLock, RwLockReadGuard};
 
 fn id_of(address: SocketAddrV4) -> u64 {
     (u64::from(u32::from(*address.ip())) << 16) | u64::from(address.port())
@@ -51,15 +52,20 @@ fn own_address() -> Ipv4Addr {
 }
 
 struct Lan {
-    own: Option<UdpSocket>,
-    shared: Option<UdpSocket>,
+    /// None once released (release_ports)
+    own: RwLock<Option<UdpSocket>>,
+    shared: RwLock<Option<UdpSocket>>,
     shared_port: u16,
     id: u64,
     slot: u32,
 }
 
 pub fn make() -> Box<dyn Service> {
-    players::make(Box::new(Lan { own: None, shared: None, shared_port: 0, id: 0, slot: 0 }))
+    players::make(Box::new(Lan { own: RwLock::new(None), shared: RwLock::new(None), shared_port: 0, id: 0, slot: 0 }))
+}
+
+fn held(socket: &RwLock<Option<UdpSocket>>) -> RwLockReadGuard<'_, Option<UdpSocket>> {
+    socket.read().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Transport for Lan {
@@ -87,8 +93,8 @@ impl Transport for Lan {
             u32::from(port),
             u32::from(self.shared_port)
         );
-        self.own = Some(own);
-        self.shared = Some(shared);
+        self.own = RwLock::new(Some(own));
+        self.shared = RwLock::new(Some(shared));
         self.slot = slot;
         true
     }
@@ -106,18 +112,27 @@ impl Transport for Lan {
     }
 
     fn send_to(&self, peer: u64, bytes: &[u8]) -> bool {
-        self.own.as_ref().is_some_and(|own| own.send_to(bytes, address_of(peer)).is_ok())
+        held(&self.own).as_ref().is_some_and(|own| own.send_to(bytes, address_of(peer)).is_ok())
     }
 
     fn send_all(&self, bytes: &[u8]) -> bool {
         let everyone = SocketAddrV4::new(Ipv4Addr::BROADCAST, self.shared_port);
-        self.own.as_ref().is_some_and(|own| own.send_to(bytes, everyone).is_ok())
+        held(&self.own).as_ref().is_some_and(|own| own.send_to(bytes, everyone).is_ok())
     }
 
     fn next(&self, bytes: &mut [u8]) -> Option<(usize, u64)> {
-        [&self.own, &self.shared].into_iter().flatten().find_map(|socket| match socket.recv_from(bytes) {
-            Ok((got, std::net::SocketAddr::V4(from))) => Some((got, id_of(from))),
-            _ => None,
-        })
+        [held(&self.own), held(&self.shared)].iter().filter_map(|socket| socket.as_ref()).find_map(
+            |socket| match socket.recv_from(bytes) {
+                Ok((got, std::net::SocketAddr::V4(from))) => Some((got, id_of(from))),
+                _ => None,
+            },
+        )
+    }
+
+    // The other executable takes the same own port, and with it this copy's slot.
+    fn release_ports(&self) {
+        for socket in [&self.own, &self.shared] {
+            socket.write().unwrap_or_else(PoisonError::into_inner).take();
+        }
     }
 }

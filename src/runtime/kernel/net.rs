@@ -568,6 +568,16 @@ kernel_import!(NetDll_socket, |ctx, _memory| {
     ctx.r3.u64 = u64::from(handle);
 });
 
+/// The title is leaving for its other executable, which binds the same ports at its
+/// start, and is started before this process ends: as on the console, where one title
+/// at a time has the network, this one lets go of the ports it bound first. Until the
+/// process ends, those sockets hear nothing and send from a port of the host's choosing.
+pub fn release_ports() {
+    for socket in sockets().table.values_mut().filter(|socket| socket.port != 0 && !socket.stream) {
+        socket.host = None;
+    }
+}
+
 kernel_import!(NetDll_closesocket, |ctx, _memory| {
     let closed = sockets().table.remove(&ctx.r4.as_u32());
     drop(closed);
@@ -756,9 +766,11 @@ kernel_import!(NetDll_recvfrom, |ctx, memory| {
     }
 
     // A receive does not bind a socket, as a send does: one not bound yet hears nothing,
-    // and can still be bound. Winsock refuses the call.
-    if sockets().table.get(&handle).is_some_and(|socket| socket.host.is_none() && !socket.stream) {
-        return fail(ctx, if cfg!(windows) { WSAEINVAL } else { WSAEWOULDBLOCK });
+    // and can still be bound. Winsock refuses the call. One the title bound without a
+    // host socket behind it -- its port taken by another copy, or let go of on the way
+    // to the other executable -- is bound as far as the title knows, and hears nothing.
+    if let Some(socket) = sockets().table.get(&handle).filter(|socket| socket.host.is_none() && !socket.stream) {
+        return fail(ctx, if cfg!(windows) && socket.port == 0 { WSAEINVAL } else { WSAEWOULDBLOCK });
     }
     let host = match host_of(handle) {
         Some(Ok(host)) => host,

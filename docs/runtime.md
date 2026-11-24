@@ -98,9 +98,14 @@ The campaign and the multiplayer are two executables, and the title's menus
 go from one to the other with `XamLoaderLaunchTitle`, after leaving what the
 other should know with `XamLoaderSetLaunchData` (1000 bytes it reads back at
 its own start). Here they are two programs: the call ends the run, and once
-the window and the sound are let go it starts `mw2-sp` or `mw2-mp` beside the
-running one, with the launch data in the `MW2_LAUNCH_DATA` environment
-variable (`src/runtime/kernel/misc.rs`, `src/runtime/install/`). A development run only
+the window and the sound are let go, and the ports the title and the online
+service bound (the title's 1000, lan's and the relay's own port), it starts
+`mw2-sp` or `mw2-mp` beside the running one, with the launch data in the
+`MW2_LAUNCH_DATA` environment variable (`src/runtime/kernel/misc.rs`,
+`src/runtime/install/`). The new program binds the same ports within a second
+of its start, which can be before the old one has ended, and the title takes a
+socket it cannot receive on for a fatal error, after which it starts itself
+again. A development run only
 logs the request, since nothing tells it where the other build and its image
 are.
 
