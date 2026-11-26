@@ -15,8 +15,11 @@ use ash::vk;
 use std::ffi::c_void;
 
 /// Where a player's copy keeps the pipeline cache the launcher fills, beside game/ and
-/// saves/.
-pub const CACHE_FILE: &str = "shaders/pipelines.bin";
+/// saves/: one for each way the shaders are translated (`scaled`, as build takes it), so
+/// that a player who goes back to a resolution finds its cache still there.
+pub fn cache_file(scaled: bool) -> &'static str {
+    if scaled { "shaders/pipelines-scaled.bin" } else { "shaders/pipelines.bin" }
+}
 
 /// What this build's shaders come out as: a SHA-256 build.rs takes of the sources that
 /// decide it -- the translator, this file, the pipeline layout, the launcher's reader of

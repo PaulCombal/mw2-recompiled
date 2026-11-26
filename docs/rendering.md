@@ -478,7 +478,7 @@ and the menus take their own 4:3 layout, 640 of their units across. The
 launcher's 4:3 rows are 640x480, 800x600 and 1024x768 at 1x, and 1280x960 to
 2880x2160 scaled.
 
-**The sizes EDRAM allows** (`src/runtime/render_size.rs`; `runtime/render_size.h` has the same check of a frame for the launcher). EDRAM is 2048 tiles of
+**The sizes EDRAM allows** (`src/runtime/render_size.rs`; `launcher/src/settings.rs` has the same check of a frame for the launcher's resolutions). EDRAM is 2048 tiles of
 80x16 samples. The title puts a surface's depth at the top and its colour
 below it: the console's scene, 2x and 1040 wide, is colour at tile 98 and depth
 at 1073, 975 tiles each. So:
@@ -817,15 +817,17 @@ pipelines are built on a device that has pipeline libraries.
 The workers compile a level's shaders as it loads, but a driver with a cold
 cache still takes tens of milliseconds a shader, and a level has thousands. So
 a player's copy is played only with every shader of the game already in the
-pipeline cache it starts with, `shaders/pipelines.bin`. The launcher fills it
+pipeline cache it starts with, `shaders/pipelines.bin`, or
+`shaders/pipelines-scaled.bin` when anything is drawn larger than the title's
+sizes (the translated code differs). The launcher fills it
 (`launcher/src/precompile.rs`, `mw2-launcher --compile-shaders` from a terminal):
 
-- **The list.** `launcher/zone/` walks the fastfiles in `game/` the way the
-  game's loader streams it, using the OpenAssetTools zone definitions in
-  `launcher/zone/defs/`. Every pixel shader is listed as it is loaded. Every
+- **The list.** The zone crate (`zone/`) walks the fastfiles in `game/` the
+  way the game's loader streams it, using the OpenAssetTools zone definitions
+  in `zone/defs/`. Every pixel shader is listed as it is loaded. Every
   vertex shader is listed as the title binds it: the pass's declaration, the
   title's declaration tables (`sub_823EA570`) and D3D's patch routine are
-  reproduced from the same data (`vertex_binding.cpp`). The title binds only
+  reproduced from the same data (`zone/src/vertex_binding.rs`). The title binds only
   a shader loaded fresh into one of a pass's 15 `vertexShaderArray` slots
   (`sub_821BBE70` → `sub_823C2E28` → `Bind`). A slot whose source has no
   stream in its declaration type is not bound, and neither is the pass's own
@@ -840,8 +842,8 @@ pipeline cache it starts with, `shaders/pipelines.bin`. The launcher fills it
   game would (`shader_build::build`): same translator, layout, depth format and
   scale, on the device the game's window would draw on. The pass reuses the
   last cache when only the game's files changed.
-- **The marker.** `shaders/compiled.txt` is written last, after the cache is in
-  place. Both files are written beside their place and renamed over it. The
+- **The marker.** `shaders/compiled.txt` (`compiled-scaled.txt` beside the
+  scaled cache) is written last, after the cache is in place. Both files are written beside their place and renamed over it. The
   marker records what the cache was made for:
   - the build of the shader code: `MW2_SHADER_BUILD`, a SHA-256 `shaders/build.rs`
     takes of the shaders crate's, the compile pass's and the reader's sources;
@@ -850,13 +852,16 @@ pipeline cache it starts with, `shaders/pipelines.bin`. The launcher fills it
   - each fastfile's and executable's name, size and time.
 
   A change to any of these means the cache no longer holds what the game will
-  build.
+  build. Each scale keeps its pair, so a player who changes the resolution and
+  goes back finds the first still compiled; a pass removes the other scale's
+  pair only when the code, the device or the driver changed.
 - **The gates.** The launcher checks the marker before PLAY and REPORT A BUG,
   and runs the pass again first when it no longer fits; it also runs the pass
   after an install. The game checks the marker on a player start, once the
   renderer has settled its device and scale and before the title runs. If it
   does not fit, the game starts `mw2-launcher --play <title> --device <id>` and
-  ends, without writing its own cache over the launcher's. Its window is made
+  ends, without writing its own cache over the launcher's. The cache is read
+  only then, once the scale that names it is known. Its window is made
   hidden and shown only after this check (`show_window`), so a start that
   hands over shows nothing. The launcher then
   compiles for that device and starts the game, naming the device in
@@ -869,14 +874,15 @@ pipeline cache it starts with, `shaders/pipelines.bin`. The launcher fills it
 
 A device without pipeline libraries compiles a shader only together with a
 draw's state, so the pass compiles nothing there. It leaves a marker that
-says so, and the game builds pipelines at their first draw as before.
+says so, and the game builds pipelines at their first draw as before, into
+that scale's cache, which it writes back at its end for the next run.
 
 `MW2_SHADER_CACHE=<file>` records every pipeline a run builds: microcode,
 formats and state (`SMW2`, version 4). The next run rebuilds them at start-up.
 It has to be recorded, because the state a shader pair is drawn with exists
 only in a previous run. The file is written back as a union, so it never
 shrinks. `MW2_PIPELINE_CACHE=<file>` persists the driver's `VkPipelineCache`
-in place of `shaders/pipelines.bin`.
+in place of the player's cache.
 
 ## Checking
 

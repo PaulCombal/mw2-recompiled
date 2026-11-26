@@ -1,7 +1,19 @@
-#include "maps.h"
+// Custom maps: maps converted from the PC game for the 360's multiplayer.
+//
+// A map is three files, <name>.ff, <name>_load.ff and <name>.arena (what the
+// menus show of it, runtime/install/arena.h), and a fourth when it has a
+// picture in the game's menus, <name>_preview.ff. A map made for the PC game
+// is converted when it is added, its picture made of its loading screen. The
+// ones in the game folder are in the game: the multiplayer lists them in its
+// BONUS MAPS menu, which has room for kInGame (src/hooks/custom_map_list.rs).
+// The others wait in maps/ beside the launcher, which also keeps each map's
+// picture, <name>.bmp, made from the PC map's .iwd when it was added.
+//
+// This is the converter's front (mapport/), C++ with it; the window and the
+// terminal mode call it through the functions at the end (launcher/src/maps.rs).
+// Text crosses as bytes and a length, paths as UTF-8, and a conversion reports
+// to the window's progress through launcher/src/setup.rs's mw2_progress_* calls.
 #include "utf8.h"
-#include "settings.h"
-#include "setup.h"
 #include "mapport/fastfile.h"
 #include "mapport/images.h"
 #include "mapport/port.h"
@@ -16,14 +28,73 @@
 #endif
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <map>
 #include <optional>
 #include <set>
+#include <string>
 #include <string_view>
+#include <vector>
+
+extern "C"
+{
+    // launcher/src/setup.rs: the window's progress, which a conversion reports to.
+    void mw2_progress_set(const void* progress, int step, int steps, const char* title, size_t length);
+    void mw2_progress_line(const void* progress, int step, const char* title, size_t titleLength, const char* detail,
+                           size_t detailLength);
+    bool mw2_progress_cancelled(const void* progress);
+}
+
+namespace maps
+{
+    constexpr size_t kInGame = 8;
+
+    struct Map
+    {
+        std::string name;           // the files' name, mp_toujane_v2
+        std::string longname;       // as the arena gives it, or the name
+        std::string description;
+        bool inGame = false;
+        std::filesystem::path picture;   // empty when there is none
+    };
+
+    // Every installed map, the game's first, each in the order of its name.
+    std::vector<Map> List();
+    size_t InGame(const std::vector<Map>& maps);
+    // Adds the maps among `files`: each .arena with its two fastfiles, and an
+    // .iwd; a file chosen brings its map's others from its folder (they share
+    // the map's name). Fastfiles of the 360 are copied as they are; the PC
+    // game's are converted for the 360 first (mapport/port.h), with the .iwd's
+    // pictures, which takes a while: `progress` follows it and its cancel
+    // stops it; `pcGame` is the PC game's folder or empty; a build that
+    // installs no title update (`usesUpdate` false) converts none. The .iwd
+    // also gives the map its picture here. The maps go into the game folder
+    // while the game has room, else into maps/; the chosen files stay as they
+    // are. `said` is what came of it.
+    bool Add(const std::vector<std::filesystem::path>& files, std::string& said, const void* progress,
+             const std::filesystem::path& pcGame, bool usesUpdate);
+    // Whether adding `files` (and their maps' other files) converts a map made
+    // for the PC game.
+    bool Converts(const std::vector<std::filesystem::path>& files);
+    // Puts a map in the game or takes it out; the game has room for kInGame.
+    bool SetInGame(const Map& map, bool on, std::string& said);
+    // Deletes the launcher's copy, in the game folder or maps/, its picture
+    // and the log of its conversion.
+    bool Remove(const Map& map, std::string& said);
+    // Steam's copy of the PC game: the first of Steam's installations and
+    // libraries that has it installed, or empty.
+    std::filesystem::path FindPcGame();
+}
+
+namespace setup
+{
+    inline std::filesystem::path GameFolder() { return "game"; }
+}
 
 namespace fs = std::filesystem;
 
@@ -316,7 +387,7 @@ namespace
     // missing, shader sets taken in place of others, ...).
     // `game`: the PC game's folder, or empty.
     bool Convert(const mapport::PcMap& map, const fs::path& work, const std::string& name, const fs::path& game,
-                 setup::Progress* progress, std::vector<std::string>& notes, std::string& why)
+                 const void* progress, std::vector<std::string>& notes, std::string& why)
     {
         std::error_code ec;
         fs::remove_all(work, ec);
@@ -325,26 +396,22 @@ namespace
         int step = 0;
         if (progress)
         {
-            std::lock_guard lock(progress->lock);
-            progress->step = 1;
-            progress->steps = map.load ? 2 : 1;
-            progress->title = map.load ? "Converting the loading screen" : "Converting the map";
-            progress->detail.clear();
-            progress->done = progress->total = 0;
+            const std::string_view title = map.load ? "Converting the loading screen" : "Converting the map";
+            mw2_progress_set(progress, 1, map.load ? 2 : 1, title.data(), title.size());
         }
         const mapport::Log log = [&](const std::string& line) {
             logFile << line << "\n";
             if (!progress) return;
-            if (progress->cancel) throw mapport::Cancelled();
-            std::lock_guard lock(progress->lock);
+            if (mw2_progress_cancelled(progress)) throw mapport::Cancelled();
             // The loading screen done (or left out), the map is next.
+            std::string_view title;
             if (map.load && step == 0 && line == "converting " + Utf8(map.ff.filename()))
             {
                 step = 1;
-                progress->step = 2;
-                progress->title = "Converting the map";
+                title = "Converting the map";
             }
-            progress->detail = Shown(line);
+            const std::string detail = Shown(line);
+            mw2_progress_line(progress, title.empty() ? 0 : 2, title.data(), title.size(), detail.data(), detail.size());
         };
         try
         {
@@ -457,7 +524,8 @@ bool maps::Converts(const std::vector<fs::path>& chosen)
     return std::any_of(files.begin(), files.end(), [](const fs::path& f) { return mapport::Lower(Utf8(f.extension())) == ".ff" && PcFastfile(f); });
 }
 
-bool maps::Add(const std::vector<fs::path>& chosen, std::string& said, setup::Progress* progress, const fs::path& pcGame)
+bool maps::Add(const std::vector<fs::path>& chosen, std::string& said, const void* progress, const fs::path& pcGame,
+               bool usesUpdate)
 {
     const std::vector<fs::path> files = WithItsFiles(chosen);
     std::map<std::string, fs::path> byName;   // the map files by their name, lower case
@@ -515,7 +583,7 @@ bool maps::Add(const std::vector<fs::path>& chosen, std::string& said, setup::Pr
             std::vector<std::string> own;
             if (!PcFastfile(*ff) || !PcFastfile(*load))
                 why = "one of its fastfiles is the PC game's and the other the Xbox 360's: choose the two that came together.";
-            else if (!setup::UsesUpdate())
+            else if (!usesUpdate)
                 why = "it is made for the PC game, and only a build for title update 6 converts maps for the Xbox 360.";
             else if (Convert({ *ff, *load, iwd ? std::optional(*iwd) : std::nullopt, arenaFile }, work, name, pcGame, progress,
                              own, why))
@@ -525,7 +593,7 @@ bool maps::Add(const std::vector<fs::path>& chosen, std::string& said, setup::Pr
                 if (const fs::path preview = Named(work, Stem(*ff), kPreview); fs::is_regular_file(preview, ec)) from[3] = preview;
                 for (const std::string& n : own) notes.push_back((arenas.size() > 1 ? name + ": " : std::string()) + n);
             }
-            stopped = progress && progress->cancel;
+            stopped = progress && mw2_progress_cancelled(progress);
         }
         else if (ConsoleFastfile(*ff, why) && ConsoleFastfile(*load, why))
         {
@@ -641,28 +709,146 @@ fs::path maps::FindPcGame()
     return {};
 }
 
-fs::path maps::PcGame()
+// ---- what launcher/src/maps.rs calls ----------------------------------------
+namespace
 {
-    if (const std::optional<fs::path> set = FolderVariable("MW2_PC_GAME")) return *set;
-    if (const std::optional<std::string> kept = settings::PcGame()) return install::FromUtf8(*kept);
-    // Steam's folders are searched once a run: the menus ask every frame.
-    static bool searched = false;
-    if (searched) return {};
-    searched = true;
-    const fs::path found = FindPcGame();
-    if (!found.empty()) settings::SetPcGame(Utf8(found));
-    return found;
+    using TextSink = void (*)(void* context, const char* text, size_t length);
+    using MapSink = void (*)(void* context, const char* name, size_t nameLength, const char* longname,
+                             size_t longnameLength, const char* description, size_t descriptionLength, bool inGame,
+                             const char* picture, size_t pictureLength);
+
+    std::vector<fs::path> Paths(const char* list, size_t length)
+    {
+        // Each ended by a zero byte.
+        std::vector<fs::path> paths;
+        for (size_t at = 0; at < length;)
+        {
+            const size_t end = std::find(list + at, list + length, '\0') - list;
+            paths.push_back(install::FromUtf8(std::string(list + at, end - at)));
+            at = end + 1;
+        }
+        return paths;
+    }
+
+    maps::Map MapOf(const char* name, size_t nameLength, const char* longname, size_t longnameLength, bool inGame)
+    {
+        maps::Map map;
+        map.name.assign(name, nameLength);
+        map.longname.assign(longname, longnameLength);
+        map.inGame = inGame;
+        return map;
+    }
+
+    void Say(const std::string& text, TextSink sink, void* context) { sink(context, text.data(), text.size()); }
 }
 
-bool maps::SetPcGame(const fs::path& folder, std::string& said)
+// Nothing thrown leaves these (each is noexcept): what a step did not foresee is said
+// as an error, as the window's job said it, instead of ending the launcher.
+extern "C"
 {
-    if (!HoldsPcGame(folder))
+    void mw2l_maps_list(MapSink sink, void* context) noexcept
     {
-        said = Utf8(folder) + " isn't the PC game's folder: it has no main" + (fs::path::preferred_separator == '\\' ? "\\" : "/") +
-               "iw_00.iwd. Choose the folder the PC game is installed in, the one with main in it.";
-        return false;
+        try
+        {
+            for (const maps::Map& map : maps::List())
+            {
+                const std::string picture = Utf8(map.picture);
+                sink(context, map.name.data(), map.name.size(), map.longname.data(), map.longname.size(),
+                     map.description.data(), map.description.size(), map.inGame, picture.data(), picture.size());
+            }
+        }
+        catch (const std::exception&)
+        {
+        }
     }
-    settings::SetPcGame(Utf8(folder));
-    said = "Maps added from now on take the pictures and sounds they lack from the PC game in " + Utf8(folder) + ".";
-    return true;
+
+    bool mw2l_maps_converts(const char* files, size_t length) noexcept
+    {
+        try
+        {
+            return maps::Converts(Paths(files, length));
+        }
+        catch (const std::exception&)
+        {
+            return false;
+        }
+    }
+
+    // 1 when every map was added, 0 when one was not, -1 when a step threw what `said` is told.
+    int mw2l_maps_add(const char* files, size_t length, const void* progress, const char* pcGame, size_t pcGameLength,
+                      bool usesUpdate, TextSink said, void* saidContext) noexcept
+    {
+        try
+        {
+            std::string text;
+            const bool done = maps::Add(Paths(files, length), text, progress,
+                                        install::FromUtf8(std::string(pcGame, pcGameLength)), usesUpdate);
+            Say(text, said, saidContext);
+            return done ? 1 : 0;
+        }
+        catch (const std::exception& e)
+        {
+            Say(e.what(), said, saidContext);
+            return -1;
+        }
+    }
+
+    // `said` is told only what the C++ said, as the std::string it was handed kept the rest.
+    bool mw2l_maps_set_in_game(const char* name, size_t nameLength, const char* longname, size_t longnameLength,
+                               bool inGame, bool on, TextSink said, void* saidContext) noexcept
+    {
+        try
+        {
+            std::string text;
+            const bool done = maps::SetInGame(MapOf(name, nameLength, longname, longnameLength, inGame), on, text);
+            if (!text.empty()) Say(text, said, saidContext);
+            return done;
+        }
+        catch (const std::exception& e)
+        {
+            Say(e.what(), said, saidContext);
+            return false;
+        }
+    }
+
+    bool mw2l_maps_remove(const char* name, size_t nameLength, const char* longname, size_t longnameLength, bool inGame,
+                          TextSink said, void* saidContext) noexcept
+    {
+        try
+        {
+            std::string text;
+            const bool done = maps::Remove(MapOf(name, nameLength, longname, longnameLength, inGame), text);
+            Say(text, said, saidContext);
+            return done;
+        }
+        catch (const std::exception& e)
+        {
+            Say(e.what(), said, saidContext);
+            return false;
+        }
+    }
+
+    // Whether a folder is the PC game's, as Steam's copy is told by.
+    bool mw2l_maps_holds_pc_game(const char* folder, size_t length) noexcept
+    {
+        try
+        {
+            return HoldsPcGame(install::FromUtf8(std::string(folder, length)));
+        }
+        catch (const std::exception&)
+        {
+            return false;
+        }
+    }
+
+    void mw2l_maps_find_pc_game(TextSink found, void* context) noexcept
+    {
+        try
+        {
+            Say(Utf8(maps::FindPcGame()), found, context);
+        }
+        catch (const std::exception&)
+        {
+        }
+    }
 }

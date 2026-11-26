@@ -261,7 +261,13 @@ describes, uploading it the first time it is seen.
   A level streams tens of thousands of small textures through the cache, and
   an allocation each is what a driver is worst at: freeing one took over half
   a millisecond with forty thousand live. Anything over a quarter of a block
-  gets an allocation of its own.
+  gets an allocation of its own. Making a block takes the driver about 10 ms on
+  a Renoir iGPU, which cost a frame when it came at a draw, so one block is
+  always ready: made on a thread of its own as soon as the one before is taken
+  (not while the call trace is on, which would miss the helper's call), or a
+  block emptied and kept instead of given back. A block is made at a draw only
+  when two are wanted before the thread has made the second; the report counts
+  them.
 - **Letting go.** The console holds no copies: when the title puts another
   texture where one was, the old one is gone. `new_frame` looks over the cache
   once every 64 frames, a slice of the images a frame:
@@ -311,6 +317,28 @@ texture whose pages were written is signed at once, whatever the schedule.
 **Ranges written by the runtime.** The texture cache's `memory_written` marks any
 texture read from a range the runtime itself just wrote (the pool copy below)
 for signing at its next bind.
+
+### Read again in parts
+
+A watched texture that has changed once is cut into parts the next time it
+changes (`src/runtime/gpu/vulkan/texture_parts.rs`): each level's 32x32-block
+tiles, 32x16x4 for a volume, as the tiling groups them. Each part keeps the
+guest pages it is read from and a signature of its bytes. At a re-read the
+watch is armed again first, then the parts with a page written since the
+last read are read (`texture::read_region`, the same walk as a whole read),
+and those whose signature changed are copied into the image over what it
+holds, one region a part. When more than half of the parts were written (a
+video's frame, a texture streamed in again), the texture is read and copied
+whole, and its parts are kept. A copy of the bytes as uploaded is kept with
+the parts, so whether the texture is still mostly empty is judged as after a
+whole read. A conversion, DXT3A's expansion and an unwatched texture are read
+whole as before, and so is any re-read in parts that cannot finish.
+
+The model-lighting table is the case it is for: about 1% of its pages change
+between two reads, and a whole read of it was 84% of the time the ring
+consumer spent reading textures in Team Player. In parts it reads about
+3 parts of 256 a re-read. `MW2_CHECK_TEXTURE_PARTS=1` (diagnostics) compares
+every re-read in parts with a whole read.
 
 ### Read when the draw would execute
 

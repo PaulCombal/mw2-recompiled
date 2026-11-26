@@ -1,15 +1,16 @@
-// tools/inflate_diff.py's program: src/runtime/inflate.rs's gunzip against zlib's inflate
-// called as the gunzip is (inflateInit2 with 16 + MAX_WBITS, one Z_FINISH call, the whole
-// stream and exactly `size` bytes out), on a corpus of streams and on damaged copies of
-// them. Both must refuse the same streams and give the same bytes for the rest.
+// tools/inflate_diff.py's program: install/src/inflate.rs against zlib's inflate called as
+// it is, on a corpus of streams and on damaged copies of them: gunzip as inflateInit2 with
+// 16 + MAX_WBITS, one Z_FINISH call, the whole stream and exactly `size` bytes out; unzlib
+// as inflateInit, one Z_FINISH call, the whole stream and at most `size` bytes out. Both
+// must refuse the same streams and give the same bytes for the rest.
 //
-//   usage: inflate_diff <corpus> <seeds>
+//   usage: inflate_diff gzip|zlib <corpus> <seeds>
 //
 // The corpus is entries of a little-endian u32 size, a u32 length and that many bytes.
 
 #![allow(dead_code)]
 
-#[path = "../src/runtime/inflate.rs"]
+#[path = "../install/src/inflate.rs"]
 mod inflate;
 
 use std::ffi::{c_char, c_int, c_uint, c_ulong, c_void};
@@ -39,6 +40,7 @@ struct ZStream {
 }
 
 unsafe extern "C" {
+    fn inflateInit_(stream: *mut ZStream, version: *const c_char, size: c_int) -> c_int;
     fn inflateInit2_(stream: *mut ZStream, bits: c_int, version: *const c_char, size: c_int) -> c_int;
     fn inflate(stream: *mut ZStream, flush: c_int) -> c_int;
     fn inflateEnd(stream: *mut ZStream) -> c_int;
@@ -59,6 +61,25 @@ fn zlib_gunzip(packed: &[u8], size: usize) -> Option<Vec<u8>> {
     let whole = stream.total_out as usize == size;
     unsafe { inflateEnd(&mut stream) };
     (result == Z_STREAM_END && whole).then_some(plain)
+}
+
+// zlib with its own wrapper, the window it says up to 32 KB (inflateInit), as unzlib reads:
+// at most `most` bytes out.
+fn zlib_unzlib(packed: &[u8], most: usize) -> Option<Vec<u8>> {
+    let mut plain = vec![0u8; most];
+    let mut stream: ZStream = unsafe { zeroed() };
+    if unsafe { inflateInit_(&mut stream, c"1.3.1".as_ptr(), size_of::<ZStream>() as c_int) } != Z_OK {
+        return None;
+    }
+    stream.next_in = packed.as_ptr();
+    stream.avail_in = packed.len() as c_uint;
+    stream.next_out = plain.as_mut_ptr();
+    stream.avail_out = most as c_uint;
+    let result = unsafe { inflate(&mut stream, Z_FINISH) };
+    let made = stream.total_out as usize;
+    unsafe { inflateEnd(&mut stream) };
+    plain.truncate(made);
+    (result == Z_STREAM_END).then_some(plain)
 }
 
 struct Random(u64);
@@ -97,8 +118,8 @@ fn damage(random: &mut Random, packed: &[u8], size: usize) -> (Vec<u8>, usize) {
             5 => bytes.extend((0..random.below(16)).map(|_| random.next() as u8)),
             6 => size = size.wrapping_add(random.below(3)).wrapping_sub(1).min(1 << 24),
             _ if bytes.len() > 18 => {
-                // the trailer, or the header's flags
-                let at = if random.below(2) == 0 { bytes.len() - 1 - random.below(8) } else { 3 };
+                // the trailer, or the header's flags (gzip's fourth byte, zlib's first two)
+                let at = if random.below(2) == 0 { bytes.len() - 1 - random.below(8) } else { random.below(4) };
                 bytes[at] ^= 1 << random.below(8);
             }
             _ => {}
@@ -109,8 +130,13 @@ fn damage(random: &mut Random, packed: &[u8], size: usize) -> (Vec<u8>, usize) {
 
 fn main() {
     let arguments: Vec<String> = std::env::args().collect();
-    let corpus = std::fs::read(&arguments[1]).expect("the corpus");
-    let seeds: u64 = arguments[2].parse().expect("a number of seeds");
+    let zlib = match arguments[1].as_str() {
+        "gzip" => false,
+        "zlib" => true,
+        mode => panic!("gzip or zlib, not {mode}"),
+    };
+    let corpus = std::fs::read(&arguments[2]).expect("the corpus");
+    let seeds: u64 = arguments[3].parse().expect("a number of seeds");
     let mut entries = Vec::new();
     let mut at = 0;
     while at + 8 <= corpus.len() {
@@ -121,7 +147,11 @@ fn main() {
     }
     let (mut same, mut accepted) = (0u64, 0u64);
     let mut check = |packed: &[u8], size: usize, what: &str| {
-        let (ours, theirs) = (inflate::gunzip(packed, size), zlib_gunzip(packed, size));
+        let (ours, theirs) = if zlib {
+            (inflate::unzlib(packed, size), zlib_unzlib(packed, size))
+        } else {
+            (inflate::gunzip(packed, size), zlib_gunzip(packed, size))
+        };
         if ours != theirs {
             println!(
                 "DIFFERENT: {what}: {} bytes asked for {size}: the port {}, zlib {}",
@@ -129,7 +159,7 @@ fn main() {
                 ours.as_ref().map_or("refuses".to_string(), |o| format!("gives {} bytes", o.len())),
                 theirs.as_ref().map_or("refuses".to_string(), |o| format!("gives {} bytes", o.len()))
             );
-            let path = format!("{}.different", arguments[1]);
+            let path = format!("{}.different", arguments[2]);
             let mut file = (size as u32).to_le_bytes().to_vec();
             file.extend((packed.len() as u32).to_le_bytes());
             file.extend(packed);
@@ -148,5 +178,6 @@ fn main() {
             check(&bytes, asked, &format!("entry {index} seed {seed}"));
         }
     }
-    println!("all the same: {} streams, {} entries, {same} cases, {accepted} taken", entries.len(), entries.len());
+    let mode = if zlib { "zlib" } else { "gzip" };
+    println!("{mode}: all the same: {} streams, {same} cases, {accepted} taken", entries.len());
 }

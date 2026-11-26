@@ -52,7 +52,7 @@ const FRAME_PIXEL_ASPECT: u32 = 36;
 const HI_DEF: u32 = 1;
 const SCENE: u32 = 8;
 const FRAME: u32 = 16;
-// A Material's and a GfxImage's, on the 360 (launcher/zone/defs/iw4_assets.h)
+// A Material's and a GfxImage's, on the 360 (zone/defs/iw4_assets.h)
 const MATERIAL_TEXTURE_COUNT: u32 = 57;
 const MATERIAL_TEXTURE_TABLE: u32 = 68;
 const TEXTURE_DEF_SIZE: u32 = 12;

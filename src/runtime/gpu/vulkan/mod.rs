@@ -38,9 +38,11 @@ pub mod tracked;
 pub mod util;
 // The shader workers, the optimiser and the pipeline libraries (renderer_libraries.rs).
 pub mod renderer_libraries;
-// The texture cache and its image memory: texture_cache.rs, image_memory.rs.
+// The texture cache, its image memory and its re-reads in parts: texture_cache.rs,
+// image_memory.rs, texture_parts.rs.
 pub mod image_memory;
 pub mod texture_cache;
+pub mod texture_parts;
 // The EDRAM surfaces as images (renderer_targets.rs), the resolves and the swap
 // (renderer_resolve.rs), the display's colour table (display_table.rs) and the renderer's
 // own shaders (spirv_builtin.rs, outside the shader-build hash).

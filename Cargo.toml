@@ -41,13 +41,15 @@ wmapro = { path = "wmapro" }
 # The executable's image and its SHA-256, which the launcher and cargo xtask share
 # (install/).
 mw2-install = { path = "install" }
+# The fonts' rasteriser, which the launcher will share (truetype/).
+mw2-truetype = { path = "truetype" }
 
 [build-dependencies]
 # The SHA-256 build.rs hashes the image the game was recompiled from with.
 mw2-install = { path = "install" }
 
 [workspace]
-members = ["install", "launcher", "shaders", "wmapro"]
+members = ["install", "launcher", "shaders", "truetype", "wmapro", "zone"]
 # Each of these is a workspace of its own.
 exclude = ["generated", "relay", "xtask"]
 

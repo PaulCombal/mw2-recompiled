@@ -82,11 +82,6 @@ pub mod signin;
 #[deny(unsafe_code)]
 pub mod stutters;
 #[deny(unsafe_code)]
-pub mod truetype;
-// gunzip, for the title's XLAST (tools/inflate_diff holds it to zlib).
-#[deny(unsafe_code)]
-mod inflate;
-#[deny(unsafe_code)]
 pub mod version;
 
 /// The lock for an end-of-run report, which may be written by a thread that a fault or the

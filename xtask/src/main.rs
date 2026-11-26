@@ -557,30 +557,12 @@ fn build(options: &Options, title: &Title) -> Result {
     };
 
     println!("==> 8. build the runtime + recompiled game");
-    // A second build directory reuses the sources the first one fetched.
-    let mut fetched = Vec::new();
-    if build != "build" {
-        // Only the SDL this tree asks for: the launcher's, which must be the version
-        // sdl3-sys builds the game's from (build.rs checks).
-        let cmake_lists = fs::read_to_string("CMakeLists.txt").map_err(|e| format!("CMakeLists.txt: {e}"))?;
-        let tag = cmake_lists.lines().find_map(|line| line.split_once("GIT_TAG release-").map(|(_, tag)| tag.trim()));
-        let fetched_sdl = fs::read_to_string("build/_deps/sdl3-src/CMakeLists.txt").unwrap_or_default();
-        if tag.is_some_and(|tag| fetched_sdl.contains(&format!("VERSION \"{tag}\""))) {
-            fetched.push(format!("-DFETCHCONTENT_SOURCE_DIR_SDL3={}/build/_deps/sdl3-src", root().display()));
-        }
-        for (name, folder) in [("IMGUI", "imgui-src")] {
-            if Path::new("build/_deps").join(folder).is_dir() {
-                fetched.push(format!("-DFETCHCONTENT_SOURCE_DIR_{name}={}/build/_deps/{folder}", root().display()));
-            }
-        }
-    }
     let configure = || {
         let mut command = Command::new("cmake");
         command.args(["-B", &build, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release"]);
         command
             .arg(format!("-DMW2_VERSION={}", title.version))
             .arg(format!("-DMW2_PORTABLE={portable}"))
-            .args(&fetched)
             .args(&options.cmake_extra)
             .args(&toolchain);
         // The game's ThinLTO cache is the launcher's too.
@@ -687,27 +669,14 @@ fn build(options: &Options, title: &Title) -> Result {
     if !windows {
         rest.push("zlibstatic".into());
     }
-    // The launcher's C++ and its libraries, which its build.rs links: built here first,
-    // so ninja's dependencies of every source decide what is rebuilt, and an archive
-    // rebuilt runs build.rs again (the same targets as build.rs builds).
-    if launcher && !every {
-        let mut targets = vec!["launcher_core", "SDL3-static", "zlibstatic"];
-        if windows {
-            targets.push("vulkan_import_library");
-        }
-        for target in targets {
-            if !rest.iter().any(|known| known == target) {
-                rest.push(target.into());
-            }
-        }
-    }
     if !rest.is_empty() || launcher {
         quiet(&mut configure())?;
     }
     if !rest.is_empty() {
         run(Command::new("cmake").args(["--build", &build, "-j", &jobs(), "--target"]).args(&rest))?;
     }
-    // The launcher: its build.rs builds launcher_core in the folder just configured.
+    // The launcher: its build.rs builds launcher_core and its libraries in the folder just
+    // configured, with the SDL sdl3-sys built, which only it knows.
     if launcher {
         let launcher_exe = if windows { "mw2-launcher.exe" } else { "mw2-launcher" };
         run(&mut cargo_for(&["-p", "mw2-launcher", "--no-default-features", "--features", features])?)?;

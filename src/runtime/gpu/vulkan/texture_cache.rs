@@ -27,6 +27,7 @@ use super::image_memory::{ImageMemory, Range};
 use super::renderer_state::FetchWords;
 use super::texture_convert::{self, Convert};
 use super::texture_formats as formats;
+use super::texture_parts;
 use super::tracked::{self, TrackedImage};
 use super::util;
 use crate::log::{log_info, log_warn};
@@ -238,6 +239,11 @@ struct Image {
     narrow_mip_bytes: usize,
     #[cfg_attr(not(feature = "diagnostics"), allow(dead_code, reason = "a diagnostics count's alone"))]
     narrow_signature: u64,
+    // Cut into parts once it has changed and is watched, to be read again in parts
+    // (texture_parts.rs); and whether the signature is older than what was uploaded since,
+    // which a whole read then takes for a change.
+    parts: Option<Box<texture_parts::Parts>>,
+    signature_stale: bool,
 }
 
 impl Default for Image {
@@ -292,6 +298,8 @@ impl Default for Image {
             narrow_bytes: 0,
             narrow_mip_bytes: 0,
             narrow_signature: 0,
+            parts: None,
+            signature_stale: false,
         }
     }
 }
@@ -520,9 +528,52 @@ pub struct TextureCache {
     stale_bytes: u64,
     stale_not_really: u64,
     shared: u64,
+    // Re-reads in parts (texture_parts.rs): the scratch they read into and stage from, and
+    // what they came to.
+    parts: PartsWork,
     // Diagnostics: the idle images let go, and the youngest of them (S14d's measure).
     #[cfg(feature = "diagnostics")]
     let_go: LetGo,
+}
+
+/// The re-reads in parts' buffers, kept from one to the next, and their counts.
+#[derive(Default)]
+struct PartsWork {
+    scratch: Vec<u8>,
+    bytes: Vec<u8>,
+    regions: Vec<vk::BufferImageCopy>,
+    written: Vec<bool>,
+    spans: Vec<usize>,
+    // Textures cut, re-reads in parts (of which read whole, most of it written), parts
+    // read and parts uploaded (and their bytes).
+    cut: u64,
+    rereads: u64,
+    whole: u64,
+    read: u64,
+    uploaded: u64,
+    uploaded_bytes: u64,
+    // MW2_CHECK_TEXTURE_PARTS: re-reads checked, and the parts whose bytes differed from a
+    // whole read, with no page of theirs written since (missed) or with one (the title
+    // wrote it after the read).
+    checked: u64,
+    missed_parts: u64,
+    missed_bytes: u64,
+    raced_parts: u64,
+    // ...and the bytes the copies' regions put elsewhere than the parts' bytes say.
+    misplaced_bytes: u64,
+    // ...and the times the running count of empty spans differed from a count.
+    miscounted: u64,
+    // By texture (its address, sizes and format): its parts, re-reads in parts, parts
+    // read and parts uploaded. The images are gone by the report.
+    by_texture: HashMap<(u32, u32, u32, u32), [u64; 5]>,
+}
+
+/// MW2_CHECK_TEXTURE_PARTS=1 (diagnostics): every re-read in parts is followed by a whole
+/// read, and what was uploaded compared with it.
+fn check_parts() -> bool {
+    static ON: std::sync::LazyLock<bool> =
+        std::sync::LazyLock::new(|| cfg!(feature = "diagnostics") && crate::env::flag(c"MW2_CHECK_TEXTURE_PARTS"));
+    *ON
 }
 
 /// The idle images let go (released or evicted): how many, and the least time since the
@@ -1346,6 +1397,37 @@ impl Uploads {
         size: usize,
         error: Option<&mut &'static CStr>,
     ) -> bool {
+        // SAFETY: the caller's device; the slot is open.
+        let Some((into, offset, command)) = (unsafe { self.staging_for(vk, dev, fails, slot, size) }) else {
+            if let Some(error) = error {
+                *error = fails.last_error.unwrap_or(c"no staging buffer");
+            }
+            return false;
+        };
+        // SAFETY: `into` is mapped for at least offset + size (a fresh buffer of `size`, or
+        // the slot's, which holds at + size); the caller's bytes. Written, never read back.
+        unsafe {
+            ptr::copy_nonoverlapping(bytes, into.mapped.add(offset as usize), size);
+            record_copy(vk, command, image, into.buffer, offset);
+        }
+        self.batched = self.batched.wrapping_add(1);
+        true
+    }
+
+    /// Room for `size` bytes in the open slot's staging (or a buffer of its own when it
+    /// overflows), and the segment's command buffer, begun: the buffer, the offset in it
+    /// and the command buffer.
+    ///
+    /// # Safety
+    /// `vk` is the cache's device, `slot` open.
+    unsafe fn staging_for(
+        &mut self,
+        vk: &Vk,
+        dev: &Dev,
+        fails: &mut Failures,
+        slot: usize,
+        size: usize,
+    ) -> Option<(StagingBuffer, u64, vk::CommandBuffer)> {
         let s = &mut self.slots[slot];
         // SAFETY: the caller's device; the slot's pool is this thread's alone.
         unsafe {
@@ -1360,7 +1442,8 @@ impl Uploads {
                     };
                     let mut made = [vk::CommandBuffer::null()];
                     if vk.allocate_command_buffers(&allocate, &mut made) != vk::Result::SUCCESS {
-                        return fails.fail(c"no upload command buffer", error);
+                        fails.fail(c"no upload command buffer", None);
+                        return None;
                     }
                     s.commands.push(made[0]);
                 }
@@ -1369,7 +1452,8 @@ impl Uploads {
                     ..Default::default()
                 };
                 if vk.begin_command_buffer(s.commands[s.segment], &begin) != vk::Result::SUCCESS {
-                    return fails.fail(c"no upload command buffer", error);
+                    fails.fail(c"no upload command buffer", None);
+                    return None;
                 }
                 s.recording = true;
             }
@@ -1382,7 +1466,8 @@ impl Uploads {
             self.overflows = self.overflows.wrapping_add(1);
             // SAFETY: the caller's device.
             let Some(made) = (unsafe { dev.make_staging(vk, size as u64) }) else {
-                return fails.fail(c"no staging buffer", error);
+                fails.fail(c"no staging buffer", None);
+                return None;
             };
             s.overflow.push(made);
             (made, 0u64)
@@ -1390,11 +1475,46 @@ impl Uploads {
             s.used = at.wrapping_add(size as u64);
             (s.staging, at)
         };
-        // SAFETY: `into` is mapped for at least offset + size (a fresh buffer of `size`, or
-        // the slot's, which holds at + size); the caller's bytes. Written, never read back.
+        Some((into, offset, s.commands[s.segment]))
+    }
+
+    /// Parts of the image staged and copied in, into the open slot's segment, over what the
+    /// image holds: `bytes` the parts' bytes one after another, each region's buffer offset
+    /// into them (texture_parts.rs). False, with nothing recorded, when no slot is open.
+    ///
+    /// # Safety
+    /// `vk` is the cache's device, `image` made on it.
+    unsafe fn stage_parts(
+        &mut self,
+        vk: &Vk,
+        dev: &Dev,
+        fails: &mut Failures,
+        image: &mut Image,
+        bytes: &[u8],
+        regions: &mut [vk::BufferImageCopy],
+    ) -> bool {
+        let Some(slot) = self.open else { return false };
+        let size = bytes.len();
+        // SAFETY: the caller's device; the slot is open.
+        let Some((into, offset, command)) = (unsafe { self.staging_for(vk, dev, fails, slot, size) }) else {
+            return false;
+        };
+        for region in regions.iter_mut() {
+            region.buffer_offset = region.buffer_offset.wrapping_add(offset);
+        }
+        image.staged = image.staged.wrapping_add(1);
+        // SAFETY: `into` is mapped for at least offset + size; the image is the caller's.
+        // Written, never read back.
         unsafe {
-            ptr::copy_nonoverlapping(bytes, into.mapped.add(offset as usize), size);
-            record_copy(vk, s.commands[s.segment], image, into.buffer, offset);
+            ptr::copy_nonoverlapping(bytes.as_ptr(), into.mapped.add(offset as usize), size);
+            // The rest of the image is kept: the transition keeps its contents.
+            if let Some(t) = image.track.enter(tracked::COPIED_TO, true) {
+                util::renderer_transition(vk, command, image.image, vk::ImageAspectFlags::COLOR, &t);
+            }
+            vk.cmd_copy_buffer_to_image(command, into.buffer, image.image, vk::ImageLayout::TRANSFER_DST_OPTIMAL, regions);
+            if let Some(t) = image.track.enter(tracked::SAMPLED, true) {
+                util::renderer_transition(vk, command, image.image, vk::ImageAspectFlags::COLOR, &t);
+            }
         }
         self.batched = self.batched.wrapping_add(1);
         true
@@ -2642,12 +2762,20 @@ impl TextureCache {
     /// measured on the decoded texture. An image that becomes empty is queued to be read
     /// again at the end of its segment.
     fn note_emptiness(&mut self, id: u64, data: &TextureData) {
-        let frame = self.track.frame;
-        let image = &mut self.images[(id - 1) as usize];
-        if (image.address == 0 && image.mip_address == 0) || data.bytes.is_empty() {
+        if data.bytes.is_empty() {
             return;
         }
-        let empty = empty_percent(&data.bytes);
+        self.note_emptiness_of(id, empty_percent(&data.bytes));
+    }
+
+    /// note_emptiness of a texture `empty` percent of whose bytes, as read_texture lays
+    /// them out, are in empty 64-byte spans (empty_percent).
+    fn note_emptiness_of(&mut self, id: u64, empty: u8) {
+        let frame = self.track.frame;
+        let image = &mut self.images[(id - 1) as usize];
+        if image.address == 0 && image.mip_address == 0 {
+            return;
+        }
         if empty <= 25 {
             image.from_an_empty_block = false;
             return;
@@ -2682,8 +2810,14 @@ impl TextureCache {
             &data.bytes
         };
         // SAFETY: the cache's device, the image its; the bytes live through the call.
-        bytes.len() as u64 == image.bytes
-            && unsafe { up.stage_into(vk, dev, fails, image, bytes.as_ptr(), bytes.len(), None) }
+        let staged = bytes.len() as u64 == image.bytes
+            && unsafe { up.stage_into(vk, dev, fails, image, bytes.as_ptr(), bytes.len(), None) };
+        if staged {
+            // The parts' signatures are of what was uploaded before; the caller signs anew.
+            image.parts = None;
+            image.signature_stale = false;
+        }
+        staged
     }
 
     /// The fetch constant is unchanged when only the bytes are, so the cache would
@@ -2734,10 +2868,24 @@ impl TextureCache {
 
         #[cfg(feature = "diagnostics")]
         note_image(&self.images[index]);
+        match self.refresh_in_parts(vk, index) {
+            Some(false) => return,
+            Some(true) => {
+                let image = &mut self.images[index];
+                image.rewritten = true;
+                image.sign_period = 1;
+                queue_for_segment(&mut self.track, &mut self.images[index]);
+                #[cfg(feature = "diagnostics")]
+                self.note_changed(index);
+                self.track.refreshed = self.track.refreshed.wrapping_add(1);
+                return;
+            }
+            None => {}
+        }
         self.images[index].watch_stamp = track_image(frame, &self.images[index]);
         let now = sign_image(&self.images[index], Some(&mut self.track.sign_nanos));
         let image = &mut self.images[index];
-        if now == image.signature {
+        if now == image.signature && !image.signature_stale {
             // An image that came up empty is checked every frame until it holds a
             // picture: the point is to catch the moment its bytes move.
             if !image.rewritten && !image.from_an_empty_block && image.sign_period < SIGN_PERIOD_MAX {
@@ -2760,6 +2908,280 @@ impl TextureCache {
         self.note_emptiness(index as u64 + 1, &data);
     }
 
+    /// A watched texture that has changed before, read again in parts (texture_parts.rs):
+    /// the parts with a page written since the last read are read, and those whose bytes
+    /// changed uploaded into the image as it is. None when it cannot be read so, and the
+    /// whole read follows; otherwise whether anything changed. Cut into parts the first
+    /// time, which reads and uploads every part.
+    fn refresh_in_parts(&mut self, vk: &Vk, index: usize) -> Option<bool> {
+        let image = &self.images[index];
+        // A conversion or DXT3A's expansion changes the bytes' layout.
+        if !image.rewritten
+            || image.watch_stamp == 0
+            || image.convert != Convert::None
+            || image.xenos_format == 58
+            || image.borrowed
+            || image.levels.is_empty()
+            || self.up.open.is_none()
+        {
+            return None;
+        }
+        let since = image.watch_stamp;
+        // Armed again before anything is read: a write from now on shows at the next
+        // re-read, and one made since `since` shows as a page armed after it.
+        let stamp = track_image(self.track.frame, image);
+        self.images[index].watch_stamp = stamp;
+        if stamp == 0 {
+            return None;
+        }
+        let image = &self.images[index];
+        let fetch = TextureFetch { d: image.fetch_words };
+        let bytes_per_block = texture::texture_format_of(image.xenos_format).bits_per_block / 8;
+        let base = if image.source_bytes != 0 { image.address } else { 0 };
+        let mips = if image.mip_bytes != 0 { image.mip_address } else { 0 };
+        let (base_at, mips_at) = (host_address(base), host_address(mips));
+        let first = image.parts.is_none();
+        if first {
+            // Not cut until it has changed: until then, the whole read's test of a change,
+            // its signature, after the arming as there.
+            let now = sign_image(image, Some(&mut self.track.sign_nanos));
+            if now == image.signature && !image.signature_stale {
+                return Some(false);
+            }
+            self.images[index].signature = now;
+        }
+        let mut parts = match self.images[index].parts.take() {
+            Some(parts) => parts,
+            None => {
+                self.parts.cut = self.parts.cut.wrapping_add(1);
+                let image = &self.images[index];
+                let mut parts =
+                    Box::new(texture_parts::cut(&fetch, &image.levels, base, mips, bytes_per_block, image.volume));
+                parts.mirror = vec![0; image.bytes as usize];
+                parts.empty_spans = parts.mirror.len() / 64;
+                parts
+            }
+        };
+        let work = &mut self.parts;
+        work.rereads = work.rereads.wrapping_add(1);
+        parts.rereads = parts.rereads.wrapping_add(1);
+        work.written.clear();
+        work.written.extend(
+            parts.pages.iter().map(|&page| first || !bridge::watch::unwritten(page * texture_parts::PAGE, texture_parts::PAGE, since)),
+        );
+        work.bytes.clear();
+        work.regions.clear();
+        let read_before = parts.read;
+        let image = &self.images[index];
+        // Most of it written (a video's frame, a texture streamed in again): one whole
+        // read and one copy cost less than a read and a region a part.
+        let touched: Vec<bool> = if first {
+            Vec::new()
+        } else {
+            (0..parts.list.len()).map(|i| parts.touched(i, &work.written)).collect()
+        };
+        if !first && touched.iter().filter(|&&t| t).count() * 2 > parts.list.len() {
+            return self.reread_whole_in_parts(vk, index, parts);
+        }
+        for i in 0..parts.list.len() {
+            if !first && !touched[i] {
+                continue;
+            }
+            let part = &parts.list[i];
+            work.scratch.clear();
+            work.scratch.resize(part.bytes, 0);
+            // SAFETY: guest memory at the texture's own addresses, as its whole read takes
+            // them; the part is one of its levels'.
+            if !unsafe { texture::read_region(&fetch, base_at, mips_at, part.level, part.rect, &mut work.scratch) } {
+                // Read whole instead, and cut again next time.
+                return None;
+            }
+            work.read = work.read.wrapping_add(1);
+            parts.read = parts.read.wrapping_add(1);
+            // SAFETY: the scratch, `part.bytes` long.
+            let signature = unsafe { signature_of(work.scratch.as_ptr(), work.scratch.len()) };
+            if !first && signature == part.signature {
+                continue;
+            }
+            let level = &image.levels[part.level as usize];
+            let at = (work.bytes.len() + 15) & !15;
+            work.bytes.resize(at, 0);
+            work.regions.push(texture_parts::region(
+                part,
+                level,
+                image.block_width,
+                image.block_height,
+                image.volume,
+                at as u64,
+            ));
+            work.bytes.extend_from_slice(&work.scratch);
+            parts.list[i].signature = signature;
+            texture_parts::place_counted(&mut parts, i, level, bytes_per_block, &work.scratch, &mut work.spans);
+        }
+        if cfg!(feature = "diagnostics") {
+            let counts = work
+                .by_texture
+                .entry((image.address, image.width, image.height, image.xenos_format))
+                .or_insert([0; 5]);
+            counts[0] = parts.list.len() as u64;
+            counts[4] = parts.mirror.len() as u64;
+            counts[1] += 1;
+            counts[2] += parts.read - read_before;
+            counts[3] += work.regions.len() as u64;
+        }
+        if work.regions.is_empty() {
+            self.images[index].parts = Some(parts);
+            return Some(false);
+        }
+        if check_parts() {
+            if parts.copied.len() != parts.mirror.len() {
+                parts.copied = vec![0; parts.mirror.len()];
+            }
+            let image = &self.images[index];
+            texture_parts::apply_copy(
+                &work.regions,
+                &work.bytes,
+                &image.levels,
+                image.block_width,
+                image.block_height,
+                bytes_per_block,
+                image.volume,
+                &mut parts.copied,
+            );
+        }
+        let Self { up, dev, fails, images, parts: work, .. } = self;
+        let image = &mut images[index];
+        // SAFETY: the cache's device, the image its.
+        if !unsafe { up.stage_parts(vk, dev, fails, image, &work.bytes, &mut work.regions) } {
+            // What the signatures say was uploaded was not: read whole.
+            return None;
+        }
+        work.uploaded = work.uploaded.wrapping_add(work.regions.len() as u64);
+        parts.uploaded = parts.uploaded.wrapping_add(work.regions.len() as u64);
+        work.uploaded_bytes = work.uploaded_bytes.wrapping_add(work.bytes.len() as u64);
+        image.signature_stale = true;
+        // Whether it is still mostly empty, from the bytes as now uploaded.
+        let empty = texture_parts::empty_percent(&parts);
+        image.parts = Some(parts);
+        self.note_emptiness_of(index as u64 + 1, empty);
+        if check_parts() {
+            self.check_parts(index, stamp);
+        }
+        Some(true)
+    }
+
+    /// A texture cut into parts read again whole, most of it having been written: uploaded
+    /// whole if it changed, the parts kept, their copy of the bytes refreshed and their
+    /// signatures cleared, so that the next re-read in parts uploads every part it reads.
+    fn reread_whole_in_parts(&mut self, vk: &Vk, index: usize, mut parts: Box<texture_parts::Parts>) -> Option<bool> {
+        let data = read_again(&self.images[index]);
+        let work = &mut self.parts;
+        work.whole = work.whole.wrapping_add(1);
+        if !data.header.ok || data.bytes.len() != parts.mirror.len() {
+            return None;
+        }
+        if data.bytes == parts.mirror {
+            self.images[index].parts = Some(parts);
+            return Some(false);
+        }
+        let Self { up, dev, fails, images, .. } = self;
+        let image = &mut images[index];
+        // SAFETY: the cache's device, the image its; the bytes live through the call.
+        if data.bytes.len() as u64 != image.bytes
+            || !unsafe { up.stage_into(vk, dev, fails, image, data.bytes.as_ptr(), data.bytes.len(), None) }
+        {
+            return None;
+        }
+        parts.mirror.copy_from_slice(&data.bytes);
+        parts.empty_spans = texture_parts::empty_spans(&parts.mirror);
+        if check_parts() {
+            parts.copied = data.bytes.clone();
+        }
+        for part in &mut parts.list {
+            part.signature = 0;
+        }
+        image.signature_stale = true;
+        image.parts = Some(parts);
+        self.note_emptiness(index as u64 + 1, &data);
+        Some(true)
+    }
+
+    /// MW2_CHECK_TEXTURE_PARTS: the texture read whole, against what its re-reads in parts
+    /// uploaded. A part that differs with none of its pages written since `stamp` was
+    /// missed: something wrote it that the watch did not see.
+    #[cold]
+    fn check_parts(&mut self, index: usize, stamp: u64) {
+        let data = read_again(&self.images[index]);
+        let image = &mut self.images[index];
+        let Some(parts) = image.parts.as_mut() else { return };
+        let work = &mut self.parts;
+        work.checked = work.checked.wrapping_add(1);
+        let counted = texture_parts::empty_spans(&parts.mirror);
+        if counted != parts.empty_spans {
+            work.miscounted = work.miscounted.wrapping_add(1);
+            parts.empty_spans = counted;
+        }
+        if parts.copied != parts.mirror {
+            let differ = parts.copied.iter().zip(&parts.mirror).filter(|(a, b)| a != b).count();
+            work.misplaced_bytes = work.misplaced_bytes.wrapping_add(differ as u64);
+            if work.misplaced_bytes == differ as u64 {
+                log_warn!(
+                    "textures: the copy of the parts of %ux%u fmt %u at %08X puts %u bytes elsewhere than the parts' bytes say",
+                    image.width,
+                    image.height,
+                    image.xenos_format,
+                    image.address,
+                    differ as u32
+                );
+            }
+            parts.copied.clone_from(&parts.mirror);
+        }
+        if !data.header.ok || data.bytes.len() != parts.mirror.len() || data.bytes == parts.mirror {
+            return;
+        }
+        let bytes_per_block = texture::texture_format_of(image.xenos_format).bits_per_block / 8;
+        let written: Vec<bool> =
+            parts.pages.iter().map(|&page| !bridge::watch::unwritten(page * texture_parts::PAGE, texture_parts::PAGE, stamp)).collect();
+        let (mut read, mut uploaded) = (Vec::new(), Vec::new());
+        for i in 0..parts.list.len() {
+            let part = &parts.list[i];
+            let level = &image.levels[part.level as usize];
+            read.resize(part.bytes, 0);
+            uploaded.resize(part.bytes, 0);
+            texture_parts::take(part, level, bytes_per_block, &data.bytes, &mut read);
+            texture_parts::take(part, level, bytes_per_block, &parts.mirror, &mut uploaded);
+            if read == uploaded {
+                continue;
+            }
+            if parts.touched(i, &written) {
+                work.raced_parts = work.raced_parts.wrapping_add(1);
+                continue;
+            }
+            let differ = read.iter().zip(&uploaded).filter(|(a, b)| a != b).count();
+            work.missed_parts = work.missed_parts.wrapping_add(1);
+            work.missed_bytes = work.missed_bytes.wrapping_add(differ as u64);
+            if work.missed_parts <= 16 {
+                log_warn!(
+                    "textures: a part of %ux%u fmt %u at %08X read in parts is stale: level %u, blocks %u..%u x %u..%u x %u..%u, %u bytes differ, none of its pages written since",
+                    image.width,
+                    image.height,
+                    image.xenos_format,
+                    image.address,
+                    part.level,
+                    part.rect.x0,
+                    part.rect.x1,
+                    part.rect.y0,
+                    part.rect.y1,
+                    part.rect.z0,
+                    part.rect.z1,
+                    differ as u32
+                );
+            }
+            // Counted once: the next comparison starts from what memory holds.
+            texture_parts::place(part, level, bytes_per_block, &read, &mut parts.mirror);
+        }
+    }
+
     fn refresh_rewritten(&mut self, vk: &Vk) {
         let again = std::mem::take(&mut self.track.rewritten_this_segment);
         for id in again {
@@ -2775,9 +3197,23 @@ impl TextureCache {
             self.track.reread_rewritten = self.track.reread_rewritten.wrapping_add(1);
             #[cfg(feature = "diagnostics")]
             note_image(&self.images[index]);
+            match self.refresh_in_parts(vk, index) {
+                Some(false) => continue,
+                Some(true) => {
+                    #[cfg(feature = "diagnostics")]
+                    self.note_changed(index);
+                    if cfg!(feature = "diagnostics") {
+                        self.track.late_restages.push(id);
+                    }
+                    self.track.late_reads.push(LateRead { id, frame: self.track.frame });
+                    self.track.changed_after_first_bind = self.track.changed_after_first_bind.wrapping_add(1);
+                    continue;
+                }
+                None => {}
+            }
             self.images[index].watch_stamp = track_image(self.track.frame, &self.images[index]);
             let now = sign_image(&self.images[index], Some(&mut self.track.sign_nanos));
-            if now == self.images[index].signature {
+            if now == self.images[index].signature && !self.images[index].signature_stale {
                 continue;
             }
             let data = read_again(&self.images[index]);
@@ -3113,6 +3549,55 @@ impl TextureCache {
         if t.unchanged_by_watch != 0 {
             log_info!("textures: %llu checks answered by the write watch, nothing signed", t.unchanged_by_watch);
         }
+        let w = &self.parts;
+        if w.rereads != 0 {
+            log_info!(
+                "textures: %llu re-reads in parts of %llu textures cut into parts (%llu of them whole, most of it written): %llu parts read, %llu uploaded (%llu KB)",
+                w.rereads,
+                w.cut,
+                w.whole,
+                w.read,
+                w.uploaded,
+                w.uploaded_bytes / 1024
+            );
+        }
+        if !w.by_texture.is_empty() {
+            let once = w.by_texture.values().filter(|counts| counts[1] <= 1).count();
+            let copies: u64 = w.by_texture.values().map(|counts| counts[4]).sum();
+            log_info!(
+                "textures: %u textures cut into parts, %u of them never read in parts again; their copies %llu KB in all",
+                w.by_texture.len() as u32,
+                once as u32,
+                copies / 1024
+            );
+        }
+        // The textures read in parts the most.
+        let mut most: Vec<_> = w.by_texture.iter().collect();
+        most.sort_by_key(|(_, counts)| std::cmp::Reverse(counts[2]));
+        for (&(address, width, height, format), counts) in most.into_iter().take(8) {
+            log_info!(
+                "textures:   %ux%u fmt %u at %08X in %llu parts: %llu re-reads in parts read %llu parts and uploaded %llu",
+                width,
+                height,
+                format,
+                address,
+                counts[0],
+                counts[1],
+                counts[2],
+                counts[3]
+            );
+        }
+        if w.checked != 0 {
+            log_info!(
+                "textures: %llu re-reads in parts checked against a whole read: %llu parts stale with none of their pages written since (%llu bytes), %llu written after their read; %llu bytes misplaced by the copies; %llu miscounts of the empty spans",
+                w.checked,
+                w.missed_parts,
+                w.missed_bytes,
+                w.raced_parts,
+                w.misplaced_bytes,
+                w.miscounted
+            );
+        }
         if t.reread_rewritten != 0 {
             log_info!(
                 "textures: rewritten textures signed again at a segment's end %llu times; %llu had changed since the frame's first bind and were re-staged",
@@ -3138,6 +3623,24 @@ impl TextureCache {
                 t.still_empty_at_submit
             );
         }
+        let memory = self.memory.held();
+        log_info!(
+            "textures: %llu blocks of image memory made, %llu given back; making them took %.1f ms, the longest %.1f ms; %llu images had memory of their own",
+            memory.made,
+            memory.given_back,
+            memory.making_nanos as f64 / 1e6,
+            memory.longest_nanos as f64 / 1e6,
+            memory.alone_made
+        );
+        log_info!(
+            "textures: %llu blocks started ahead, %llu blocks taken from ahead (%llu of them waited for), %llu empty blocks kept for the next; %llu made at a draw, in %.1f ms",
+            memory.made_ahead,
+            memory.taken_ahead,
+            memory.waited_ahead,
+            memory.kept,
+            memory.made_now,
+            memory.made_now_nanos as f64 / 1e6
+        );
         log_info!(
             "textures: %llu MB held at the end, against a budget of %llu MB; %llu evicted (%llu MB) in %llu passes",
             self.live_bytes >> 20,

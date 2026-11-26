@@ -1,11 +1,11 @@
-// Installing the game (launcher/setup.h says what for): the files from the player's disc
-// into game/ beside the launcher, and title update 6 applied to the two executables,
-// which is the version the game executables are built from. A build of the disc
-// version (mw2_version_tu0) installs the disc as it is.
+// Installing the game: the files from the player's disc into game/ beside the launcher,
+// and title update 6 applied to the two executables, which is the version the game
+// executables are built from. A build of the disc version (mw2_version_tu0) installs the
+// disc as it is.
 //
-// The window and the terminal mode run it through setup::Run (setup.cpp), on a thread of
-// their own; this reports its progress there, through the mw2l_* calls, to the
-// setup::Progress the window draws, and hands its error back as text. The disc, the
+// The window and the terminal mode run it on a thread of their own (window.rs,
+// terminal.rs); it reports its progress to the Progress they draw or print, and its
+// error as the text a player reads. The disc, the
 // package and the executables are read with the install crate (install/), as the game
 // and cargo xtask read them. What a player reads is word for word what the C++ install
 // said.
@@ -19,12 +19,13 @@ use mw2_install::{crypto, xex};
 use mw2_install::{patch, stfs};
 #[cfg(not(mw2_version_tu0))]
 use std::collections::BTreeMap;
-use std::ffi::{c_char, c_int, c_void};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-const GAME_FOLDER: &str = "game";
+pub(crate) const GAME_FOLDER: &str = "game";
 const TITLE_ID: u32 = 0x41560817;
 
 // The disc's two executables, and what the update makes of them, by the SHA-256 of
@@ -56,7 +57,7 @@ const TITLES: [Title; 2] = [
 ];
 
 /// True in a build that installs an update at all.
-const USES_UPDATE: bool = cfg!(not(mw2_version_tu0));
+pub(crate) const USES_UPDATE: bool = cfg!(not(mw2_version_tu0));
 
 // The discs whose update is known, by the media id in their executables' headers. Each
 // language's update is its own package, for its disc alone: the same patches to the
@@ -134,8 +135,7 @@ fn update_url() -> &'static str {
     return "";
 }
 
-// setup::State and setup::Result, by their places in setup.h's enums.
-#[repr(C)]
+// What game/ holds, by the executables in it, and how an install or an update ended.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum State {
     NotInstalled,
@@ -143,7 +143,6 @@ pub enum State {
     Installed,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Outcome {
     Done,
@@ -163,67 +162,90 @@ enum Stop {
 
 use Stop::{Cancelled, Failed};
 
-// setup::Progress, which the C++ owns.
-#[repr(C)]
+/// How a job is going, for the window to draw and the terminal mode to print: the
+/// install's, the self-update's, a map's conversion (maps.cpp reports through the calls at
+/// the end). The steps are taken under the lock; CANCEL sets `cancel`, which the job
+/// looks at.
+#[derive(Default)]
 pub struct Progress {
-    _opaque: [u8; 0],
+    pub state: Mutex<Step>,
+    pub cancel: AtomicBool,
+}
+
+#[derive(Clone, Default)]
+pub struct Step {
+    pub step: i32, // 1-based, of how many
+    pub steps: i32,
+    pub title: Vec<u8>,  // what the step does
+    pub detail: Vec<u8>, // the file being copied, when there is one
+    pub done: u64,       // bytes, when the step has an amount
+    pub total: u64,
+}
+
+impl Progress {
+    pub fn state(&self) -> MutexGuard<'_, Step> {
+        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+
+    /// The steps a run takes, none taken yet.
+    pub fn begin(&self, steps: i32) {
+        let mut state = self.state();
+        state.step = 0;
+        state.steps = steps;
+    }
+
+    /// A step begun: its title, nothing copied yet.
+    pub fn step(&self, step: i32, title: &[u8]) {
+        let mut state = self.state();
+        state.step = step;
+        state.title = title.to_vec();
+        state.detail.clear();
+        state.done = 0;
+        state.total = 0;
+    }
+
+    pub fn detail(&self, text: &[u8]) {
+        self.state().detail = text.to_vec();
+    }
 }
 
 // The install's handle on it, which every call below is handed with; the self-update
 // (update.rs) reports through it too.
 #[derive(Clone, Copy)]
-pub(crate) struct Shown(pub(crate) *mut Progress);
+pub(crate) struct Shown<'a>(pub(crate) &'a Progress);
 
-// ---- the C side ------------------------------------------------------------------
-// Each call is setup.cpp's, which takes the Progress's lock for the fields it changes.
-
-#[allow(unsafe_code)]
-mod c {
-    use super::Progress;
-    use std::ffi::{c_char, c_int, c_void};
-
-    unsafe extern "C" {
-        pub fn mw2l_setup_begin(progress: *mut Progress, steps: c_int);
-        pub fn mw2l_setup_step(progress: *mut Progress, step: c_int, title: *const c_char, length: usize);
-        pub fn mw2l_setup_detail(progress: *mut Progress, text: *const c_char, length: usize);
-        pub fn mw2l_setup_total(progress: *mut Progress, total: u64);
-        pub fn mw2l_setup_add(progress: *mut Progress, done: u64);
-        pub fn mw2l_setup_cancelled(progress: *mut Progress) -> bool;
-        // A std::string the C++ handed over, set to the text.
-        pub fn mw2l_setup_text(to: *mut c_void, text: *const c_char, length: usize);
-    }
-}
-
-#[allow(unsafe_code)]
-impl Shown {
-    // SAFETY, each: the Progress setup::Run was handed, alive until it returns.
+impl Shown<'_> {
     pub(crate) fn begin(self, steps: i32) {
-        unsafe { c::mw2l_setup_begin(self.0, steps) }
+        self.0.begin(steps);
     }
     pub(crate) fn step(self, step: i32, title: &str) {
-        unsafe { c::mw2l_setup_step(self.0, step, title.as_ptr().cast(), title.len()) }
+        self.0.step(step, title.as_bytes());
     }
     pub(crate) fn detail(self, text: &str) {
-        unsafe { c::mw2l_setup_detail(self.0, text.as_ptr().cast(), text.len()) }
+        self.0.detail(text.as_bytes());
     }
     fn total(self, total: u64) {
-        unsafe { c::mw2l_setup_total(self.0, total) }
+        self.0.state().total = total;
     }
     fn add(self, done: u64) {
-        unsafe { c::mw2l_setup_add(self.0, done) }
+        self.0.state().done += done;
     }
     pub(crate) fn cancelled(self) -> bool {
-        unsafe { c::mw2l_setup_cancelled(self.0) }
+        self.0.cancelled()
     }
 }
 
 // The steps, numbered as they are taken.
-struct Steps {
-    shown: Shown,
+struct Steps<'a> {
+    shown: Shown<'a>,
     taken: i32,
 }
 
-impl Steps {
+impl Steps<'_> {
     fn next(&mut self, title: &str) {
         self.taken += 1;
         self.shown.step(self.taken, title);
@@ -292,7 +314,7 @@ fn is_game_file(name: &str) -> bool {
 
 // Copies the disc's game files into game/. What is already there, whole, is kept: an
 // install cut short resumes.
-fn copy_game(disc: &mut Disc, from: &Path, shown: Shown) -> Result<(), Stop> {
+fn copy_game(disc: &mut Disc, from: &Path, shown: Shown<'_>) -> Result<(), Stop> {
     let folder = Path::new(GAME_FOLDER);
     let copy: Vec<_> = disc
         .files()
@@ -432,7 +454,7 @@ fn detect() -> State {
 /// Installs from `disc` (an image or an extracted folder), or brings the install already
 /// in game/ up to date when `disc` is empty. `update` is the title update's package or a
 /// folder with its files; empty finds or downloads it.
-fn run(disc_path: &Path, update: &Path, shown: Shown) -> Result<(), Stop> {
+fn run(disc_path: &Path, update: &Path, shown: Shown<'_>) -> Result<(), Stop> {
     let copies = !disc_path.as_os_str().is_empty();
     shown.begin(if copies { 3 } else { 1 } + if USES_UPDATE { 2 } else { 0 });
     let mut steps = Steps { shown, taken: 0 };
@@ -619,89 +641,84 @@ mod space {
     }
 }
 
-// ---- what setup.cpp calls ----------------------------------------------------------
-// Text crosses as bytes and a length, paths as UTF-8, as setup.cpp makes them
-// (install::Utf8): on Linux a path's own bytes, on Windows the whole name, where the
-// code page would lose what it cannot spell.
+// ---- what the window and the terminal mode call ----------------------------------
+
+/// What game/ holds, by the executables in it.
+pub fn state() -> State {
+    detect()
+}
+
+/// Installs from `disc` (an image or an extracted folder), or brings the install already
+/// in game/ up to date when `disc` is empty. `update` is the title update's package or a
+/// folder with its files; empty downloads it. The error is the text a player reads, for
+/// Failed and NoUpdate.
+pub fn install(disc: &Path, update: &Path, progress: &Progress) -> (Outcome, String) {
+    match run(disc, update, Shown(progress)) {
+        Ok(()) => (Outcome::Done, String::new()),
+        Err(Cancelled) => (Outcome::Cancelled, String::new()),
+        Err(Failed(text)) => (Outcome::Failed, text),
+        Err(Stop::NoUpdate(text)) => (Outcome::NoUpdate, text),
+    }
+}
+
+/// Where the update of the last install's disc is downloaded from, to tell a player who
+/// has to fetch it.
+pub fn update_address() -> &'static str {
+    update_url()
+}
+
+// ---- what maps.cpp calls -----------------------------------------------------------
+// A map's conversion reports to the Progress the window draws, handed to it as a
+// pointer; text crosses as bytes and a length.
 
 #[allow(unsafe_code)]
-pub(crate) mod exports {
-    use super::*;
+mod exports {
+    use super::Progress;
+    use crate::boundary::bytes;
+    use std::ffi::{c_char, c_int};
+    use std::sync::atomic::Ordering;
 
-    // SAFETY: `data` points at `length` bytes, alive for the call, or `length` is 0.
-    pub(crate) unsafe fn bytes<'a>(data: *const u8, length: usize) -> &'a [u8] {
-        if length == 0 { &[] } else { unsafe { std::slice::from_raw_parts(data, length) } }
+    // SAFETY, each: `progress` is the Progress maps.cpp was handed, alive across its
+    // call, and each text points at its length of readable bytes.
+
+    /// A run of `steps` begun at `step`: its title, nothing else said yet.
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn mw2_progress_set(
+        progress: *const Progress,
+        step: c_int,
+        steps: c_int,
+        title: *const c_char,
+        length: usize,
+    ) {
+        let mut state = unsafe { &*progress }.state();
+        state.steps = steps;
+        state.step = step;
+        state.title = unsafe { bytes(title, length) }.to_vec();
+        state.detail.clear();
+        state.done = 0;
+        state.total = 0;
     }
 
-    fn path_of(bytes: &[u8]) -> PathBuf {
-        #[cfg(unix)]
-        {
-            use std::os::unix::ffi::OsStrExt;
-            PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
+    /// What the step is doing; with `step` above 0, the step it is now and its title.
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn mw2_progress_line(
+        progress: *const Progress,
+        step: c_int,
+        title: *const c_char,
+        title_length: usize,
+        detail: *const c_char,
+        detail_length: usize,
+    ) {
+        let mut state = unsafe { &*progress }.state();
+        if step > 0 {
+            state.step = step;
+            state.title = unsafe { bytes(title, title_length) }.to_vec();
         }
-        #[cfg(not(unix))]
-        PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
+        state.detail = unsafe { bytes(detail, detail_length) }.to_vec();
     }
 
-    // The self-update's text crosses the same way (update.rs).
-    pub(crate) fn say(to: *mut c_void, text: &str) {
-        // SAFETY: the C++'s std::string, alive across the call that handed it over.
-        unsafe { c::mw2l_setup_text(to, text.as_ptr().cast::<c_char>(), text.len()) }
-    }
-
-    /// setup::Detect: a setup::State.
     #[unsafe(no_mangle)]
-    pub extern "C" fn mw2_setup_detect() -> c_int {
-        detect() as c_int
-    }
-
-    /// setup::Run: a setup::Result, and `error`, a std::string, set for Failed and
-    /// NoUpdate.
-    ///
-    /// # Safety
-    /// `disc` and `update` point at their lengths' bytes (none when 0), `progress` at
-    /// the C++'s setup::Progress and `error` at a std::string, all alive until it
-    /// returns.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn mw2_setup_run(
-        disc: *const u8,
-        disc_length: usize,
-        update: *const u8,
-        update_length: usize,
-        progress: *mut Progress,
-        error: *mut c_void,
-    ) -> c_int {
-        let (disc, update) = unsafe { (path_of(bytes(disc, disc_length)), path_of(bytes(update, update_length))) };
-        let outcome = match run(&disc, &update, Shown(progress)) {
-            Ok(()) => Outcome::Done,
-            Err(Cancelled) => Outcome::Cancelled,
-            Err(Failed(text)) => {
-                say(error, &text);
-                Outcome::Failed
-            }
-            Err(Stop::NoUpdate(text)) => {
-                say(error, &text);
-                Outcome::NoUpdate
-            }
-        };
-        outcome as c_int
-    }
-
-    /// setup::UpdateUrl: the address's bytes, which live as long as the program, and
-    /// their number in `length`.
-    ///
-    /// # Safety
-    /// `length` points at a size_t.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn mw2_setup_update_url(length: *mut usize) -> *const c_char {
-        let url = update_url();
-        unsafe { *length = url.len() };
-        url.as_ptr().cast()
-    }
-
-    /// setup::UsesUpdate.
-    #[unsafe(no_mangle)]
-    pub extern "C" fn mw2_setup_uses_update() -> bool {
-        USES_UPDATE
+    unsafe extern "C" fn mw2_progress_cancelled(progress: *const Progress) -> bool {
+        unsafe { &*progress }.cancel.load(Ordering::Relaxed)
     }
 }

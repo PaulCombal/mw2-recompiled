@@ -1,36 +1,58 @@
-// The launcher's entry. The window and the tools are C++ (launcher/*.cpp, the library
-// launcher_core); the compile pass is Rust (precompile.rs), on the crate the game builds
-// its shaders with, so both build every shader the same way; so are the install
-// (setup.rs, with its download, download.rs), on the crate the game and cargo xtask read
-// the disc and the update with, the self-update (update.rs, which reads a release's
-// description with the package's library, release.rs), and the menu sounds' decoding
-// (sound.rs), on the game's XMA decoder.
+// The launcher's entry, and the launcher: its window (window.rs, drawn by ui.rs and
+// preview.rs with the draw list of draw.rs, atlas.rs and present.rs, read through
+// input.rs) and its terminal modes (terminal.rs); the compile pass (precompile.rs), on the
+// crate the game builds its shaders with, so both build every shader the same way, and on
+// the zone reader (zone/, the mw2-zone crate), which reads the game's shaders out; the
+// install (setup.rs, with its download, download.rs), on the crate the game and cargo
+// xtask read the disc and the update with; the self-update (update.rs, which reads a
+// release's description with the package's library, release.rs); the settings
+// (settings.rs), the one window a copy (single.rs), the profile screen's work
+// (profile.rs), the bug report (report.rs, scrub.rs), the menu sounds (sound.rs,
+// fastfile.rs), on the game's XMA decoder, starting the game (play.rs, spawn.rs) and the
+// custom maps (maps.rs). C++ is left in the map converter (mapport/, with the zone
+// definitions' reader it shares, zone/, and its front, maps.cpp), the library
+// launcher_core, which build.rs builds through CMake.
 //
 // `main` is the C runtime's, as the C++ launcher's was: the arguments it hands over
-// (Windows' in the code page, which main.cpp reads the wide command line instead of),
+// (Windows' in the code page, which terminal.rs reads the wide command line instead of),
 // and nothing of Rust's start-up -- no SIGPIPE ignored, which the game the launcher
 // starts would inherit, no file descriptors opened in place of closed ones.
 #![no_main]
 // A player's build opens no console window; a terminal it was started from gets what
-// the terminal mode prints (main.cpp). The diagnostics build keeps its own console.
+// the terminal mode prints (terminal.rs). The diagnostics build keeps its own console.
 #![cfg_attr(not(feature = "diagnostics"), windows_subsystem = "windows")]
 
+mod atlas;
+mod boundary;
+mod clock;
+mod cnum;
 mod download;
+mod draw;
+mod fastfile;
+mod input;
+mod maps;
+mod play;
+mod playerdata_layout;
 mod precompile;
+mod present;
+mod preview;
+mod profile;
+mod report;
+mod scrub;
+mod settings;
 mod setup;
+mod single;
 mod sound;
+mod spawn;
+mod terminal;
+mod ui;
 mod update;
+mod window;
 
 use std::ffi::{c_char, c_int};
-
-unsafe extern "C" {
-    // main.cpp's main.
-    fn launcher_run(argc: c_int, argv: *mut *mut c_char) -> c_int;
-}
 
 #[unsafe(no_mangle)]
 extern "C" fn main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     mw2_shaders::set_log(precompile::log);
-    // SAFETY: the C runtime's arguments, as it hands them.
-    unsafe { launcher_run(argc, argv) }
+    terminal::run(argc, argv)
 }

@@ -9,8 +9,9 @@
 
 use crate::env;
 use crate::log::{log_info, log_warn};
-use crate::runtime::{guest_memory, inflate};
+use crate::runtime::guest_memory;
 use crate::title::*;
+use mw2_install::inflate;
 use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::sync::Mutex;

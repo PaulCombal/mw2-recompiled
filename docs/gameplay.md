@@ -48,7 +48,7 @@ files are there:
 
 The launcher's MAPS screen adds (converting a PC map first, [maps.md](maps.md)),
 removes and lists the same maps, and puts at most 8 in the game, the menu's room; a ninth there is left out with a warning in
-the log (`runtime/install/arena.h`, `launcher/maps.h`). `map <map>` at the
+the log (`runtime/install/arena.h`, `launcher/maps.cpp`, `launcher/src/maps.rs`). `map <map>` at the
 console (`MW2_CONSOLE`) starts one directly.
 
 A signed file is still checked. Nothing checks an unsigned one: the loader

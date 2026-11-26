@@ -1,8 +1,10 @@
-# The launcher (launcher/): what a player opens, mw2-launcher. Its entry, its compile
-# pass, on the shaders crate the game builds its shaders with (shaders/), and the
-# install, on the crate the game reads its executable with (install/), are Rust; its
-# window and the map converter are the C++ library launcher_core, which build.rs builds
-# through CMake (CMakeLists.txt) in the build folder cargo xtask configured, and links. cargo xtask build makes it; it is not
+# The launcher (launcher/): what a player opens, mw2-launcher. It is Rust -- its window,
+# its compile pass, on the shaders crate the game builds its shaders with (shaders/), its
+# install, on the crate the game reads its executable with (install/) -- but for the C++
+# library launcher_core: the fastfile reader the compile pass reads the game's shaders
+# with (zone/, precompile.cpp) and the map converter (mapport/, maps.cpp), which build.rs
+# builds through CMake (CMakeLists.txt) in the build folder cargo xtask configured, and
+# links with the game's SDL. cargo xtask build makes it; it is not
 # the workspace's default member, so a plain cargo build makes the game alone.
 [package]
 name = "mw2-launcher"
@@ -13,7 +15,7 @@ build = "build.rs"
 
 # What the self-update reads in a release's description (src/release.rs), apart so that
 # cargo test runs its tests: the binary's main is the C runtime's, which no test harness
-# replaces, and it links only with a build folder's C++.
+# replaces, and it links with a build folder's C++.
 [lib]
 path = "src/release.rs"
 doctest = false
@@ -31,6 +33,9 @@ diagnostics = []
 portable = []
 
 [dependencies]
+# SDL, the game's (sdl3-sys builds it, cmake/sdl.cmake): rustc links it, and the C++ is
+# compiled with its headers (build.rs).
+sdl3-sys = { version = "=0.7.2", default-features = false, features = ["build-from-source-static"] }
 ash = { version = "=0.38.0", default-features = false, features = ["std", "linked"] }
 mw2-shaders = { path = "../shaders" }
 # The game's XMA frame decoder, for the menu sounds (src/sound.rs).
@@ -38,6 +43,11 @@ wmapro = { path = "../wmapro" }
 # The disc, the update's package and the executables, read as the game and cargo xtask
 # read them (install/).
 mw2-install = { path = "../install" }
+# The font rasteriser the game's system screens use, for the window's text (src/atlas.rs).
+mw2-truetype = { path = "../truetype" }
+# The game's fastfiles read as its loader streams them, for the shaders the compile pass
+# builds (src/precompile.rs).
+mw2-zone = { path = "../zone" }
 
 [build-dependencies]
 # The SHA-256 build.rs hashes the executables and the update's fastfiles the install

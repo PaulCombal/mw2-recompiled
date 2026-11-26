@@ -40,6 +40,7 @@ dependencies = [
  "ash",
  "mw2-install",
  "mw2-shaders",
+ "mw2-truetype",
  "ppc_recomp",
  "ppc_rt",
  "sdl3-sys",
@@ -57,6 +58,9 @@ dependencies = [
  "ash",
  "mw2-install",
  "mw2-shaders",
+ "mw2-truetype",
+ "mw2-zone",
+ "sdl3-sys",
  "wmapro",
 ]
 
@@ -66,6 +70,18 @@ version = "0.0.0"
 dependencies = [
  "ash",
  "mw2-install",
+]
+
+[[package]]
+name = "mw2-truetype"
+version = "0.0.0"
+
+[[package]]
+name = "mw2-zone"
+version = "0.0.0"
+dependencies = [
+ "mw2-install",
+ "mw2-shaders",
 ]
 
 [[package]]

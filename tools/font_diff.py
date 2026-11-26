@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Compares the game's font rasteriser (src/runtime/truetype.rs) with stb_truetype, called
+# Compares the game's font rasteriser (truetype/src/lib.rs) with stb_truetype, called
 # as the system's screens (screen.rs) call the Rust (see font_diff.rs and font_diff.cpp), byte for byte:
 # the atlas, the 95 glyphs, the result and the ascent. On the three fonts of assets/fonts
 # that screen.rs uses at every whole size from 1 to 600 px with screen.rs's doubling of the
@@ -13,7 +13,7 @@
 #
 #   usage: font_diff.py [--src folder] [--work folder] [--seeds N] [--quick] [--coverage]
 #
-# --src takes the Rust from another folder, to try a deliberate mistake; --quick runs a
+# --src takes the Rust (lib.rs) from another folder, to try a deliberate mistake; --quick runs a
 # smaller sweep and fuzz; --coverage builds the C with llvm's coverage and lists the lines
 # of the functions the port covers that no input reached. Exits nonzero at the first
 # difference, leaving the font in the work folder.
@@ -569,7 +569,7 @@ def system_fonts():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--src", default=f"{ROOT}/src")
+    parser.add_argument("--src", default=f"{ROOT}/truetype/src")
     parser.add_argument("--work", default=f"{ROOT}/build/font_diff")
     parser.add_argument("--seeds", type=int, default=3000)
     parser.add_argument("--threads", type=int, default=8)
@@ -593,7 +593,7 @@ def main():
                "-fno-sanitize-recover=all", "-DFONT_DIFF_CHILD"] + profile + [f"{ROOT}/tools/font_diff.cpp", "-o", child])
     source = f"{work}/font_diff.rs"
     text = open(f"{ROOT}/tools/font_diff.rs").read()
-    open(source, "w").write(text.replace('#[path = "../src/runtime/truetype.rs"]', f'#[path = "{arguments.src}/runtime/truetype.rs"]'))
+    open(source, "w").write(text.replace('#[path = "../truetype/src/lib.rs"]', f'#[path = "{arguments.src}/lib.rs"]'))
     program = f"{work}/font_diff"
     link = []
     if arguments.coverage:

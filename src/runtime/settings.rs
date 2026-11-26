@@ -1,4 +1,4 @@
-// What the player set in the launcher (launcher/settings.cpp) or wrote by hand,
+// What the player set in the launcher (launcher/src/settings.rs) or wrote by hand,
 // kept in the file .env as a line each of NAME=value. Any MW2_ switch can be there
 // (docs/switches.md).
 

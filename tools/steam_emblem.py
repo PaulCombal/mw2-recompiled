@@ -4,9 +4,9 @@
     tools/steam_emblem.py /snap/steam/current/usr/share/icons/hicolor/256x256/apps/steam.png
 
 The icon is a blue disc with the white parts -- two rings and the arm between
-them -- some of them cut out of it. Writes launcher/icon/steam_emblem.h: a
+them -- some of them cut out of it. Writes launcher/icon/steam_emblem.rs: a
 64-pixel coverage mask of the parts alone, without the disc, which the
-launcher tints (ui.cpp). Needs ffmpeg and ffprobe to read the picture.
+launcher tints (launcher/src/ui.rs). Needs ffmpeg and ffprobe to read the picture.
 """
 import os, subprocess, sys
 
@@ -49,15 +49,12 @@ for y in range(OUT):
         p = sum(coverage(x * step + i, y * step + j) for j in range(step) for i in range(step))
         parts.append(round(255 * p / step / step))
 
-def array(name, values):
-    rows = [", ".join(str(v) for v in values[i:i + OUT]) for i in range(0, len(values), OUT)]
-    return f"    constexpr unsigned char {name}[] = {{\n" + ",\n".join("        " + r for r in rows) + "\n    };\n"
-
-path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "launcher", "icon", "steam_emblem.h")
+rows = [", ".join(str(v) for v in parts[i:i + OUT]) for i in range(0, len(parts), OUT)]
+path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "launcher", "icon", "steam_emblem.rs")
 with open(path, "w") as out:
-    out.write("#pragma once\n// Made by tools/steam_emblem.py from Steam's 256-pixel icon: coverage, 0 to 255,\n"
+    out.write("// Made by tools/steam_emblem.py from Steam's 256-pixel icon: coverage, 0 to 255,\n"
               "// of its white parts without the disc.\n"
-              f"namespace steam_emblem\n{{\n    constexpr int kSize = {OUT};\n")
-    out.write(array("kParts", parts))
-    out.write("}\n")
+              f"pub const SIZE: usize = {OUT};\n"
+              "#[rustfmt::skip]\n"
+              "pub const PARTS: [u8; SIZE * SIZE] = [\n" + ",\n".join("    " + r for r in rows) + ",\n];\n")
 print(path)

@@ -297,7 +297,7 @@ fn compile(units: &[Unit], compiler: &Path, root: &Path, objects: &Path) -> Vec<
 // sdl3-sys builds SDL once in a target folder and never again: its build script asks
 // cargo to watch nothing. What it was built with is written beside it the first time,
 // and a build with other toolchain files or another llvm-mingw stops rather than link
-// the old one. And it must be the SDL CMake fetches for the launcher.
+// the old one.
 fn check_sdl(root: &Path, sdl: &Path) {
     let mut inputs = String::new();
     for file in ["cmake/sdl.cmake", "cmake/sdl-mingw-w64.cmake", "cmake/mingw-w64.cmake"] {
@@ -316,16 +316,6 @@ fn check_sdl(root: &Path, sdl: &Path) {
         Ok(_) => {}
         Err(_) => fs::write(&stamp, inputs).unwrap(),
     }
-
-    let header = fs::read_to_string(sdl.join("include/SDL3/SDL_version.h")).unwrap();
-    let part = |name: &str| {
-        let line = header.lines().find(|line| line.starts_with(&format!("#define SDL_{name}_VERSION"))).unwrap();
-        line.split_whitespace().nth(2).unwrap().to_string()
-    };
-    let built = format!("{}.{}.{}", part("MAJOR"), part("MINOR"), part("MICRO"));
-    let cmake = fs::read_to_string(root.join("CMakeLists.txt")).unwrap();
-    let fetched = cmake.lines().find_map(|line| line.trim().strip_prefix("GIT_TAG release-")).unwrap_or("none");
-    assert_eq!(built, fetched, "sdl3-sys builds SDL {built}, and CMakeLists.txt fetches {fetched} for the launcher");
 }
 
 // The C++ the game compiles with diagnostics, in its link order: the GPU capture and the

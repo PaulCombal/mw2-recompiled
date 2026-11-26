@@ -2,7 +2,7 @@
 // A zone read into a tree (tree.h), and a tree written back out as a zone.
 //
 // Reader walks a zone the way the game's loader streams it (as
-// launcher/zone/walker.h does for the shader pass), with a hook at every
+// zone/src/walker.rs does for the shader pass), with a hook at every
 // step. TreeReader keeps every struct it meets as a node, and what each
 // pointer loaded under it. TreeWriter walks a platform's rules over such a
 // tree and streams the zone the loader would read it from: every count,

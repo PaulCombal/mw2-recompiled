@@ -3,8 +3,8 @@
 // frame. The console's are a 1280x720 frame and a 1024x600 scene; a frame of another
 // shape gives the picture that shape, and the title follows it, its menus and HUD
 // included (hooks/render_size.rs). MW2_RENDER=<w>x<h> is the frame, and the renderer
-// draws it MW2_SCALE times wider and taller. runtime/render_size.h has the same
-// FrameValid for the launcher.
+// draws it MW2_SCALE times wider and taller. launcher/src/settings.rs has the same
+// frame_valid for the launcher's rows.
 
 use crate::env;
 use crate::log::{log_info, log_warn};

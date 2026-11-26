@@ -1,4 +1,4 @@
-// tools/font_diff.py's program: src/runtime/truetype.rs against stb_truetype, called
+// tools/font_diff.py's program: truetype/src/lib.rs against stb_truetype, called
 // as the system's screens call the Rust (font_diff.cpp, linked in), byte for byte: the atlas,
 // the 95 glyphs, the result and the ascent's bits.
 //
@@ -16,7 +16,7 @@
 
 #![allow(dead_code)]
 
-#[path = "../src/runtime/truetype.rs"]
+#[path = "../truetype/src/lib.rs"]
 mod truetype;
 
 use std::ffi::c_int;

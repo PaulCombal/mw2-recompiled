@@ -1,6 +1,6 @@
 // tools/font_diff.py's C++ half: stb_truetype as the port's reference, compiled and called
-// the way truetype.rs follows it (imstb_truetype.h with STB_TRUETYPE_IMPLEMENTATION and STBTT_STATIC, no stb_rect_pack),
-// to hold src/runtime/truetype.rs to. font_diff.rs links font_diff_c_bake in; built with
+// the way truetype/src/lib.rs follows it (imstb_truetype.h with STB_TRUETYPE_IMPLEMENTATION and STBTT_STATIC, no stb_rect_pack),
+// to hold it to. font_diff.rs links font_diff_c_bake in; built with
 // FONT_DIFF_CHILD this is also a program that bakes one damaged font, for the fuzz, where
 // the C may read outside the font: it runs the bake twice, the font once against a guard
 // page after it and once against one before it, and fails when either faults or the two

@@ -3,7 +3,7 @@
 //
 // A PC fastfile (the 2009 game's, version 276, and IW4x's) is a 21-byte
 // header, then one zlib stream; IW4x scrambles every byte after inflating.
-// A 360 one (launcher/zone/fastfile.h reads it for the shader pass) lists the
+// A 360 one (zone/src/fastfile.rs reads it for the shader pass) lists the
 // pictures it streams from the console's image paks, then holds the zlib
 // stream. A converted map is written as an unsigned 360 file.
 #include "tree.h"

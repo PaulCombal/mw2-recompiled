@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-# Compares the game's gunzip (src/runtime/inflate.rs) with zlib's (see
-# inflate_diff.rs): on the XLAST of every title image in mw2/ and mw2/tu0/, on gzip streams
-# made here from varied data at every level and with every header field, on deflate streams
-# built by hand with dynamic tables good and bad (complete, one code, incomplete,
-# over-subscribed, none, too many symbols) and a block of type 3 now and then, and on
-# damaged copies of each. The Rust is built with overflow checks and debug_assert! on.
+# Compares install/src/inflate.rs, the game's gunzip and the launcher's unzlib, with zlib's
+# inflate (see inflate_diff.rs). gunzip: on the XLAST of every title image in mw2/ and
+# mw2/tu0/, on gzip streams made here from varied data at every level and with every
+# header field, on deflate streams built by hand with dynamic tables good and bad
+# (complete, one code, incomplete, over-subscribed, none, too many symbols) and a block of
+# type 3 now and then, and on damaged copies of each. unzlib: on the zone of every
+# fastfile in mw2/game/ and mw2/update/ that is one zlib stream, on zlib streams of the
+# same data at every level and window, with a preset dictionary or a header zlib refuses,
+# on the hand-built deflate streams in a zlib wrapper, and on damaged copies of each. The
+# Rust is built with overflow checks and debug_assert! on.
 #
 #   usage: inflate_diff.py <build folder> [--seeds N] [--src folder] [--work folder]
 #
-# --src takes the Rust from another folder, to try a deliberate mistake. Exits nonzero at
+# --src takes the Rust (inflate.rs) from another folder, to try a deliberate mistake. Exits nonzero at
 # the first difference, leaving the stream beside the corpus.
 import argparse, glob, gzip, os, random, struct, subprocess, sys, zlib
 
@@ -53,13 +57,17 @@ def member(data, level, flags, rng):
         header += struct.pack("<H", zlib.crc32(bytes(header)) & 0xFFFF)
     return bytes(header) + body + struct.pack("<II", zlib.crc32(data), len(data) & 0xFFFFFFFF)
 
-def synthetic():
-    rng = random.Random(6)
+def samples_of(rng):
     samples = [b"", b"a", bytes(range(256)) * 40, b"<LocalizedString id=\"1\">text</LocalizedString>\n" * 300,
                rng.randbytes(5000), rng.randbytes(70000), bytes(100000), (b"abcabcabd" * 9000)[:65537]]
     # Text that repeats at long distances, for the far end of the window.
     words = [rng.randbytes(rng.randrange(3, 12)) for _ in range(300)]
     samples.append(b"".join(rng.choice(words) for _ in range(20000)))
+    return samples
+
+def synthetic():
+    rng = random.Random(6)
+    samples = samples_of(rng)
     streams = {}
     for i, data in enumerate(samples):
         for level in range(10):
@@ -306,11 +314,82 @@ def crafted():
         streams[bytes(header) + raw + trailer + rng.randbytes(rng.randrange(0, 3))] = size
     return streams
 
+# The zone of each unsigned fastfile up to 2 MB, the one zlib stream after its header, as
+# the launcher's sound reader finds it (launcher/src/fastfile.rs): its file,
+# code_post_gfx.ff, among them.
+def zones():
+    found = {}
+    for path in sorted(glob.glob(f"{ROOT}/mw2/game/*.ff") + glob.glob(f"{ROOT}/mw2/update/*.ff")):
+        if not os.path.isfile(path) or os.path.getsize(path) > 2 << 20:
+            continue
+        data = open(path, "rb").read()
+        if data[:8] != b"IWffu100" or len(data) < 0x25 or be32(data, 0x19):
+            continue
+        stream = data[0x25:]
+        try:
+            size = len(zlib.decompress(stream))
+        except zlib.error:
+            continue
+        found[stream] = size
+    return found
+
+# The zlib header for a window of 2^bits bytes and a level, its check made to fit, and
+# what is asked of it: the size, or at times a byte less or more.
+def zlib_header(bits, level, dictionary=False):
+    cmf = 8 | (bits - 8) << 4
+    flg = (min(level, 3) if level >= 0 else 2) << 6 | (0x20 if dictionary else 0)
+    flg |= 31 - ((cmf << 8 | flg) % 31) if (cmf << 8 | flg) % 31 else 0
+    return bytes([cmf, flg])
+
+def asked(rng, size):
+    return max(0, size + rng.choice([0, 0, 0, 0, -1, 1, 1000]))
+
+def zlib_synthetic():
+    rng = random.Random(8)
+    streams = {}
+    for i, data in enumerate(samples_of(rng)):
+        for level in range(10):
+            for bits in (9, 12, 15):
+                packer = zlib.compressobj(level, zlib.DEFLATED, bits)
+                stream = packer.compress(data) + packer.flush()
+                # Anything after the trailer, which both leave alone.
+                streams[stream + rng.randbytes(rng.choice([0, 0, 3]))] = asked(rng, len(data))
+        # A preset dictionary, which zlib asks for; a window over 32 KB; another method; a
+        # check that does not fit.
+        packer = zlib.compressobj(6, zlib.DEFLATED, 15, zdict=b"<LocalizedString")
+        streams[packer.compress(data) + packer.flush()] = len(data)
+        body = zlib.compress(data)[2:]
+        streams[bytes([0x88, (31 - 0x8800 % 31) % 31]) + body] = len(data)
+        streams[bytes([0x77, 0x9C]) + body] = len(data)
+        # The flag alone, on a stream that would read without it.
+        streams[zlib_header(15, 2, dictionary=True) + body] = len(data)
+        streams[bytes([0x78, 0x9D]) + body] = len(data)
+    rng = random.Random(9)
+    for i in range(600):
+        raw, meant = crafted_deflate(rng)
+        try:
+            inflater = zlib.decompressobj(-15)
+            data = inflater.decompress(raw)
+            trailer = struct.pack(">I", zlib.adler32(data)) if inflater.eof else rng.randbytes(4)
+            size = asked(rng, len(data))
+        except zlib.error:
+            trailer, size = rng.randbytes(4), rng.randrange(0, 2000)
+            if meant is not None and rng.randrange(2):
+                trailer, size = struct.pack(">I", zlib.adler32(meant)), len(meant)
+        header = zlib_header(rng.choice([8, 10, 15]), rng.randrange(4))
+        streams[header + raw + trailer + rng.randbytes(rng.randrange(0, 3))] = size
+    return streams
+
+def write_corpus(path, streams):
+    with open(path, "wb") as file:
+        for packed, size in streams.items():
+            file.write(struct.pack("<II", size, len(packed)) + packed)
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("build")
     parser.add_argument("--seeds", type=int, default=2000)
-    parser.add_argument("--src", default=f"{ROOT}/src")
+    parser.add_argument("--src", default=f"{ROOT}/install/src")
     parser.add_argument("--work")
     arguments = parser.parse_args()
     build = os.path.abspath(arguments.build)
@@ -324,19 +403,23 @@ def main():
     streams = {**xlasts(), **synthetic(), **made}
     print(f"{len(xlasts())} XLASTs, {len(made)} crafted, {len(streams)} streams in all")
     corpus = f"{work}/corpus"
-    with open(corpus, "wb") as file:
-        for packed, size in streams.items():
-            file.write(struct.pack("<II", size, len(packed)) + packed)
+    write_corpus(corpus, streams)
+    found = zones()
+    zlib_streams = {**found, **zlib_synthetic()}
+    print(f"{len(found)} fastfile zones, {len(zlib_streams)} zlib streams in all")
+    zlib_corpus = f"{work}/corpus-zlib"
+    write_corpus(zlib_corpus, zlib_streams)
 
     source = f"{work}/inflate_diff.rs"
     text = open(f"{ROOT}/tools/inflate_diff.rs").read()
-    open(source, "w").write(text.replace('#[path = "../src/runtime/inflate.rs"]', f'#[path = "{arguments.src}/runtime/inflate.rs"]'))
+    open(source, "w").write(text.replace('#[path = "../install/src/inflate.rs"]', f'#[path = "{arguments.src}/inflate.rs"]'))
     program = f"{work}/inflate_diff"
     subprocess.run(["rustc", "--edition=2024", "-Copt-level=2", "-Cdebug-assertions=on", "-Coverflow-checks=on",
                     "-Cpanic=abort", "-o", program, source, "-L", os.path.dirname(libraries[0]), "-l", "static=z"], check=True)
-    result = subprocess.run([program, corpus, str(arguments.seeds)], text=True, stdout=subprocess.PIPE, timeout=3600)
-    print(result.stdout, end="")
-    if result.returncode != 0:
-        sys.exit(f"exit {result.returncode}")
+    for mode, path in (("gzip", corpus), ("zlib", zlib_corpus)):
+        result = subprocess.run([program, mode, path, str(arguments.seeds)], text=True, stdout=subprocess.PIPE, timeout=3600)
+        print(result.stdout, end="")
+        if result.returncode != 0:
+            sys.exit(f"{mode}: exit {result.returncode}")
 
 main()

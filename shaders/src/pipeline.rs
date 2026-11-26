@@ -732,14 +732,29 @@ fn save_cache(g: &State, device: &ash::Device) {
     }
 }
 
-/// The file the pipeline cache is read from at initialise and written back to at
-/// shutdown (MW2_PIPELINE_CACHE overrides it). The launcher fills it with every shader of
-/// the game. None for no file.
+/// The file the pipeline cache is read from at initialise (or reopen_cache) and written
+/// back to at shutdown (MW2_PIPELINE_CACHE overrides it). The launcher fills it with every
+/// shader of the game. None for no file.
 pub fn set_cache_path(path: Option<&[u8]>) {
     *lock(&CACHE_PATH) = path.unwrap_or_default().to_vec();
 }
 
-/// Whether initialise found a cache there the driver took.
+/// The cache made again from the file set_cache_path names now, for a start that knows
+/// its file only once the device is up (the game's scale picks it, and the scale depends
+/// on the device). Before any pipeline is made with the cache: the one there is dropped.
+pub fn reopen_cache() {
+    let mut g = write();
+    let Some(device) = g.device_fn.clone() else { return };
+    if g.cache != vk::PipelineCache::null() {
+        // SAFETY: nothing has been made with it yet (the caller's).
+        unsafe { (device.fp_v1_0().destroy_pipeline_cache)(device.handle(), g.cache, std::ptr::null()) };
+        g.cache = vk::PipelineCache::null();
+    }
+    g.cache_loaded = false;
+    create_cache(&mut g, &device);
+}
+
+/// Whether initialise or reopen_cache found a cache there the driver took.
 pub fn cache_loaded() -> bool {
     read().cache_loaded
 }

@@ -8,17 +8,9 @@
 
 use std::hash::{BuildHasherDefault, Hasher};
 
-/// The name a shader goes by: FNV-1a 64 over its microcode dwords, as the command
-/// stream loads them (vk::renderer::ShaderHash).
-#[inline]
-pub fn shader_hash(code: &[u32]) -> u64 {
-    let mut hash: u64 = 1469598103934665603;
-    for &word in code {
-        hash ^= u64::from(word);
-        hash = hash.wrapping_mul(1099511628211);
-    }
-    hash
-}
+/// The name a shader goes by (mw2_shaders::shader::hash): FNV-1a 64 over its
+/// microcode dwords, as the command stream loads them.
+pub use mw2_shaders::shader::hash as shader_hash;
 
 /// For keys already unique: `(k * 0x9E3779B97F4A7C15).rotate_left(26)`, the product's
 /// high bits brought down to the low ones the bucket is taken from.

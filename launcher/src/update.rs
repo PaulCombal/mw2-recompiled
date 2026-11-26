@@ -1,5 +1,5 @@
-// A newer release of these programs (launcher/update.h says what for): looked for when
-// the player asks, and put in place of the running ones.
+// A newer release of these programs: looked for when the player asks, and put in place of
+// the running ones.
 //
 // GitHub describes the newest published release at a fixed address: its tag, and each
 // archive's name, size, SHA-256 and address, which release.rs reads and compares with
@@ -8,18 +8,18 @@
 // tar, and its files swapped in; the ones they replace wait in update/ until the next
 // start removes it, since a running program can be moved aside but not deleted. Starting the new launcher,
 // and its waiting for this one to end (MW2_LAUNCHER_TAKES_OVER), are the window's
-// (main.cpp, single.cpp).
+// (play.rs, single.rs).
 //
-// The window and the terminal mode call it through update.h's functions (update.cpp),
-// the install from a thread of its own, reporting to the same setup::Progress an install
-// does (setup.rs's Shown); what a player reads is word for word what the C++ said. All of
-// it works in the launcher's folder, which main.cpp makes the current one first.
+// The window and the terminal mode call it (window.rs, terminal.rs), the install from a
+// thread of its own, reporting to the same Progress an install does (setup.rs); what a
+// player reads is word for word what the C++ said. All of it works in the launcher's
+// folder, which main.rs makes the current one first.
 #![deny(unsafe_code)]
 
 use crate::download::download;
-use crate::setup::{Outcome, Shown, message};
+use crate::setup::{Outcome, Progress, Shown, message};
 use mw2_install::crypto::Sha256;
-use mw2_launcher::{CURRENT, Check, EXTENSION, KIND, Release, judge, kind, read_description};
+use mw2_launcher::{Check, EXTENSION, Release, judge, kind, read_description};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -70,7 +70,7 @@ fn sha256_of(path: &Path) -> Option<String> {
 
 // Whether this program has this standard stream to hand on. A Windows program opened
 // from the desktop has none, and one it would pass on that is not there fails the start
-// (spawn.cpp's Has, which the C++ started tar through): those are left unconnected
+// (as spawn.rs does for the game it starts): those are left unconnected
 // instead. Elsewhere a stream is always handed on.
 #[cfg(windows)]
 #[allow(unsafe_code)]
@@ -139,7 +139,7 @@ enum Stop {
     Failed(String),
 }
 
-fn install(release: &Release, shown: Shown) -> Result<(), Stop> {
+fn install(release: &Release, shown: Shown<'_>) -> Result<(), Stop> {
     let _ = fs::remove_dir_all(FOLDER);
     let folder = Path::new(FOLDER);
     let (fresh, old, archive) = (folder.join("new"), folder.join("old"), folder.join(&release.archive));
@@ -154,7 +154,7 @@ fn install(release: &Release, shown: Shown) -> Result<(), Stop> {
     result
 }
 
-fn swap_in(release: &Release, shown: Shown, fresh: &Path, old: &Path, archive: &Path) -> Result<(), Stop> {
+fn swap_in(release: &Release, shown: Shown<'_>, fresh: &Path, old: &Path, archive: &Path) -> Result<(), Stop> {
     shown.begin(3);
     shown.step(1, "Downloading the new version");
     shown.detail(&format!("{:.0} MB", release.size as f64 / 1e6));
@@ -247,112 +247,39 @@ fn finish() -> (String, String) {
     (version, former)
 }
 
-// ---- what update.cpp calls -------------------------------------------------------
-// As setup.rs's: text crosses as bytes and a length, and comes back into the C++'s
-// std::strings through mw2l_setup_text.
+// ---- what the window and the terminal mode call --------------------------------
 
-#[allow(unsafe_code)]
-mod exports {
-    use super::*;
-    use crate::setup::Progress;
-    use crate::setup::exports::{bytes, say};
-    use std::ffi::{c_char, c_int, c_void};
-
-    /// update::Current: a NUL-terminated string that lives as long as the program.
-    #[unsafe(no_mangle)]
-    pub extern "C" fn mw2_update_current() -> *const c_char {
-        CURRENT.as_ptr().cast()
-    }
-
-    /// update::Kind: a NUL-terminated string that lives as long as the program.
-    #[unsafe(no_mangle)]
-    pub extern "C" fn mw2_update_kind() -> *const c_char {
-        KIND.as_ptr().cast()
-    }
-
-    /// update::Look: an update::Check, the release's facts in the four std::strings
-    /// and `size`, and `error` set for Failed. As the C++ did, a description that could
-    /// not be had changes none of them, and one without this system's archive only the
-    /// version.
-    ///
-    /// # Safety
-    /// Every pointer is the C++'s update::Release's field or std::string, alive until
-    /// it returns.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn mw2_update_look(
-        version: *mut c_void,
-        archive: *mut c_void,
-        sha256: *mut c_void,
-        url: *mut c_void,
-        size: *mut u64,
-        error: *mut c_void,
-    ) -> c_int {
-        let (release, check) = look();
-        if let Some(release) = release {
-            say(version, &release.version);
-            // A matched archive's name is never empty.
-            if !release.archive.is_empty() {
-                say(archive, &release.archive);
-                say(sha256, &release.sha256);
-                say(url, &release.url);
-                unsafe { *size = release.size };
-            }
-        }
-        match check {
-            Ok(check) => check as c_int,
-            Err(text) => {
-                say(error, &text);
-                Check::Failed as c_int
-            }
+/// Looks for a newer release. As the C++ did, a description that could not be had changes
+/// nothing in `release`, and one without this system's archive only the version. The
+/// error is the text a player reads.
+pub fn look_for(release: &mut Release) -> Result<Check, String> {
+    let (found, check) = look();
+    if let Some(found) = found {
+        release.version = found.version;
+        // A matched archive's name is never empty.
+        if !found.archive.is_empty() {
+            release.archive = found.archive;
+            release.sha256 = found.sha256;
+            release.url = found.url;
+            release.size = found.size;
         }
     }
+    check
+}
 
-    /// update::Install: a setup::Result, and `error`, a std::string, set for Failed.
-    ///
-    /// # Safety
-    /// The texts point at their lengths' bytes (none when 0), `progress` at the C++'s
-    /// setup::Progress and `error` at a std::string, all alive until it returns.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn mw2_update_install(
-        version: *const u8,
-        version_length: usize,
-        archive: *const u8,
-        archive_length: usize,
-        sha256: *const u8,
-        sha256_length: usize,
-        url: *const u8,
-        url_length: usize,
-        size: u64,
-        progress: *mut Progress,
-        error: *mut c_void,
-    ) -> c_int {
-        let text = |data, length| unsafe { String::from_utf8_lossy(bytes(data, length)).into_owned() };
-        let release = Release {
-            version: text(version, version_length),
-            archive: text(archive, archive_length),
-            sha256: text(sha256, sha256_length),
-            url: text(url, url_length),
-            size,
-        };
-        let outcome = match super::install(&release, Shown(progress)) {
-            Ok(()) => Outcome::Done,
-            Err(Stop::Cancelled) => Outcome::Cancelled,
-            Err(Stop::Failed(text)) => {
-                say(error, &text);
-                Outcome::Failed
-            }
-        };
-        outcome as c_int
+/// Blocks until the release is in place, or says why not. The caller starts the new
+/// launcher.
+pub fn install_release(release: &Release, progress: &Progress) -> (Outcome, String) {
+    match install(release, Shown(progress)) {
+        Ok(()) => (Outcome::Done, String::new()),
+        Err(Stop::Cancelled) => (Outcome::Cancelled, String::new()),
+        Err(Stop::Failed(text)) => (Outcome::Failed, text),
     }
+}
 
-    /// update::Finish: the version the last update installed, or empty, and `former`.
-    ///
-    /// # Safety
-    /// `version` and `former` point at std::strings alive until it returns.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn mw2_update_finish(version: *mut c_void, former: *mut c_void) {
-        let (installed, service) = finish();
-        say(version, &installed);
-        say(former, &service);
-    }
+/// Removes what the last update left: the version it installed when this is the first
+/// start since, and the online service of the release that installed it ("steam" or
+/// "lan" until v0.7.x, empty since).
+pub fn finish_last() -> (String, String) {
+    finish()
 }

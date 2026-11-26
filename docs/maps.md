@@ -29,7 +29,7 @@ is added (MAPS → ADD MAP, or `mw2-launcher --add-map`), with `launcher/mapport
 ## The tree
 
 `reader.h` reads a zone as the game's loader streams it, by the zone definitions
-(`launcher/zone/defs/` for the 360, `launcher/zone/defs_pc/` for the PC), into a tree of nodes
+(`zone/defs/` for the 360, `zone/defs_pc/` for the PC), into a tree of nodes
 (`tree.h`):
 
 - a `Struct` holds its bytes in its platform's layout; an embedded struct is a view of its

@@ -861,9 +861,16 @@ fn check_compiled(instance: &ash::Instance, physical: vk::PhysicalDevice, scaled
     let device = unsafe { pipeline::device_id(instance, physical) }.into_bytes();
     let fingerprint = unsafe { marker::fingerprint(instance, physical, scaled, &c.game_folder, custom_maps) };
     let mut reason: &'static str = "";
-    let mut current = marker::compiled(&fingerprint, Some(&mut reason));
+    let mut current = marker::compiled(&fingerprint, scaled, Some(&mut reason));
     let mut why = reason.as_bytes().to_vec();
-    let shaders = marker::read_marker().shaders;
+    let shaders = marker::read_marker(scaled).shaders;
+    // The scale's own cache, now that the scale is known; nothing is built with the
+    // shared pipeline's before the title runs. A cache the marker does not describe is
+    // neither read nor written back.
+    if current {
+        pipeline::set_cache_path(Some(mw2_shaders::shader_build::cache_file(scaled).as_bytes()));
+        pipeline::reopen_cache();
+    }
     let cache_loaded = pipeline::cache_loaded();
     c.device = device;
     if current && shaders != 0 && !cache_loaded {

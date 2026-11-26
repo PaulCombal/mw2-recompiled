@@ -893,38 +893,19 @@ pub unsafe fn read_texture(
         unsafe { std::slice::from_raw_parts_mut(reserve(total), total) }
     };
 
-    let bytes_per_block_log2 = log2_ceil(bytes_per_block);
     let packed_level = packed_level_of(fetch);
     for level in 0..=max_level {
         let l = out.levels[level as usize];
         if level == 0 && !read_base {
             continue;
         }
-        // Level 0 is the base; a level in the packed tail is read from the tail at its
-        // own offset.
-        let is_base = level == 0;
-        let stored = if is_base { 0 } else { level.min(packed_level) };
-        let s = stored_level(fetch, &info, is_base, stored);
-        let source = if is_base { base } else { mips.wrapping_add(mip_offset(fetch, &info, stored, packed_level)) };
-        let (ox, oy, oz) = if level >= packed_level { packed_offset(fetch, &info, level) } else { (0, 0, 0) };
+        let place = level_place(fetch, &info, level, packed_level);
+        let range = if place.in_chain { mips } else { base };
         // SAFETY: the level lies inside `into`, laid out above; the guest ranges are
         // the caller's (see the function's contract).
-        unsafe {
-            untile_level(fetch, &l, &s, source, (ox, oy, oz), bytes_per_block, bytes_per_block_log2, out.volume, into)
-        };
+        unsafe { untile_level(&l, &place, range, into) };
     }
-    // The swap is within each block, and a block is a whole number of the units it
-    // swaps -- so one pass over the copy does every block alike. A block smaller than
-    // the unit has always been left as it is.
-    let endian = fetch.endian();
-    let unit = match endian {
-        ENDIAN_NONE => 1,
-        ENDIAN_8IN16 => 2,
-        _ => 4,
-    };
-    if bytes_per_block >= unit {
-        swap_endian(into, endian);
-    }
+    swap_blocks(into, fetch.endian(), bytes_per_block);
     if dxt3a {
         // SAFETY: read_texture's own contract on `reserve`.
         unsafe { expand_dxt3a(&mut out, &blocks, reserve) };
@@ -933,95 +914,210 @@ pub unsafe fn read_texture(
     out
 }
 
-/// One level from `source` into its place in `into`, a row at a time.
-///
-/// # Safety
-/// `source` must be readable as far as the level's layout reaches from it (the
-/// stored level `s`, the packed offset, every layer).
-#[allow(clippy::too_many_arguments)]
-#[inline]
-unsafe fn untile_level(
-    fetch: &TextureFetch,
-    l: &Level,
-    s: &Stored,
-    source: *const u8,
-    (ox, oy, oz): (u32, u32, u32),
+// The swap is within each block, and a block is a whole number of the units it swaps --
+// so one pass over the copy does every block alike. A block smaller than the unit has
+// always been left as it is.
+fn swap_blocks(data: &mut [u8], endian: u32, bytes_per_block: u32) {
+    let unit = match endian {
+        ENDIAN_NONE => 1,
+        ENDIAN_8IN16 => 2,
+        _ => 4,
+    };
+    if bytes_per_block >= unit {
+        swap_endian(data, endian);
+    }
+}
+
+/// Where one level of a texture is read from: the stored level's layout, which range (the
+/// base's, or the chain's from the mip address) and how far into it, and where in its
+/// stored level the level sits (a level packed in a tail is at an offset of its own).
+#[derive(Clone, Copy)]
+struct LevelPlace {
+    s: Stored,
+    in_chain: bool,
+    offset: usize,
+    origin: (u32, u32, u32),
     bytes_per_block: u32,
     bytes_per_block_log2: u32,
+    tiled: bool,
     volume: bool,
-    into: &mut [u8],
-) {
-    let bpb = bytes_per_block as usize;
-    let row_bytes = l.blocks_wide as usize * bpb;
-    let tiled = fetch.tiled();
+}
+
+fn level_place(fetch: &TextureFetch, info: &FormatInfo, level: u32, packed_level: u32) -> LevelPlace {
+    // Level 0 is the base; a level in the packed tail is read from the tail at its own
+    // offset.
+    let is_base = level == 0;
+    let stored = if is_base { 0 } else { level.min(packed_level) };
+    let bytes_per_block = info.bits_per_block / 8;
+    LevelPlace {
+        s: stored_level(fetch, info, is_base, stored),
+        in_chain: !is_base,
+        offset: if is_base { 0 } else { mip_offset(fetch, info, stored, packed_level) },
+        origin: if level >= packed_level { packed_offset(fetch, info, level) } else { (0, 0, 0) },
+        bytes_per_block,
+        bytes_per_block_log2: log2_ceil(bytes_per_block),
+        tiled: fetch.tiled(),
+        volume: fetch.dimension() == DIMENSION_3D,
+    }
+}
+
+/// A box of one level's blocks: columns x0..x1, rows y0..y1, and layers z0..z1 -- array
+/// slices and cube faces, or a volume's slices.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct BlockRect {
+    pub x0: u32,
+    pub x1: u32,
+    pub y0: u32,
+    pub y1: u32,
+    pub z0: u32,
+    pub z1: u32,
+}
+
+/// Every run of the box's blocks that lies side by side in guest memory, in rows:
+/// `visit(layer, row, column, offset, blocks)`, the offset from where the level's range
+/// starts (LevelPlace::offset is in it already).
+#[inline(always)]
+fn walk(p: &LevelPlace, rect: BlockRect, mut visit: impl FnMut(u32, u32, u32, usize, u32)) {
+    let s = &p.s;
+    let bpb = p.bytes_per_block as usize;
+    let (ox, oy, oz) = p.origin;
     // The low three bits of x stay in the address's low bits, so an aligned run of
     // blocks -- eight of them, at most sixteen bytes -- lies side by side in memory,
     // in both tilings: one address and one fixed-size copy a run instead of one a
     // block.
-    let run = if bytes_per_block == 1 { 8 } else { 8u32.min(16 / bytes_per_block).max(1) };
-    let run_bytes = (run * bytes_per_block) as usize;
-    let end = into.len();
-    let to_base = into.as_mut_ptr();
-    for layer in 0..l.layers {
-        for by in 0..l.blocks_high {
-            let row_at = l.offset + (layer as usize * l.blocks_high as usize + by as usize) * row_bytes;
-            assert!(row_at + row_bytes <= end);
+    let run = if p.bytes_per_block == 1 { 8 } else { 8u32.min(16 / p.bytes_per_block).max(1) };
+    for layer in rect.z0..rect.z1 {
+        for by in rect.y0..rect.y1 {
             let sy = by.wrapping_add(oy);
-            if !tiled {
-                let slice = if volume {
+            if !p.tiled {
+                let slice = if p.volume {
                     layer.wrapping_add(oz) as usize * s.row_bytes as usize * s.slice_rows as usize
                 } else {
                     layer as usize * s.slice_stride
                 };
-                let from = source.wrapping_add(slice + sy as usize * s.row_bytes as usize + ox as usize * bpb);
-                // SAFETY: the row is inside `into` (asserted above); the source is the
-                // caller's.
-                unsafe { ptr::copy_nonoverlapping(from, to_base.add(row_at), row_bytes) };
+                let at = slice + sy as usize * s.row_bytes as usize + (ox.wrapping_add(rect.x0)) as usize * bpb;
+                visit(layer, by, rect.x0, p.offset.wrapping_add(at), rect.x1 - rect.x0);
                 continue;
             }
-            let mut bx = 0u32;
-            while bx < l.blocks_wide {
+            let mut bx = rect.x0;
+            while bx < rect.x1 {
                 let sx = bx.wrapping_add(ox);
                 // A volume addresses all three coordinates at once; there is no
                 // per-slice offset to add to a 2D one.
-                let at = if volume {
+                let at = if p.volume {
                     tiled_offset_3d(
                         sx as i32,
                         sy as i32,
                         layer.wrapping_add(oz) as i32,
                         s.pitch_blocks,
                         s.slice_rows,
-                        bytes_per_block_log2,
+                        p.bytes_per_block_log2,
                     ) as usize
                 } else {
                     (layer as usize * s.slice_stride).wrapping_add(tiled_offset_2d(
                         sx as i32,
                         sy as i32,
                         s.pitch_blocks,
-                        bytes_per_block_log2,
+                        p.bytes_per_block_log2,
                     ) as usize)
                 };
-                let from = source.wrapping_add(at);
-                // SAFETY: bx + run <= blocks_wide, or one block, stays in the row.
-                unsafe {
-                    let to = to_base.add(row_at + bx as usize * bpb);
-                    if sx % run == 0 && bx + run <= l.blocks_wide {
-                        if run_bytes == 16 {
-                            ptr::copy_nonoverlapping(from, to, 16);
-                        } else if run_bytes == 8 {
-                            ptr::copy_nonoverlapping(from, to, 8);
-                        } else {
-                            ptr::copy_nonoverlapping(from, to, run_bytes);
-                        }
-                        bx += run;
-                    } else {
-                        ptr::copy_nonoverlapping(from, to, bpb);
-                        bx += 1;
-                    }
-                }
+                let blocks = if sx % run == 0 && bx + run <= rect.x1 { run } else { 1 };
+                visit(layer, by, bx, p.offset.wrapping_add(at), blocks);
+                bx += blocks;
             }
         }
     }
+}
+
+/// A run of `bytes` from `from` to `to`, the common sizes as fixed-size copies.
+///
+/// # Safety
+/// Both readable and writable as far as `bytes`.
+#[inline(always)]
+unsafe fn copy_run(from: *const u8, to: *mut u8, bytes: usize) {
+    // SAFETY: the caller's.
+    unsafe {
+        match bytes {
+            16 => ptr::copy_nonoverlapping(from, to, 16),
+            8 => ptr::copy_nonoverlapping(from, to, 8),
+            4 => ptr::copy_nonoverlapping(from, to, 4),
+            _ => ptr::copy_nonoverlapping(from, to, bytes),
+        }
+    }
+}
+
+/// One level from its range into its place in `into`, a run at a time. `range` is the
+/// host address of the level's range: the base's, or the chain's (the level's offset in
+/// it is the place's).
+///
+/// # Safety
+/// `range` must be readable as far as the level's layout reaches from it (the stored
+/// level, the packed offset, every layer).
+#[inline]
+unsafe fn untile_level(l: &Level, p: &LevelPlace, range: *const u8, into: &mut [u8]) {
+    let bpb = p.bytes_per_block as usize;
+    let row_bytes = l.blocks_wide as usize * bpb;
+    let end = into.len();
+    let to_base = into.as_mut_ptr();
+    let all = BlockRect { x0: 0, x1: l.blocks_wide, y0: 0, y1: l.blocks_high, z0: 0, z1: l.layers };
+    walk(p, all, |layer, by, bx, at, blocks| {
+        let to = l.offset + (layer as usize * l.blocks_high as usize + by as usize) * row_bytes + bx as usize * bpb;
+        let bytes = blocks as usize * bpb;
+        assert!(to + bytes <= end);
+        // SAFETY: inside `into` (asserted); the source is the caller's.
+        unsafe { copy_run(range.wrapping_add(at), to_base.add(to), bytes) };
+    });
+}
+
+/// The bytes a box of one level is read from: `visit(in_chain, offset, bytes)` for each
+/// run, the offset from the start of the base's range or of the chain's. What the texture
+/// cache watches a part of a texture by (texture_parts.rs).
+pub fn region_runs(fetch: &TextureFetch, level: u32, rect: BlockRect, mut visit: impl FnMut(bool, usize, usize)) {
+    let info = texture_format_of(fetch.format());
+    let place = level_place(fetch, &info, level, packed_level_of(fetch));
+    let bpb = place.bytes_per_block as usize;
+    walk(&place, rect, |_, _, _, at, blocks| visit(place.in_chain, at, blocks as usize * bpb));
+}
+
+/// A box of one level, untiled and byte-swapped into `out` as read_texture would give
+/// those blocks: layer by layer, row by row, (x1 - x0) blocks a row. False, with nothing
+/// read, when `out` is not that size or the level's range is not there.
+///
+/// # Safety
+/// As read_texture's: `base` and `mips`, when not null, readable for the bytes extents_of
+/// names; `level` one read_texture reads from them.
+pub unsafe fn read_region(
+    fetch: &TextureFetch,
+    base: *const u8,
+    mips: *const u8,
+    level: u32,
+    rect: BlockRect,
+    out: &mut [u8],
+) -> bool {
+    let info = texture_format_of(fetch.format());
+    let place = level_place(fetch, &info, level, packed_level_of(fetch));
+    let bpb = place.bytes_per_block as usize;
+    let row_bytes = (rect.x1 - rect.x0) as usize * bpb;
+    let rows = (rect.y1 - rect.y0) as usize;
+    if out.len() != row_bytes * rows * (rect.z1 - rect.z0) as usize {
+        return false;
+    }
+    let range = if place.in_chain { mips } else { base };
+    if range.is_null() {
+        return false;
+    }
+    let to_base = out.as_mut_ptr();
+    let end = out.len();
+    walk(&place, rect, |layer, by, bx, at, blocks| {
+        let to = ((layer - rect.z0) as usize * rows + (by - rect.y0) as usize) * row_bytes
+            + (bx - rect.x0) as usize * bpb;
+        let bytes = blocks as usize * bpb;
+        assert!(to + bytes <= end);
+        // SAFETY: inside `out` (asserted); the source is the caller's.
+        unsafe { copy_run(range.wrapping_add(at), to_base.add(to), bytes) };
+    });
+    swap_blocks(out, fetch.endian(), place.bytes_per_block);
+    true
 }
 
 // DXT3A is the alpha block of DXT2/3: sixteen explicit four-bit values, not the two

@@ -1,8 +1,8 @@
 #pragma once
-// The loading rules the launcher carries (CMake embeds defs/ and defs_pc/),
-// read once: the 360 title update's, which the shader pass and the map
-// converter read the game's files by, and the PC game's, which the map
-// converter reads a PC map by.
+// The loading rules the map converter carries (CMake embeds zone/defs/ and
+// zone/defs_pc/), read once: the 360 title update's, which it reads the
+// game's files by, and the PC game's, which it reads a PC map by. (The
+// compile pass reads the 360's with the zone crate, zone/src/.)
 #include "schema.h"
 
 namespace zone

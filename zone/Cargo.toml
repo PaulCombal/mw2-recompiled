@@ -1,0 +1,27 @@
+# The game's fastfiles as its loader streams them (src/): the structures of a zone from
+# defs/iw4_assets.h, how the title streams them from defs/commands.txt and
+# defs/assets/, a walk of every asset of a zone in the loader's order, and the shaders
+# that walk finds, as the renderer will be handed them. The launcher's compile pass
+# lists the game's shaders with it. defs/ and defs_pc/ are GPL 3.0 definitions
+# (NOTICE.md in each); the map converter's C++ (launcher/mapport/, launcher/zone/)
+# reads them too.
+[package]
+name = "mw2-zone"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+doctest = false
+
+[dependencies]
+# The executables' images (install::xex) and the zlib stream's inflate.
+mw2-install = { path = "../install" }
+# The name a shader goes by, the renderer's (shader::hash).
+mw2-shaders = { path = "../shaders" }
+
+# The reader on its own over the files given, to check it against the game's files
+# (zone_shaders.rs). Outside src/, so not in the shader build id.
+[[bin]]
+name = "zone-shaders"
+path = "zone_shaders.rs"

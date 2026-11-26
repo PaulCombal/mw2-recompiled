@@ -188,7 +188,7 @@ pub fn set_launch_data(data: &[u8]) {
 pub fn compile_shaders(device: &CStr, why: &CStr) -> bool {
     let shown = why.to_string_lossy();
     // The launcher names the device it compiled for in the game it starts after a pass
-    // (launcher/main.cpp).
+    // (launcher/src/window.rs).
     if env::text(c"MW2_SHADERS_COMPILED_FOR") == Some(device) {
         show_error(&format!(
             "The shaders the launcher has just compiled do not fit this game: {shown}\n\nThe game starts anyway, and \

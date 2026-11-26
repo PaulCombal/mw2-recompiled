@@ -8,7 +8,7 @@
 
 use crate::env;
 use crate::runtime::kernel;
-use crate::runtime::truetype::{self, Glyph};
+use mw2_truetype::{self as truetype, Glyph};
 use std::sync::{Mutex, MutexGuard};
 
 /// BGRA, opaque. The pixels are only rewritten when `version` is not theirs.

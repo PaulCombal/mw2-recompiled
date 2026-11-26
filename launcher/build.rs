@@ -5,8 +5,13 @@
 // the title, the version, the release tag, the toolchain and the fetched sources are its
 // options there, and the folder also holds the tools. This builds the library and the
 // archives it needs in it, then reads what to link from launcher_core.txt, which CMake
-// writes there: the archives, SDL's system libraries, the compiler's standard ones, the
+// writes there: the archives, their system libraries, the compiler's standard ones, the
 // Vulkan import library on Windows, and the link's options (ThinLTO and its cache).
+//
+// SDL is the game's, which sdl3-sys builds (cmake/sdl.cmake) and rustc links with the
+// system libraries it names: the C++ is compiled with the headers of that build, whose
+// folder this hands CMake as MW2_SDL_DIR, configuring the folder again when it is not
+// the one there.
 //
 // rustc links with clang (.cargo/config.toml) and asks for -nodefaultlibs, so the C++
 // library is named. On Linux the archives and, for a portable build, the static C++
@@ -104,6 +109,23 @@ fn hashes(root: &Path, build: Option<&Path>) {
     }
 }
 
+// The log the compile pass writes (src/precompile.rs), as the C++ wrote it: none in a
+// build whose CMake folder has MW2_LOGGING off, as CMakeLists.txt compiles the game's
+// lines to nothing then (cfg mw2_no_logging).
+fn logging(build: Option<&Path>) {
+    println!("cargo:rustc-check-cfg=cfg(mw2_no_logging)");
+    let Some(build) = build else { return };
+    let cache = fs::read_to_string(build.join("CMakeCache.txt")).unwrap_or_default();
+    let value = cache.lines().find_map(|line| line.strip_prefix("MW2_LOGGING:BOOL=")).unwrap_or("ON");
+    // CMake's false constants, and a name ending in -NOTFOUND.
+    let upper = value.to_ascii_uppercase();
+    if ["OFF", "0", "FALSE", "NO", "N", "IGNORE", "NOTFOUND", ""].contains(&upper.as_str())
+        || upper.ends_with("-NOTFOUND")
+    {
+        println!("cargo:rustc-cfg=mw2_no_logging");
+    }
+}
+
 fn main() {
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).parent().unwrap().to_path_buf();
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -111,6 +133,7 @@ fn main() {
     let portable = env::var_os("CARGO_FEATURE_PORTABLE").is_some();
     let build = rerun_if("MW2_BUILD_DIR").map(PathBuf::from);
     hashes(&root, build.as_deref());
+    logging(build.as_deref());
     // The release this build is, for the self-update (src/update.rs) to compare with the
     // newest: cargo xtask's --release-tag, which the release workflow gives. A build
     // without one does not update.
@@ -129,17 +152,21 @@ fn main() {
 
     // The C++ and what it is made from (the sources ninja's dependencies name, but the
     // fetched libraries' in the build folders). A change anywhere in these runs this
-    // again, and CMake rebuilds what changed. cargo xtask has CMake build these targets
-    // first, so ninja's own dependencies decide there, and a rebuilt archive runs this
-    // again.
+    // again, and ninja's own dependencies decide what CMake rebuilds.
     for path in ["launcher", "runtime", "assets"] {
         watch(&root.join(path));
     }
     for path in ["cmake", "CMakeLists.txt"] {
         watch(&root.join(path));
     }
-    watch(&build.join("CMakeCache.txt"));
-    let mut targets = vec!["launcher_core", "SDL3-static", "zlibstatic"];
+    let cache = build.join("CMakeCache.txt");
+    watch(&cache);
+    let sdl = env::var("DEP_SDL3_OUT_DIR").expect("sdl3-sys named no SDL it built");
+    let configured = fs::read_to_string(&cache).unwrap_or_else(|e| panic!("{}: {e}", cache.display()));
+    if configured.lines().find_map(|line| line.strip_prefix("MW2_SDL_DIR:PATH=")) != Some(sdl.as_str()) {
+        run(Command::new("cmake").arg(format!("-DMW2_SDL_DIR={sdl}")).arg(&build));
+    }
+    let mut targets = vec!["launcher_core", "zlibstatic"];
     if windows {
         targets.push("vulkan_import_library");
     }

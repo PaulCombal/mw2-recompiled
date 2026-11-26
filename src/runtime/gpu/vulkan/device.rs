@@ -94,9 +94,10 @@ impl Vk {
         self.dynamic_commands
     }
 
-    #[cfg_attr(not(feature = "diagnostics"), allow(dead_code, reason = "the report and the diagnostic keys' alone"))]
+    /// Whether the trace records this device's calls: a call made past these tables, on
+    /// another thread, would be missing from it.
     #[inline(always)]
-    fn traced(&self) -> bool {
+    pub fn traced(&self) -> bool {
         cfg!(feature = "diagnostics") && self.trace
     }
 

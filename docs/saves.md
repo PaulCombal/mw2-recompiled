@@ -119,7 +119,7 @@ horizontal margin, vertical margin, then the content notice) is:
 
 ## What the launcher changes
 
-The launcher's PROFILES screen (`launcher/profile.cpp`) edits two of these files
+The launcher's PROFILES screen (`launcher/src/profile.rs`) edits two of these files
 itself, without the title; each is copied to `<name>.backup` before its first
 change.
 
@@ -137,7 +137,7 @@ Stats under a number no profile has are listed as nobody's.
 Where a value is in the buffer is the title's knowledge, in a signed fastfile,
 as are the challenges' tiers and the ranks. `tools/playerdata_layout.py` reads
 all three from a running multiplayer's memory and writes
-`launcher/playerdata_layout.h`, which is committed. From it:
+`launcher/src/playerdata_layout.rs`, which is committed. From it:
 
 | entry | change |
 |---|---|

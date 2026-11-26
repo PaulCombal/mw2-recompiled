@@ -3,23 +3,22 @@
 //
 // It is the launcher's library target, apart from the binary, so that its tests run:
 // the binary has no harness to run them with, as its `main` is the C runtime's
-// (main.rs), and it links only with the C++ a build folder holds. `cargo test -p
+// (main.rs), and it links with the C++ a build folder holds. `cargo test -p
 // mw2-launcher` runs these alone, without the C++.
 #![deny(unsafe_code)]
 
 /// The release this build is ("v0.8.2"), cargo xtask's --release-tag, or empty: a build
-/// nobody released has nothing to compare with and does not update. NUL-terminated for
-/// update.cpp, which hands it out as a C string.
-pub const CURRENT: &str = concat!(env!("MW2_RELEASE_TAG"), "\0");
+/// nobody released has nothing to compare with and does not update.
+pub const CURRENT: &str = env!("MW2_RELEASE_TAG");
 /// Its system, as the release workflow names its archives.
-pub const KIND: &str = if cfg!(windows) { "windows\0" } else { "linux\0" };
+pub const KIND: &str = if cfg!(windows) { "windows" } else { "linux" };
 
 pub fn current() -> &'static str {
-    CURRENT.trim_end_matches('\0')
+    CURRENT
 }
 
 pub fn kind() -> &'static str {
-    KIND.trim_end_matches('\0')
+    KIND
 }
 
 // An archive is mw2-<tag>-<system>, as the workflow names it; until v0.7.x,
@@ -33,8 +32,8 @@ fn archive_end() -> String {
 /// Where a player looks for a release by hand.
 pub const PAGE: &str = "https://github.com/PaulCombal/mw2-recompiled/releases";
 
-/// A release a look found: update.h's update::Release.
-#[derive(Default, Debug, PartialEq)]
+/// A release a look found.
+#[derive(Clone, Default, Debug, PartialEq)]
 pub struct Release {
     pub version: String,
     pub archive: String,
@@ -43,7 +42,7 @@ pub struct Release {
     pub size: u64,
 }
 
-/// update::Check, by its place in update.h's enum.
+/// What a look found.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Check {
     Newer,

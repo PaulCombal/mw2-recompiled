@@ -55,7 +55,7 @@ const ROOM: u32 = 64; // the info strings the table holds
 const BUFFER_SIZE: u32 = 0x18000; // UI_LoadArenas' own, ARENA_BUFFER_SIZE
 const MENU_ASSET: u32 = 24;
 
-// menuDef_t and itemDef_s, as the 360 lays them out (launcher/zone/defs/iw4_assets.h).
+// menuDef_t and itemDef_s, as the 360 lays them out (zone/defs/iw4_assets.h).
 const MENU_ITEM_COUNT: u32 = 184;
 const MENU_ITEMS: u32 = 296;
 const ITEM_SIZE: u32 = 460;

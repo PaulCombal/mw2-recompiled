@@ -22,3 +22,16 @@ mod translator_flow;
 pub mod ucode;
 
 pub use translator::{Translation, TranslationMeta, describe_parts, translate};
+
+/// The name a shader goes by: FNV-1a 64 over its microcode dwords, as the command
+/// stream loads them. The game names what it draws with by it, and the launcher's
+/// compile pass what it compiles (mw2-zone), so the two find the same shader.
+#[inline]
+pub fn hash(code: &[u32]) -> u64 {
+    let mut hash: u64 = 1469598103934665603;
+    for &word in code {
+        hash ^= u64::from(word);
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    hash
+}

@@ -503,9 +503,9 @@ pub mod run {
     }
 
     /// A player's start: the pipeline cache the launcher compiled into, and what it says
-    /// it compiled, read from the game folder.
+    /// it compiled, read from the game folder once the renderer has settled the scale,
+    /// which picks the file.
     pub fn use_compiled_shaders(game_folder: &Path) {
-        mw2_shaders::pipeline::set_cache_path(Some(mw2_shaders::shader_build::CACHE_FILE.as_bytes()));
         crate::runtime::gpu::vulkan::renderer::check_compiled_shaders(game_folder);
     }
 

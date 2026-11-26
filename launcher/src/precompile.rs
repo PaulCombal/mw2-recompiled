@@ -1,37 +1,52 @@
-// Every shader of the game compiled before the game first runs (launcher/precompile.h says
-// why): the marker checked, and unless it fits, every shader of game/ read out by the
-// launcher's zone reader and built as the game builds it, into the pipeline cache the
-// game starts with.
+// Every shader of the game compiled before the game first runs.
 //
-// The window and the terminal mode run it through precompile::Run (precompile.cpp), on
-// a thread of their own; this calls back there for the game's shaders, the settings,
-// the threads it works on, and to report its progress and its result. The texts a
-// player reads are the same as the C++ pass's were, word for word.
+// On the console a shader is ready the moment the title loads it. Here each has to be
+// translated and compiled for the host's GPU, and one the game meets first in play is
+// compiled there and then -- on a cold driver cache, tens of milliseconds of a frame
+// each, hundreds in a level. The shaders are all in the game's files, so the launcher
+// reads them out (the mw2-zone crate, zone/), builds each the way the game would (the shaders crate,
+// shaders/src/shader_build.rs) into the pipeline cache the game starts with, and the
+// game finds every one there.
+//
+// It is not optional: the launcher runs it after an install and whenever the marker it
+// leaves (shaders/src/marker.rs) no longer fits -- another version, driver, graphics
+// card, resolution or game file -- before it starts the game, and a game started on its
+// own starts the launcher for it.
+//
+// The window and the terminal mode run it on a thread of their own (window.rs,
+// terminal.rs), and it reports its progress to the Progress they draw or print. The
+// texts a player reads are the same as the C++ pass's were, word for word.
 
+use crate::{cnum, settings};
 use ash::vk;
 use mw2_shaders::{files, marker, pipeline, shader_build};
+use mw2_zone as zone;
+use mw2_zone::vertex_binding::BindTables;
 use std::collections::BTreeMap;
-use std::ffi::{CStr, CString, c_char, c_int, c_long, c_void};
+use std::ffi::{CStr, CString, c_char};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::Instant;
 
 const GAME_FOLDER: &str = "game";
 
-// precompile::Progress and precompile::Result, which the C++ owns.
-#[repr(C)]
+/// How the pass is going, for the window to draw and the terminal mode to print.
+#[derive(Default)]
 pub struct Progress {
-    _opaque: [u8; 0],
-}
-#[repr(C)]
-pub struct Outcome {
-    _opaque: [u8; 0],
+    pub cancel: AtomicBool,
+    /// The marker has been looked at: reading or compiling now.
+    pub checked: AtomicBool,
+    /// What no longer fits; set before `checked`.
+    pub why: Mutex<Vec<u8>>,
+    pub files: AtomicU32,
+    pub files_read: AtomicU32,
+    pub shaders: AtomicU32,
+    pub compiled: AtomicU32,
 }
 
-// Which of Progress's counters (precompile.cpp's Count).
-#[repr(u32)]
+// Which of Progress's counters.
 #[derive(Clone, Copy)]
 enum Count {
     Files,
@@ -40,185 +55,112 @@ enum Count {
     Compiled,
 }
 
-#[repr(C)]
-struct Text {
-    data: *const c_char,
-    length: usize,
-}
-
-impl Text {
-    fn of(bytes: &[u8]) -> Text {
-        Text { data: bytes.as_ptr().cast(), length: bytes.len() }
-    }
-}
-
-// precompile.cpp's Summary: precompile::Result but its reasons.
-#[repr(C)]
-struct Summary {
-    ok: bool,
-    cancelled: bool,
-    current: bool,
-    no_libraries: bool,
-    shaders: u32,
-    untranslated: u32,
-    refused: u32,
-    from_cache: u32,
-    read_seconds: f64,
-    compile_seconds: f64,
-    cache_bytes: u64,
-    error: Text,
-    why: Text,
-    device: Text,
-    device_id: Text,
-}
-
-type ShaderSink = extern "C" fn(context: *mut c_void, pixel: bool, hash: u64, code: *const u32, count: usize);
-type TextSink = extern "C" fn(context: *mut c_void, text: *const c_char, length: usize);
-
 unsafe extern "C" {
-    fn mw2l_scale() -> c_int;
-    fn mw2l_shadow_scale() -> c_int;
-    fn mw2l_custom_maps() -> bool;
-    fn mw2l_max_scale() -> c_int;
-    fn mw2l_max_shadow_scale() -> c_int;
-    fn mw2l_bind_tables_size() -> usize;
-    fn mw2l_executable_shaders(
-        path: *const c_char,
-        length: usize,
-        multiplayer: bool,
-        tables: *mut c_void,
-        sink: ShaderSink,
-        context: *mut c_void,
-        error: TextSink,
-        error_context: *mut c_void,
-    ) -> bool;
-    fn mw2l_fastfile_shaders(
-        path: *const c_char,
-        length: usize,
-        tables: *const c_void,
-        sink: ShaderSink,
-        context: *mut c_void,
-        error: TextSink,
-        error_context: *mut c_void,
-    ) -> bool;
-    fn mw2l_cores() -> u32;
-    fn mw2l_threads(count: u32, work: extern "C" fn(*mut c_void), context: *mut c_void) -> bool;
-    fn mw2l_log(line: *const c_char);
-    fn mw2l_progress_cancelled(progress: *mut Progress) -> bool;
-    fn mw2l_progress_cancel(progress: *mut Progress);
-    fn mw2l_progress_set(progress: *mut Progress, which: Count, value: u32);
-    fn mw2l_progress_add(progress: *mut Progress, which: Count);
-    fn mw2l_progress_checked(progress: *mut Progress, why: *const c_char, length: usize) -> bool;
-    fn mw2l_result(result: *mut Outcome, summary: *const Summary) -> bool;
-    fn mw2l_result_reason(result: *mut Outcome, text: *const c_char, length: usize, count: u32) -> bool;
-
     fn getenv(name: *const c_char) -> *const c_char;
-    fn strtol(text: *const c_char, end: *mut *mut c_char, base: c_int) -> c_long;
 }
 
-/// The shaders crate's log (mw2_shaders::set_log), written as the launcher's C++ writes
-/// its lines: with MW2_LOG_TIME's stamp, to the C library's stderr.
+/// The shaders crate's log (mw2_shaders::set_log), written as the launcher's C++ wrote
+/// its lines (runtime/log.h): with MW2_LOG_TIME's stamp, to stderr, and not at all in a
+/// build whose CMake folder has MW2_LOGGING off (build.rs).
 pub fn log(line: &[u8]) {
-    // As printf's %s, a NUL in a device's name ends no line.
-    let mut text: Vec<u8> = line.iter().copied().filter(|&byte| byte != 0).collect();
-    text.push(0);
-    // SAFETY: a C string.
-    unsafe { mw2l_log(text.as_ptr().cast()) };
+    #[cfg(not(mw2_no_logging))]
+    {
+        use std::io::Write;
+        let mut text = stamp().into_bytes();
+        // As the C++ wrote it, a NUL in a device's name ends no line.
+        text.extend(line.iter().copied().filter(|&byte| byte != 0));
+        text.push(b'\n');
+        let _ = std::io::stderr().lock().write_all(&text);
+    }
+    #[cfg(mw2_no_logging)]
+    let _ = line;
 }
 
-// The C++ pass's handle on the window's progress.
-#[derive(Clone, Copy)]
-struct Shown(*mut Progress);
-// SAFETY: every call on it is precompile.cpp's, on its atomics.
-unsafe impl Send for Shown {}
-unsafe impl Sync for Shown {}
+/// MW2_LOG_TIME (set, and not "0") starts every line with the seconds since the first
+/// stamped one, "%9.3f ".
+#[cfg(not(mw2_no_logging))]
+fn stamp() -> String {
+    use std::sync::{LazyLock, OnceLock};
+    static ON: LazyLock<bool> = LazyLock::new(|| variable(c"MW2_LOG_TIME").is_some_and(|value| value != c"0"));
+    static START: OnceLock<Instant> = OnceLock::new();
+    if !*ON {
+        return String::new();
+    }
+    format!("{:9.3} ", START.get_or_init(Instant::now).elapsed().as_secs_f64())
+}
 
-impl Shown {
+// The pass's handle on the progress.
+#[derive(Clone, Copy)]
+struct Shown<'a>(&'a Progress);
+
+impl<'a> Shown<'a> {
     fn cancelled(self) -> bool {
-        // SAFETY: the Progress precompile::Run was handed, alive across the pass.
-        unsafe { mw2l_progress_cancelled(self.0) }
+        self.0.cancel.load(Ordering::SeqCst)
     }
     fn cancel(self) {
-        unsafe { mw2l_progress_cancel(self.0) }
+        self.0.cancel.store(true, Ordering::SeqCst);
+    }
+    fn counter(self, which: Count) -> &'a AtomicU32 {
+        match which {
+            Count::Files => &self.0.files,
+            Count::FilesRead => &self.0.files_read,
+            Count::Shaders => &self.0.shaders,
+            Count::Compiled => &self.0.compiled,
+        }
     }
     fn set(self, which: Count, value: u32) {
-        unsafe { mw2l_progress_set(self.0, which, value) }
+        self.counter(which).store(value, Ordering::SeqCst);
     }
     fn add(self, which: Count) {
-        unsafe { mw2l_progress_add(self.0, which) }
+        self.counter(which).fetch_add(1, Ordering::SeqCst);
     }
-    fn checked(self, why: &[u8]) -> Option<()> {
-        unsafe { mw2l_progress_checked(self.0, why.as_ptr().cast(), why.len()) }.then_some(())
+    // What no longer fits, then that the marker has been looked at.
+    fn checked(self, why: &[u8]) {
+        *self.0.why.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = why.to_vec();
+        self.0.checked.store(true, Ordering::SeqCst);
     }
 }
 
-// precompile::Result as the pass makes it.
-#[derive(Default)]
-struct Result {
-    ok: bool,
-    cancelled: bool,
-    current: bool,
-    error: Vec<u8>,
-    why: Vec<u8>,
-    device: Vec<u8>,
-    device_id: Vec<u8>,
-    no_libraries: bool,
-    shaders: u32,
-    untranslated: u32,
-    reasons: BTreeMap<Vec<u8>, u32>,
-    refused: u32,
-    from_cache: u32,
-    read_seconds: f64,
-    compile_seconds: f64,
-    cache_bytes: u64,
+/// What a pass came to.
+#[derive(Clone, Default)]
+pub struct Pass {
+    pub ok: bool,
+    pub cancelled: bool,
+    /// Nothing to do: the marker fits.
+    pub current: bool,
+    /// Why not, when not.
+    pub error: Vec<u8>,
+    /// Why it ran: what no longer fit.
+    pub why: Vec<u8>,
+    /// The GPU it compiled for, by name, and by its id (shaders/src/pipeline.rs, device_id).
+    pub device: Vec<u8>,
+    pub device_id: Vec<u8>,
+    /// The device compiles shaders only with a draw's state: none could be.
+    pub no_libraries: bool,
+    /// Distinct shaders in the game.
+    pub shaders: u32,
+    /// The translator cannot make (the game cannot draw them either), and why, how many.
+    pub untranslated: u32,
+    pub reasons: BTreeMap<Vec<u8>, u32>,
+    /// Translated, and the driver would not compile.
+    pub refused: u32,
+    /// Already in the cache of an earlier pass for the same build and device.
+    pub from_cache: u32,
+    pub read_seconds: f64,
+    pub compile_seconds: f64,
+    pub cache_bytes: u64,
 }
 
-/// precompile::Run's work: `device` the device_id the game draws on, or empty.
-///
-/// A call into the C++ that fails here (None below) holds an exception the C++ pass
-/// would have let out of precompile::Run at that point: the pass returns at once, as
-/// its unwinding would have, and Run throws it.
-///
-/// # Safety
-/// `device` points at `length` bytes, `progress` and `result` at the C++'s Progress and
-/// Result, all alive until it returns.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn mw2_precompile_run(
-    device: *const u8,
-    length: usize,
-    always: bool,
-    progress: *mut Progress,
-    result: *mut Outcome,
-) {
-    let asked = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(device, length) } };
-    let Some(r) = run(asked, always, Shown(progress)) else { return };
-    let summary = Summary {
-        ok: r.ok,
-        cancelled: r.cancelled,
-        current: r.current,
-        no_libraries: r.no_libraries,
-        shaders: r.shaders,
-        untranslated: r.untranslated,
-        refused: r.refused,
-        from_cache: r.from_cache,
-        read_seconds: r.read_seconds,
-        compile_seconds: r.compile_seconds,
-        cache_bytes: r.cache_bytes,
-        error: Text::of(&r.error),
-        why: Text::of(&r.why),
-        device: Text::of(&r.device),
-        device_id: Text::of(&r.device_id),
-    };
-    // SAFETY: the caller's Result; the texts live across the calls.
-    unsafe {
-        if !mw2l_result(result, &summary) {
-            return;
-        }
-        for (text, &count) in &r.reasons {
-            if !mw2l_result_reason(result, text.as_ptr().cast(), text.len(), count) {
-                return;
-            }
-        }
+/// Brings the compiled shaders up to date: checks the marker and, unless it fits (or
+/// `always`), reads game/ and builds every shader in it, on every core. `device` (a
+/// device_id) is the one the game draws on when it named one; else the one the marker
+/// names, if the machine still has it; else the one the game's window would pick. Blocks
+/// until done. Run from the folder the launcher is in.
+pub fn compile(device: &[u8], always: bool, progress: &Progress) -> Pass {
+    match run(device, always, Shown(progress)) {
+        Ok(pass) => pass,
+        // The threads it works on could not be started.
+        Err(what) => Pass { error: what, ..Pass::default() },
     }
 }
 
@@ -230,34 +172,30 @@ fn variable(name: &CStr) -> Option<&'static CStr> {
 }
 
 // MW2_SCALE as the game takes it: from its environment first, which a game that starts
-// the launcher passes on, then from .env -- strtol's number (a long: 32 bits on
-// Windows), clamped to 1..=the most.
-fn asked_scale(name: &CStr, setting: unsafe extern "C" fn() -> c_int, most: unsafe extern "C" fn() -> c_int) -> u32 {
-    // SAFETY: a C string; the settings main loaded.
-    unsafe {
-        match variable(name) {
-            Some(set) => strtol(set.as_ptr(), std::ptr::null_mut(), 10).clamp(1, most() as c_long) as u32,
-            None => setting() as u32,
-        }
+// the launcher passes on, then from .env (the settings main loaded) -- strtol's number
+// (a long: 32 bits on Windows), clamped to 1..=the most.
+fn asked_scale(name: &CStr, setting: fn() -> i32, most: i32) -> u32 {
+    match variable(name) {
+        Some(set) => cnum::strtol(set.to_bytes(), 10).0.clamp(1, i64::from(most)) as u32,
+        None => setting() as u32,
     }
 }
 
 fn asked_custom_maps() -> bool {
     match variable(c"MW2_CUSTOM_MAPS") {
         Some(set) => !set.is_empty() && set != c"0",
-        None => unsafe { mw2l_custom_maps() },
+        None => settings::custom_maps(),
     }
 }
 
-// The launcher's setting goes as far as the crate's scale: precompile.cpp holds
-// settings::kMaxShadowScale to the same 4.
-const _: () = assert!(shader_build::MAX_SHADOW_SCALE == 4);
+// The launcher's setting goes as far as the crate's scale.
+const _: () = assert!(shader_build::MAX_SHADOW_SCALE as i32 == settings::MAX_SHADOW_SCALE);
 
 // Whether the game draws anything larger than the title's sizes on this device, which
 // is what its shaders depend on.
 fn scaled(instance: &ash::Instance, physical: vk::PhysicalDevice) -> bool {
-    let scale = asked_scale(c"MW2_SCALE", mw2l_scale, mw2l_max_scale);
-    let shadow = asked_scale(c"MW2_SHADOW_SCALE", mw2l_shadow_scale, mw2l_max_shadow_scale);
+    let scale = asked_scale(c"MW2_SCALE", settings::scale, settings::MAX_SCALE);
+    let shadow = asked_scale(c"MW2_SHADOW_SCALE", settings::shadow_scale, settings::MAX_SHADOW_SCALE);
     // SAFETY: a physical device of `instance`.
     unsafe {
         shader_build::shadow_scale(instance, physical, shadow, shader_build::scale(instance, physical, scale)) > 1
@@ -286,6 +224,8 @@ fn name(path: &Path) -> Vec<u8> {
 struct Target {
     device: Vec<u8>,
     fingerprint: Vec<u8>,
+    /// Which of the two caches and markers: shader_build::cache_file's.
+    scaled: bool,
 }
 
 fn find_target(asked: &[u8], error: &mut Vec<u8>) -> Option<Target> {
@@ -306,7 +246,7 @@ fn find_target(asked: &[u8], error: &mut Vec<u8>) -> Option<Target> {
     let instance = unsafe { pipeline::instance_table(handle) };
     // The device the game named; else the one the last pass was for, which a game
     // drawing elsewhere than the window's own choice named then.
-    let id = if asked.is_empty() { marker::read_marker().device } else { asked.to_vec() };
+    let id = if asked.is_empty() { marker::last_device() } else { asked.to_vec() };
     // SAFETY: the live instance.
     let mut physical = if id.is_empty() { None } else { unsafe { pipeline::choose_device(&instance, &id, None) } };
     if physical.is_none() && !asked.is_empty() {
@@ -316,19 +256,17 @@ fn find_target(asked: &[u8], error: &mut Vec<u8>) -> Option<Target> {
         physical = unsafe { pipeline::choose_device(&instance, b"", None) };
     }
     let target = match physical {
-        Some(physical) => Some(Target {
-            // SAFETY: a physical device of the live instance.
-            device: unsafe { pipeline::device_id(&instance, physical) }.into_bytes(),
-            fingerprint: unsafe {
-                marker::fingerprint(
-                    &instance,
-                    physical,
-                    scaled(&instance, physical),
-                    Path::new(GAME_FOLDER),
-                    asked_custom_maps(),
-                )
-            },
-        }),
+        Some(physical) => {
+            let scaled = scaled(&instance, physical);
+            Some(Target {
+                // SAFETY: a physical device of the live instance.
+                device: unsafe { pipeline::device_id(&instance, physical) }.into_bytes(),
+                fingerprint: unsafe {
+                    marker::fingerprint(&instance, physical, scaled, Path::new(GAME_FOLDER), asked_custom_maps())
+                },
+                scaled,
+            })
+        }
         None => {
             if error.is_empty() {
                 *error = b"no graphics card here can draw the game".to_vec();
@@ -348,82 +286,41 @@ struct Shader {
 }
 
 type Shaders = BTreeMap<(bool, u64), Shader>;
-// A file's shaders as the zone reader hands them: pixel, name, code.
-type Found = Vec<(bool, u64, Vec<u32>)>;
-
-extern "C" fn into_list(context: *mut c_void, pixel: bool, hash: u64, code: *const u32, count: usize) {
-    // SAFETY: the list the caller handed as `context`, and `count` words.
-    let list = unsafe { &mut *context.cast::<Found>() };
-    let code = if count == 0 { Vec::new() } else { unsafe { std::slice::from_raw_parts(code, count) }.to_vec() };
-    list.push((pixel, hash, code));
-}
-
-extern "C" fn into_text(context: *mut c_void, text: *const c_char, length: usize) {
-    // SAFETY: the text the caller handed as `context`, and `length` bytes.
-    let into = unsafe { &mut *context.cast::<Vec<u8>>() };
-    if length != 0 {
-        into.extend_from_slice(unsafe { std::slice::from_raw_parts(text.cast::<u8>(), length) });
-    }
-}
-
 // try_emplace: the first of a name stays.
-fn keep(all: &mut Shaders, found: Found) {
-    for (pixel, hash, code) in found {
-        all.entry((pixel, hash)).or_insert(Shader { pixel, code });
+fn keep(all: &mut Shaders, found: Vec<zone::shaders::Shader>) {
+    for shader in found {
+        all.entry((shader.pixel, shader.hash)).or_insert(Shader { pixel: shader.pixel, code: shader.code });
     }
 }
 
 // An executable's shaders and the tables it binds vertex shaders with.
-fn executable_shaders(path: &Path, multiplayer: bool, tables: &mut [u8]) -> std::result::Result<Found, Vec<u8>> {
-    let text = utf8(path);
-    let mut found = Vec::new();
-    let mut error = Vec::new();
-    // SAFETY: the path's bytes, `tables` of mw2l_bind_tables_size bytes, and the sinks'
-    // contexts on this stack.
-    let ok = unsafe {
-        mw2l_executable_shaders(
-            text.as_ptr().cast(),
-            text.len(),
-            multiplayer,
-            tables.as_mut_ptr().cast(),
-            into_list,
-            (&raw mut found).cast(),
-            into_text,
-            (&raw mut error).cast(),
-        )
-    };
-    if ok { Ok(found) } else { Err(error) }
+fn executable_shaders(path: &Path, multiplayer: bool) -> zone::Result<(Vec<zone::shaders::Shader>, BindTables)> {
+    let name = zone::fastfile::name(path);
+    let xex = fs::read(path).map_err(|_| zone::Error::new(format!("cannot open {name}")))?;
+    let image = mw2_install::xex::image(&xex).map_err(|error| zone::Error::new(format!("{name}: {error}")))?;
+    let tables = BindTables::read(&image, multiplayer)?;
+    Ok((zone::shaders::executable_shaders(&image, multiplayer, &tables)?, tables))
 }
 
-fn fastfile_shaders(path: &Path, tables: &[u8]) -> std::result::Result<Found, Vec<u8>> {
-    let text = utf8(path);
-    let mut found = Vec::new();
-    let mut error = Vec::new();
-    // SAFETY: as executable_shaders.
-    let ok = unsafe {
-        mw2l_fastfile_shaders(
-            text.as_ptr().cast(),
-            text.len(),
-            tables.as_ptr().cast(),
-            into_list,
-            (&raw mut found).cast(),
-            into_text,
-            (&raw mut error).cast(),
-        )
-    };
-    if ok { Ok(found) } else { Err(error) }
+fn fastfile_shaders(path: &Path, tables: &BindTables) -> zone::Result<Vec<zone::shaders::Shader>> {
+    Ok(zone::shaders::shaders(&zone::fastfile::read(path)?, tables)?.0)
 }
 
-// `work` on `count` of the C++ library's threads, as the C++ pass started its own;
-// None when they could not be started.
-fn on_threads<F: Fn() + Sync>(count: u32, work: &F) -> Option<()> {
-    extern "C" fn trampoline<F: Fn() + Sync>(context: *mut c_void) {
-        // SAFETY: the closure on_threads lends, alive until every thread is joined.
-        let work = unsafe { &*context.cast::<F>() };
-        work();
-    }
-    // SAFETY: the closure outlives the call, which joins every thread it starts.
-    unsafe { mw2l_threads(count, trampoline::<F>, (work as *const F).cast_mut().cast()) }.then_some(())
+// `work` on `count` threads of the launcher's (spawn::thread_builder), until each
+// returns; why, when one could not be started, the pass then stopped (`progress`
+// cancelled) so the ones that were started end at their next shader or file.
+fn on_threads<F: Fn() + Sync>(count: u32, progress: Shown<'_>, work: &F) -> std::result::Result<(), Vec<u8>> {
+    std::thread::scope(|scope| {
+        let mut failed = Ok(());
+        for _ in 0..count {
+            if let Err(error) = crate::spawn::thread_builder().spawn_scoped(scope, work) {
+                failed = Err(error.to_string().into_bytes());
+                progress.cancel();
+                break;
+            }
+        }
+        failed
+    })
 }
 
 // Shuts the device down on every return past its initialise, as the C++ pass's Down.
@@ -439,41 +336,49 @@ impl Drop for Down {
     }
 }
 
-fn run(asked: &[u8], always: bool, progress: Shown) -> Option<Result> {
-    let mut result = Result::default();
+fn run(asked: &[u8], always: bool, progress: Shown<'_>) -> std::result::Result<Pass, Vec<u8>> {
+    let mut result = Pass::default();
     let mut error = Vec::new();
     let Some(target) = find_target(asked, &mut error) else {
         result.error = error;
-        return Some(result);
+        return Ok(result);
     };
     result.device_id = target.device.clone();
     let mut why: &'static str = "";
-    if marker::compiled(&target.fingerprint, Some(&mut why)) && !always {
+    let scaled = target.scaled;
+    let cache_file = shader_build::cache_file(scaled);
+    if marker::compiled(&target.fingerprint, scaled, Some(&mut why)) && !always {
         result.ok = true;
         result.current = true;
-        result.shaders = marker::read_marker().shaders;
-        return Some(result);
+        result.shaders = marker::read_marker(scaled).shaders;
+        return Ok(result);
     }
     result.why = why.as_bytes().to_vec();
     if always {
         result.why = b"Asked for.".to_vec();
     }
-    progress.checked(&result.why)?;
+    progress.checked(&result.why);
 
     // A pass that does not finish leaves no marker. The cache of the last one stays for
     // this one to start from, when it was for the same code on the same device and
     // driver at the same scale: only the shaders of files that changed are compiled
     // then. Anything else in it is of no use, and would only grow the file.
-    let before = marker::read_marker();
-    marker::remove_marker();
+    let before = marker::read_marker(scaled);
+    marker::remove_marker(scaled);
     if !before.found || !marker::same_target(&before.fingerprint, &target.fingerprint) {
         // std::filesystem::remove, its error ignored.
-        files::remove_file(&CString::new(shader_build::CACHE_FILE).unwrap());
+        files::remove_file(&CString::new(cache_file).unwrap());
+    }
+    // The other scale's stays for a player who goes back to it, while it is for the same
+    // code, device and driver; else it is only room taken.
+    let other = marker::read_marker(!scaled);
+    if !other.found || !marker::same_device(&other.fingerprint, &target.fingerprint) {
+        marker::remove_marker(!scaled);
+        files::remove_file(&CString::new(shader_build::cache_file(!scaled)).unwrap());
     }
 
-    // SAFETY: the C++ library's count.
-    let cores = unsafe { mw2l_cores() }.max(1);
-    let cancelled = |result: &mut Result| {
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
+    let cancelled = |result: &mut Pass| {
         if !progress.cancelled() {
             return false;
         }
@@ -485,15 +390,15 @@ fn run(asked: &[u8], always: bool, progress: Shown) -> Option<Result> {
     // ---- the device the game draws on, with its pipeline cache -------------------
     // First, so a device that cannot compile a shader on its own is known before the
     // game's files are read for nothing.
-    if let Some(folder) = Path::new(shader_build::CACHE_FILE).parent() {
+    if let Some(folder) = Path::new(cache_file).parent() {
         let _ = fs::create_dir_all(folder);
     }
-    pipeline::set_cache_path(Some(shader_build::CACHE_FILE.as_bytes()));
+    pipeline::set_cache_path(Some(cache_file.as_bytes()));
     pipeline::set_device(&target.device);
     // SAFETY: a headless device of its own.
     if !unsafe { pipeline::initialise(None) } {
         result.error = b"The graphics card could not be started to compile the shaders on.".to_vec();
-        return Some(result);
+        return Ok(result);
     }
     result.device = pipeline::device_name().into_bytes();
     let physical = pipeline::physical_device();
@@ -504,12 +409,12 @@ fn run(asked: &[u8], always: bool, progress: Shown) -> Option<Result> {
         // SAFETY: nothing is made with the device yet.
         unsafe { pipeline::shutdown() };
         result.no_libraries = true;
-        if let Err(message) = marker::write_marker(&target.fingerprint, 0) {
+        if let Err(message) = marker::write_marker(&target.fingerprint, scaled, 0) {
             result.error = message;
-            return Some(result);
+            return Ok(result);
         }
         result.ok = true;
-        return Some(result);
+        return Ok(result);
     }
     // From here every return leaves the device to the next pass's initialise.
     let mut down = Down { on: true };
@@ -525,33 +430,32 @@ fn run(asked: &[u8], always: bool, progress: Shown) -> Option<Result> {
     let mut all = Shaders::new();
     // The two executables: the shaders they carry, and the tables vertex shaders are
     // bound with, which must agree.
-    // SAFETY: the C++ library's size.
-    let size = unsafe { mw2l_bind_tables_size() };
-    let mut tables = vec![0u8; size];
-    let mut first = true;
+    let mut tables: Option<BindTables> = None;
     for multiplayer in [false, true] {
         let path = Path::new(GAME_FOLDER).join(if multiplayer { "default_mp.xex" } else { "default.xex" });
-        let mut read = vec![0u8; size];
-        match executable_shaders(&path, multiplayer, &mut read) {
-            Ok(found) => keep(&mut all, found),
-            Err(message) => {
-                result.error = message;
-                return Some(result);
+        let read = match executable_shaders(&path, multiplayer) {
+            Ok((found, read)) => {
+                keep(&mut all, found);
+                read
             }
-        }
-        if !first && tables != read {
+            Err(message) => {
+                result.error = message.0.into_bytes();
+                return Ok(result);
+            }
+        };
+        if tables.as_ref().is_some_and(|tables| *tables != read) {
             result.error = b"the two executables bind vertex shaders with different tables".to_vec();
-            return Some(result);
+            return Ok(result);
         }
-        tables = read;
-        first = false;
+        tables = Some(read);
         progress.add(Count::FilesRead);
     }
+    let Some(tables) = tables else { return Ok(result) };
     let failure: Mutex<Vec<u8>> = Mutex::new(Vec::new());
     {
         let next = AtomicUsize::new(0);
         let shared = Mutex::new(&mut all);
-        on_threads(cores.min(4), &|| {
+        on_threads(cores.min(4), progress, &|| {
             while !progress.cancelled() {
                 let i = next.fetch_add(1, Ordering::SeqCst);
                 if i >= files.len() {
@@ -567,7 +471,7 @@ fn run(asked: &[u8], always: bool, progress: Shown) -> Option<Result> {
                         if failure.is_empty() {
                             *failure = name(&files[i]);
                             failure.extend_from_slice(b": ");
-                            failure.extend_from_slice(&message);
+                            failure.extend_from_slice(message.0.as_bytes());
                         }
                         progress.cancel();
                     }
@@ -581,10 +485,10 @@ fn run(asked: &[u8], always: bool, progress: Shown) -> Option<Result> {
     if !failure.is_empty() {
         result.error = b"A file of the game could not be read, so its shaders cannot be compiled: ".to_vec();
         result.error.extend_from_slice(&failure);
-        return Some(result);
+        return Ok(result);
     }
     if cancelled(&mut result) {
-        return Some(result);
+        return Ok(result);
     }
     result.shaders = all.len() as u32;
     progress.set(Count::Shaders, result.shaders);
@@ -592,7 +496,6 @@ fn run(asked: &[u8], always: bool, progress: Shown) -> Option<Result> {
     // SAFETY: the instance and physical device of the live pipeline.
     let instance = unsafe { pipeline::instance_table(pipeline::instance()) };
     let depth = unsafe { shader_build::depth_format(&instance, physical) };
-    let scaled = scaled(&instance, physical);
 
     // ---- each built as the game builds it, on every core -------------------------
     let compile_from = Instant::now();
@@ -600,7 +503,7 @@ fn run(asked: &[u8], always: bool, progress: Shown) -> Option<Result> {
     let next = AtomicUsize::new(0);
     let (untranslated, refused, from_cache) = (AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0));
     let reasons: Mutex<BTreeMap<Vec<u8>, u32>> = Mutex::new(BTreeMap::new());
-    on_threads(cores, &|| {
+    on_threads(cores, progress, &|| {
         while !progress.cancelled() {
             let i = next.fetch_add(1, Ordering::SeqCst);
             if i >= work.len() {
@@ -632,22 +535,21 @@ fn run(asked: &[u8], always: bool, progress: Shown) -> Option<Result> {
     // SAFETY: every shader built is destroyed.
     unsafe { pipeline::shutdown() };
     if cancelled(&mut result) {
-        return Some(result);
+        return Ok(result);
     }
     // std::filesystem::file_size: a regular file's size, else an error, and -1.
-    match fs::metadata(shader_build::CACHE_FILE) {
+    match fs::metadata(cache_file) {
         Ok(metadata) if metadata.is_file() => result.cache_bytes = metadata.len(),
         _ => {
             result.cache_bytes = u64::MAX;
-            result.error =
-                format!("The compiled shaders could not be written to {}.", shader_build::CACHE_FILE).into_bytes();
-            return Some(result);
+            result.error = format!("The compiled shaders could not be written to {cache_file}.").into_bytes();
+            return Ok(result);
         }
     }
-    if let Err(message) = marker::write_marker(&target.fingerprint, result.shaders) {
+    if let Err(message) = marker::write_marker(&target.fingerprint, scaled, result.shaders) {
         result.error = message;
-        return Some(result);
+        return Ok(result);
     }
     result.ok = true;
-    Some(result)
+    Ok(result)
 }
