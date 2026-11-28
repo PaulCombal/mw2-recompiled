@@ -1,21 +1,9 @@
-// What crosses between the Rust and the C++ that stays (maps.cpp): text
-// as bytes and a length, and paths as UTF-8, which the C++ makes a path of with
-// install::FromUtf8 -- on Linux a path's own bytes, on Windows its whole name.
-#![allow(unsafe_code)]
+// Paths as the launcher's text is: bytes, on Linux a path's own, on Windows its whole name
+// in UTF-8.
 
-use std::ffi::c_char;
 use std::path::{Path, PathBuf};
 
-/// The bytes the C++ handed over.
-///
-/// # Safety
-/// `text` points at `length` readable bytes, or is null with a length of 0, and they stay
-/// as they are while the slice is used.
-pub unsafe fn bytes<'a>(text: *const c_char, length: usize) -> &'a [u8] {
-    if text.is_null() || length == 0 { &[] } else { unsafe { std::slice::from_raw_parts(text.cast(), length) } }
-}
-
-/// A path the C++ handed over as UTF-8.
+/// The path of bytes as utf8 gives them.
 pub fn path_of(text: &[u8]) -> PathBuf {
     #[cfg(unix)]
     {
@@ -26,7 +14,7 @@ pub fn path_of(text: &[u8]) -> PathBuf {
     PathBuf::from(String::from_utf8_lossy(text).into_owned())
 }
 
-/// A path as UTF-8 for the C++, as install::Utf8 spells it.
+/// A path's bytes: its own on Linux, its name in UTF-8 on Windows.
 pub fn utf8(path: &Path) -> Vec<u8> {
     #[cfg(unix)]
     {

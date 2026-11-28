@@ -32,8 +32,8 @@ lead of three frames, about five frames (26 ms) with WASAPI's 480-sample
 period, and follows the device if its period changes (another device, another
 period). The worker answers a take by waking the title's mixer thread and
 waiting for its mix, so the lead is how late those two threads may be
-scheduled: under Wine with every processor busy, one frame underran about 15
-times a minute and two never did. A call that submits a frame refills the queue
+scheduled: under Wine with every processor busy, a lead of one frame underruns
+and one of two does not. A call that submits a frame refills the queue
 up to the target and no further; one that submits nothing is paid for by what
 the device asked, a credit of its bytes capped at the target, so a title that
 submitted nothing would still run at the device's rate. A take that finds the queue short is an underrun, and SDL plays
@@ -122,11 +122,9 @@ the blocks a frame does not have.
 
 ## Diagnostics
 
-The end of a run gives, for the driver, callbacks, frames submitted, drops,
-underruns and what paces it, in a player's build too; the
-end-of-run report (diagnostic builds) gives, for the
-decoder, kicks, locks, clears, frames decoded, the contexts used and the peak
-allocated, and errors.
+The end of a run reports the driver's underruns and drops, and what paces it,
+in a player's build too; a diagnostic build's end-of-run report adds the
+decoder's counts and errors.
 
 | switch | effect |
 |---|---|

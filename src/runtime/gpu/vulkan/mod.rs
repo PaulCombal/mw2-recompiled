@@ -20,10 +20,17 @@ pub mod presenter;
 pub mod recorder;
 #[deny(unsafe_code)]
 pub mod texture_convert;
-// The renderer's core: the arena and the index swap (renderer_arena.rs), the draw's
+// The renderer's core: the arena (renderer_arena.rs), the draw's
 // arithmetic (renderer_draw.rs), the state mappings and PipelineState
 // (renderer_pipelines.rs) and the keys and caches they share (renderer_state.rs).
 pub mod renderer_arena;
+// The copy thread, which makes the arena's vertex copies beside the consumer (copy_worker.rs).
+pub mod copy_worker;
+// The index swap into the arena (index_swap.rs).
+pub mod index_swap;
+// What the arena's copies were, for the report (arena_census.rs).
+#[cfg(feature = "diagnostics")]
+pub mod arena_census;
 #[deny(unsafe_code)]
 pub mod renderer_draw;
 pub mod renderer_pipelines;

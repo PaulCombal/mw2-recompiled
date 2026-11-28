@@ -97,6 +97,8 @@ pub mod system {
     const WAIT_ABANDONED: u32 = 0x80;
     const ASFW_ANY: u32 = u32::MAX;
 
+    // kernel32 is always linked; AllowSetForegroundWindow is user32's.
+    #[link(name = "user32")]
     unsafe extern "system" {
         fn CreateEventA(attributes: *mut c_void, manual: i32, initial: i32, name: *const u8) -> *mut c_void;
         fn CreateMutexA(attributes: *mut c_void, owner: i32, name: *const u8) -> *mut c_void;

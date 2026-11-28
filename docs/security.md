@@ -63,7 +63,7 @@ The sender columns:
 
 | fixed | sender | file |
 |---|---|---|
-| An integer divide by zero, or the one signed divide that overflows, ends the process: the recompiler emitted the host's divide, which traps, where the console's does not. Every guest divide now gives 0 in those cases, as Xenia's does | anyone who can choose a divisor | `XenonRecomp-rs` (`ppc_divide_*` in `XenonUtils/rust/ppc_rt.rs`) |
+| An integer divide by zero, or the one signed divide that overflows, would end the process: the host's divide traps where the console's does not. Every guest divide gives 0 in those cases, as Xenia's does | anyone who can choose a divisor | `XenonRecomp-rs` (`ppc_divide_*` in `XenonUtils/rust/ppc_rt.rs`) |
 | The Steam lobby's `connect` line goes to the console, so text after a command separator runs as console commands. Only a line of the exact shape a host advertises is accepted | lobby owner | `src/runtime/online/mod.rs` (`is_connect_line`) |
 | A guest path with `..` in it reaches files above the game folder or the save package, and a map name a host picks is a guest path (it names a fastfile). Paths are read the object manager's way, as Xenia does: `..` takes back the name before it and never climbs above the device; a component the host would read as a drive is not found | host, partner | `src/runtime/kernel/files.rs` (`canonical`) |
 | An indirect call to an address outside the code section reads past the function table, into memory the guest writes, and jumps to the host address it finds there. Every indirect call is bounded to the code section; outside it the address is reported and the process ends, as for any call with no recompiled function | anyone who can corrupt a guest function pointer | `config/mw2_hooks.rs` (`ppc_call_indirect`), `src/runtime/crash.rs` (`MW2ReportBadIndirectCall`) |
@@ -73,10 +73,9 @@ The sender columns:
 
 The default build (title update 6) carries every fix. The disc-version build
 (`--tu0`, [building.md](building.md#the-disc-version)) carries the
-multiplayer joinParty fix and the fixes outside the game code. Its address
-table (`runtime/title.h`) has no entries for the other hooks, so they compile
-out.
+multiplayer joinParty fix and the fixes outside the game code.
 
 A hook compiles only when its title's address table (`runtime/title.h`) has the
 entries it names, so each file builds into the titles it applies to and is
-empty in the others.
+empty in the others; the disc version's table has no entries for the other
+hooks.

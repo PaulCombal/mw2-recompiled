@@ -24,11 +24,10 @@ Both are the executables title update 6 makes of the disc's; the disc's own
 are a build option with names of their own
 ([building.md](building.md#the-disc-version)).
 
-`cargo xtask` takes `--title sp` (the default) or `--title mp`, which selects the
-recompiled tree (the `generated` link and `generated.title`); for `mp`, `build.rs`
-sets the cfg `mw2_title_mp` and defines `MW2_TITLE_MP` for the C++. The Python tools make the same choice through the `MW2_TITLE`
-environment variable (`tools/title.py`), which reads the PE section table from
-the image because the two executables lay their sections out differently.
+`cargo xtask` takes `--title sp` (the default) or `--title mp`. The Python tools
+make the same choice through the `MW2_TITLE` environment variable
+(`tools/title.py`), which reads the PE section table from the image because the
+two executables lay their sections out differently.
 
 `config/MW2MP.toml` has its own `[main]` block: the multiplayer's addresses of
 the register save/restore helpers and of `setjmp`/`longjmp`, and its own list
@@ -131,7 +130,10 @@ sockets, ports -- and asks the service only for what a service does:
     MW2_NETWORK=steam    # through the player's Steam client, or lan without it
 
 The launcher's NETWORK screen writes it, with the server's address and
-password, to `.env`. Every build has every backend; a backend is a function
+password, to `.env`, and shows what the chosen one allows: split screen everywhere (it is offline only),
+System Link as far as the network reaches, Xbox LIVE parties and private
+matches but on `none`, Find Game on `server` and `steam`, and whom
+invitations reach. Every build has every backend; a backend is a function
 that makes it (`lan::make`), and `online::get()` tries the chosen one's
 list in `src/runtime/online/mod.rs` and keeps the first whose `start()` succeeds: `steam` is
 Steam and then lan, so a player whose Steam is not running plays over the local
@@ -281,17 +283,14 @@ controller from a game Steam did not start.
   `kernel/xam.rs` (`publish_hosted`) chooses it and tells the service under one
   lock, so threads ending one session and creating another cannot reorder it.
 - F6, or the Xbox LIVE lobby's "Invite friends", opens the friends screen
-  (`src/runtime/friends.rs`), drawn over the frame as the sign-in screen is, over a blurred
-  and darkened copy of the game (`src/runtime/gpu/vulkan/backdrop.rs`): the friends
-  running this game, with their avatars, then how many others are online and
-  offline. A friend counts as running it when Steam says they play app 480 and
+  (`src/runtime/friends.rs`): the friends running this game, then how many
+  others are online and offline. A friend counts as running it when Steam says they play app 480 and
   their rich presence has `mw2recomp`, which every copy sets to its executable
   and release (`mp:<release>`, `sp:<release>`); the rest of Spacewar's players
   have no such key. A friend in the other executable, or on another release,
   is listed but cannot be invited: the campaign's Spec Ops invitations and the
   multiplayer's do not carry into each other. Steam's overlay would need
-  Steam to have started the game. The list is built on the callback thread,
-  once a second while the screen asks for it, and A sends Steam's lobby
+  Steam to have started the game. A sends Steam's lobby
   invitation (`InviteUserToLobby`), which the friend accepts in Steam's chat; a
   friend can also be invited from Steam's own friend list. Accepting moves the
   friend into the host's lobby. With another service the screen says that
@@ -303,10 +302,6 @@ controller from a game Steam did not start.
   entered, and again when the friend accepts another invitation to the lobby
   they are in: the host may have started another party since, or the friend
   left it.
-- Each copy logs the Steam links to the players it talks to: a request for one
-  and whether it was taken, a link connecting, connected (with its ping), and
-  ending (with Steam's reason), and, at most every 5 s, a link that loses
-  packets or queues what it sends.
 - Steam cannot launch the game from an invitation (it would start Spacewar), so
   the friend must already be running it.
 
@@ -374,8 +369,8 @@ LSP stays unused. It goes:
 
 1. `xstartlobby` takes the chosen playlist and creates a lobby's session with no
    public slots.
-2. `XSessionSearchEx` (`000B001C`) asks for 50 sessions. The search's meaning
-   was on Live's servers, so `kernel/xam.rs` takes what the title passes: its
+2. `XSessionSearchEx` (`000B001C`) asks for 50 sessions. On the console the search's
+   meaning is decided on Live's servers, so `kernel/xam.rs` takes what the title passes: its
    contexts and integer properties must all match, and the room for the party
    (`0x1000001A`) is a lower bound. They are the game mode, ranked or not, the
    playlist, the protocol (so a search finds only its own release), the map packs
@@ -453,7 +448,7 @@ What happens to a running match depends on how the host goes:
 |---|---|---|
 | Ends the game from the pause menu | `hostmigration_start`: the players rate each other, the server streams its game state to the best one (`mstart`, `mhead`, `mdata`), and everyone reconnects to it | the match goes on without the old host, who is back at the Xbox LIVE menu; a spawned player stays where it was |
 | The title's own "we suck as host" check | the same | the match goes on |
-| Leaves with `disconnect`, crashes, or loses the connection | no state was sent. Players notice after 12 seconds without a packet from the host, choose a new one among themselves (`findbest`, `nominee`, `migrateto`) | the match is lost; the lobby goes on and starts another |
+| Leaves with `disconnect`, crashes, or loses the connection | no state is sent. Players notice after 12 seconds without a packet from the host, choose a new one among themselves (`findbest`, `nominee`, `migrateto`) | the match is lost; the lobby goes on and starts another |
 
 The stream needs the old host alive, so the last row cannot be improved from
 outside the title. `migration_limit` and `migration_timeBetween` end a match
@@ -464,7 +459,7 @@ keeps nothing, as nothing here keeps a skill.
 
 ## Xbox LIVE private matches
 
-A service whose `Lobbies()` is true (lan and steam) has the player signed in to
+A service whose `Lobbies()` is true (lan, server and steam) has the player signed in to
 Xbox LIVE, which opens PLAY ONLINE: the party, PRIVATE MATCH, the lobby, START
 GAME. No Live service is involved; `src/runtime/kernel/xam.rs` answers what the
 title asks:

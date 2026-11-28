@@ -8,9 +8,9 @@ would sample at the moment a draw executes.
 |---|---|
 | Fetch constant, tiling, level layout, untiling | `src/runtime/gpu/texture.rs` |
 | Xenos to Vulkan formats and swizzles | `src/runtime/gpu/vulkan/texture_formats.rs` |
-| Images, samplers, the texture set, re-reads | `src/runtime/gpu/vulkan/texture_cache.rs`, part of the renderer the ring consumer owns. A range the image pool writes on a guest thread is queued and applied at the consumer's next batch (`memory_written_elsewhere`) |
+| Images, samplers, the texture set, re-reads | `src/runtime/gpu/vulkan/texture_cache.rs`, part of the renderer the ring consumer owns, so a range the image pool writes on a guest thread is queued and applied at the consumer's next batch (`memory_written_elsewhere`) |
 | The images' memory, in blocks | `src/runtime/gpu/vulkan/image_memory.rs` |
-| Write watch on guest pages | `src/runtime/gpu/memory_watch.rs`, with the fix for a write that faulted for ever on a page loosened while it was being copied ([rendering.md](rendering.md#the-shadow-of-guest-memory)) |
+| Write watch on guest pages | `src/runtime/gpu/memory_watch.rs` ([rendering.md](rendering.md#the-shadow-of-guest-memory)) |
 | The image pool's block copy | `src/runtime/gpu/image_move.rs` and the hook `src/hooks/image_move.rs` |
 
 ## The fetch constant
@@ -259,15 +259,14 @@ describes, uploading it the first time it is seen.
   once.
 - **Memory** comes from 64 MB blocks (`src/runtime/gpu/vulkan/image_memory.rs`), a range per image.
   A level streams tens of thousands of small textures through the cache, and
-  an allocation each is what a driver is worst at: freeing one took over half
-  a millisecond with forty thousand live. Anything over a quarter of a block
-  gets an allocation of its own. Making a block takes the driver about 10 ms on
-  a Renoir iGPU, which cost a frame when it came at a draw, so one block is
-  always ready: made on a thread of its own as soon as the one before is taken
-  (not while the call trace is on, which would miss the helper's call), or a
-  block emptied and kept instead of given back. A block is made at a draw only
-  when two are wanted before the thread has made the second; the report counts
-  them.
+  an allocation each is what a driver is worst at: freeing one is slow with tens
+  of thousands live. Anything over a quarter of a block gets an allocation of its own.
+  Making a block is slow enough in the driver to cost a frame when it comes at
+  a draw, so one block is always ready: made on a thread of its own as soon as
+  the one before is taken (not while the call trace is on, which would miss the
+  helper's call), or a block emptied and kept instead of given back. A block is
+  made at a draw only when two are wanted before the thread has made the
+  second; the report counts them ([performance.md](performance.md)).
 - **Letting go.** The console holds no copies: when the title puts another
   texture where one was, the old one is gone. `new_frame` looks over the cache
   once every 64 frames, a slice of the images a frame:
@@ -285,8 +284,8 @@ describes, uploading it the first time it is seen.
   - An idle image whose pages the write watch saw written, and whose bytes
     then sign differently, is released. Bound again it would have had to be
     read again anyway. This is what keeps the cache near what the level is
-    using: without it a streaming level left two gigabytes of such copies in
-    seven minutes.
+    using: without it a streaming level accumulates copies of textures it has
+    replaced.
   - Past the budget (half the device-local memory, or
     `MW2_TEXTURE_BUDGET_MB`) the idle images bound longest ago go, down to
     three quarters of it.
@@ -306,7 +305,17 @@ bytes themselves must be watched.
 unchanged for certain and nothing is hashed. The watch makes a page read-only
 and takes one fault on the first write (see
 [rendering.md](rendering.md#the-shadow-of-guest-memory)). Unlike the vertex
-shadow, `Track` never backs off from pages the title keeps writing.
+shadow, `track` never backs off from pages the title keeps writing.
+
+Asking `unwritten` walks every page of the texture, and a bound texture is asked
+once a frame. A page stops being watched in two places only, the write fault
+(`loosen`) and the runtime's own bulk writes (`will_write`), and each counts it
+in a counter for its group of 64 pages (`LOOSENINGS`). The texture keeps the
+sum of its groups' counters from the last walk that answered unwritten; while
+the sum has not moved, none of its pages can have left the watched state, and
+the answer stands without the walk. `MW2_CHECK_TEXTURE_WATCH=1` (diagnostics)
+walks anyway after every such answer and logs a disagreement: a way out of the
+watched state that does not count.
 
 **Signing.** A texture that cannot be watched is hashed over every byte of its
 base and chain (sampling misses small patch rewrites). An unchanged texture is
@@ -332,13 +341,13 @@ video's frame, a texture streamed in again), the texture is read and copied
 whole, and its parts are kept. A copy of the bytes as uploaded is kept with
 the parts, so whether the texture is still mostly empty is judged as after a
 whole read. A conversion, DXT3A's expansion and an unwatched texture are read
-whole as before, and so is any re-read in parts that cannot finish.
+whole, and so is any re-read in parts that cannot finish.
 
-The model-lighting table is the case it is for: about 1% of its pages change
-between two reads, and a whole read of it was 84% of the time the ring
-consumer spent reading textures in Team Player. In parts it reads about
-3 parts of 256 a re-read. `MW2_CHECK_TEXTURE_PARTS=1` (diagnostics) compares
-every re-read in parts with a whole read.
+The model-lighting table is the case it is for: few of its pages change
+between two reads, and a whole read of it dominates the time the ring consumer
+spends reading textures ([performance.md](performance.md)).
+`MW2_CHECK_TEXTURE_PARTS=1` (diagnostics) compares every re-read in parts with
+a whole read.
 
 ### Read when the draw would execute
 

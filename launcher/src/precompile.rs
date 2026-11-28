@@ -135,8 +135,11 @@ pub struct Pass {
     /// The GPU it compiled for, by name, and by its id (shaders/src/pipeline.rs, device_id).
     pub device: Vec<u8>,
     pub device_id: Vec<u8>,
-    /// The device compiles shaders only with a draw's state: none could be.
+    /// The device compiles shaders only with a draw's state: none could be. Also on a
+    /// marker that fits, which says so by its 0 shaders (marker::compiled).
     pub no_libraries: bool,
+    /// Its maker, model and driver: which driver to offer (driver.rs).
+    pub card: crate::driver::Card,
     /// Distinct shaders in the game.
     pub shaders: u32,
     /// The translator cannot make (the game cannot draw them either), and why, how many.
@@ -223,6 +226,7 @@ fn name(path: &Path) -> Vec<u8> {
 // instance of its own, without bringing a device up.
 struct Target {
     device: Vec<u8>,
+    card: crate::driver::Card,
     fingerprint: Vec<u8>,
     /// Which of the two caches and markers: shader_build::cache_file's.
     scaled: bool,
@@ -261,6 +265,7 @@ fn find_target(asked: &[u8], error: &mut Vec<u8>) -> Option<Target> {
             Some(Target {
                 // SAFETY: a physical device of the live instance.
                 device: unsafe { pipeline::device_id(&instance, physical) }.into_bytes(),
+                card: unsafe { card(&instance, physical) },
                 fingerprint: unsafe {
                     marker::fingerprint(&instance, physical, scaled, Path::new(GAME_FOLDER), asked_custom_maps())
                 },
@@ -277,6 +282,29 @@ fn find_target(asked: &[u8], error: &mut Vec<u8>) -> Option<Target> {
     // SAFETY: nothing made from it is alive.
     unsafe { (instance.fp_v1_0().destroy_instance)(handle, std::ptr::null()) };
     target
+}
+
+// The device's name, PCI ids and driver.
+//
+// # Safety
+// A physical device of `instance`.
+unsafe fn card(instance: &ash::Instance, physical: vk::PhysicalDevice) -> crate::driver::Card {
+    let mut properties = vk::PhysicalDeviceProperties::default();
+    // SAFETY: the caller's.
+    unsafe { (instance.fp_v1_0().get_physical_device_properties)(physical, &mut properties) };
+    let mut driver = vk::PhysicalDeviceDriverProperties::default();
+    if properties.api_version >= vk::API_VERSION_1_2 {
+        let mut more = vk::PhysicalDeviceProperties2 { p_next: (&raw mut driver).cast(), ..Default::default() };
+        // SAFETY: the caller's; a chain on this stack.
+        unsafe { (instance.fp_v1_1().get_physical_device_properties2)(physical, &mut more) };
+    }
+    crate::driver::Card {
+        // SAFETY: Vulkan ends the name with a 0 within the array.
+        name: unsafe { CStr::from_ptr(properties.device_name.as_ptr()) }.to_bytes().to_vec(),
+        vendor: properties.vendor_id,
+        pci: properties.device_id,
+        driver: driver.driver_id,
+    }
 }
 
 // A shader of the game, by what it is.
@@ -344,6 +372,7 @@ fn run(asked: &[u8], always: bool, progress: Shown<'_>) -> std::result::Result<P
         return Ok(result);
     };
     result.device_id = target.device.clone();
+    result.card = target.card.clone();
     let mut why: &'static str = "";
     let scaled = target.scaled;
     let cache_file = shader_build::cache_file(scaled);
@@ -351,6 +380,8 @@ fn run(asked: &[u8], always: bool, progress: Shown<'_>) -> std::result::Result<P
         result.ok = true;
         result.current = true;
         result.shaders = marker::read_marker(scaled).shaders;
+        result.no_libraries = result.shaders == 0;
+        result.device = target.card.name.clone();
         return Ok(result);
     }
     result.why = why.as_bytes().to_vec();

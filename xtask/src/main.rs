@@ -26,7 +26,7 @@ const USAGE: &str = "usage: cargo xtask <prepare|recompile|build> [options]
   --title sp|mp          sp (default): default.xex, the campaign and special ops;
                          mp: default_mp.xex, the multiplayer
   --tu0                  the disc's own executables instead of title update 6's
-  --release              without diagnostics, and on Linux the launcher's C++ library linked in
+  --release              without diagnostics: a player's build
   --windows              cross-compile for Windows with llvm-mingw
   --llvm-mingw <dir>     llvm-mingw's folder (or LLVM_MINGW in the environment)
   --build-dir <dir>      build there instead of build, build-mp, build-release, ...
@@ -485,9 +485,18 @@ fn check_chunk_count(title: &Title, rust: &str) -> Result {
 
 fn recompile(options: &Options, title: &Title) -> Result {
     let rust = format!("{}_rs", title.ppc);
-    if options.keep_generated && Path::new(&rust).join("Cargo.toml").exists() {
+    // A release build writes the return address only where something reads it
+    // (XenonRecomp's --minimal-lr): the hooks and the kernel imports. A diagnostics
+    // build writes it at every call, for the pacing trace's walk of guest frames.
+    let lr_mode = if options.release { "minimal" } else { "every call" };
+    let lr_marker = Path::new(&rust).join("lr-mode");
+    let kept_mode = fs::read_to_string(&lr_marker).unwrap_or_default();
+    if options.keep_generated && Path::new(&rust).join("Cargo.toml").exists() && kept_mode == lr_mode {
         println!("==> 5-6. keeping the recompiled tree in {rust}/");
     } else {
+        if options.keep_generated && Path::new(&rust).join("Cargo.toml").exists() {
+            println!("    {rust}/ writes the return address at {kept_mode:?}, this build wants {lr_mode:?}: recompiling");
+        }
         println!("==> 5. detect jump tables");
         run(Command::new(xenon_program("XenonAnalyse"))
             .arg(format!("{}/{}", title.folder, title.xex))
@@ -497,20 +506,29 @@ fn recompile(options: &Options, title: &Title) -> Result {
 
         println!("==> 6. recompile PPC -> Rust");
         // Every function in Rust: one the backend would leave to C++ is an error.
-        let extra = [
+        let mut extra = vec![
             "--backend=rust".into(),
             format!("--out=../{rust}"),
             "--rust-hooks=mw2_hooks.rs".into(),
             "--no-cpp-fallback".into(),
         ];
+        if options.release {
+            let readers = root().join(XENON_BUILD).join(format!("{rust}.lr-readers"));
+            fs::write(&readers, lr_readers(title)?).map_err(|e| format!("{}: {e}", readers.display()))?;
+            extra.push(format!("--minimal-lr={}", readers.display()));
+        }
         let log = recompile_log(&mut xenon_recomp(title, &extra), &format!("{XENON_BUILD}/{rust}.log"))?;
         println!("{}", last_line(&log));
         let count = |text: &str| log.lines().filter(|line| line.contains(text)).count();
         println!("    unrecognized instructions: {}", count("Unrecognized instruction"));
         println!("    switch-case errors:        {}", count("trying to jump outside function"));
-        for line in log.lines().filter(|line| line.starts_with("Registers stay in the context")) {
+        for line in log
+            .lines()
+            .filter(|line| line.starts_with("Registers stay in the context") || line.starts_with("The return address is set"))
+        {
             println!("    {line}");
         }
+        fs::write(&lr_marker, lr_mode).map_err(|e| format!("{}: {e}", lr_marker.display()))?;
     }
     println!("==> 7. kernel import stubs (into {rust}/)");
     generate::kernel_stubs(Path::new(&rust))?;
@@ -525,6 +543,44 @@ fn recompile(options: &Options, title: &Title) -> Result {
     // Written only when it changes: build.rs takes a change for a new title.
     write_if_changed("generated.title", &format!("{} {}\n", title.name, title.version))?;
     Ok(())
+}
+
+// The functions that read the return address, for --minimal-lr: every function of the
+// title's table in runtime/title.h, a superset of its hooks, since a hook can only
+// name a function of that table (guest_hook!, build.rs). Its four blocks are the
+// multiplayer's and the campaign's for title update 6, then the same for the disc.
+fn lr_readers(title: &Title) -> Result<String> {
+    let source = fs::read_to_string("runtime/title.h").map_err(|e| format!("runtime/title.h: {e}"))?;
+    let wanted = match (title.name.as_str(), title.version) {
+        ("mp", "tu6") => 0,
+        ("sp", "tu6") => 1,
+        ("mp", _) => 2,
+        (_, _) => 3,
+    };
+    let mut block: Option<i32> = None;
+    let mut list = String::new();
+    for line in source.lines() {
+        let mut words = line.split_whitespace();
+        match (words.next(), words.next(), words.next()) {
+            (Some("#if"), ..) if block.is_none() && line.contains("MW2_TITLE_MP") => block = Some(0),
+            (Some("#elif" | "#else"), ..) => block = block.map(|n| n + 1),
+            (Some("#endif"), ..) if block.is_some() => break,
+            (Some("#define"), Some(name), Some(value))
+                if block == Some(wanted)
+                    && name.starts_with("T_")
+                    && value.len() == 8
+                    && value.chars().all(|c| c.is_ascii_digit() || ('A'..='F').contains(&c)) =>
+            {
+                list += value;
+                list += "\n";
+            }
+            _ => {}
+        }
+    }
+    if block != Some(3) || list.is_empty() {
+        return Err("runtime/title.h: not the four blocks lr_readers expects".into());
+    }
+    Ok(list)
 }
 
 fn build(options: &Options, title: &Title) -> Result {
@@ -675,8 +731,8 @@ fn build(options: &Options, title: &Title) -> Result {
     if !rest.is_empty() {
         run(Command::new("cmake").args(["--build", &build, "-j", &jobs(), "--target"]).args(&rest))?;
     }
-    // The launcher: its build.rs builds launcher_core and its libraries in the folder just
-    // configured, with the SDL sdl3-sys built, which only it knows.
+    // The launcher: its build.rs reads the folder just configured (and on Windows has CMake
+    // make the Vulkan import library there).
     if launcher {
         let launcher_exe = if windows { "mw2-launcher.exe" } else { "mw2-launcher" };
         run(&mut cargo_for(&["-p", "mw2-launcher", "--no-default-features", "--features", features])?)?;

@@ -8,6 +8,8 @@
 // the fetch constants name.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+#[cfg(feature = "diagnostics")]
+use super::arena_census::{self as census, Constants, FetchMiss, VertexCopy};
 use super::renderer_state::{ARENA_KINDS, ArenaKind, Cached, ConstantBlock, ConstantOffsets, FRAME_SLOTS};
 #[cfg(feature = "diagnostics")]
 use crate::runtime::bridge::stream;
@@ -57,7 +59,8 @@ pub struct ServeClock {
     pub frame: u64,
 }
 
-/// The index swap: `count` big-endian indices from `source` (any alignment) into `out`,
+/// The index swap (index_swap.rs): `count` big-endian indices from `source` (any alignment)
+/// into `out` (32-byte aligned),
 /// and the lowest and highest index on the way through.
 pub type Swap16 = unsafe fn(*const u8, *mut u16, u32) -> (u16, u16);
 pub type Swap32 = unsafe fn(*const u8, *mut u32, u32) -> (u32, u32);
@@ -101,6 +104,12 @@ pub struct Arena {
 
     // A rectangle list's vertices, put together here and not in the arena.
     corners: Vec<u32>,
+    // The census's: the vertex windows copied this frame, and the fetch constants the
+    // fetch block was last assembled from.
+    #[cfg(feature = "diagnostics")]
+    copied: census::Copied,
+    #[cfg(feature = "diagnostics")]
+    fetch_values: [u32; 192],
     swap16: Swap16,
     swap32: Swap32,
 }
@@ -119,6 +128,16 @@ pub fn alignment(min_uniform: u64, min_storage: u64) -> u32 {
 /// One slot's share of the arena, a whole number of alignments.
 pub fn share(bytes: u32, alignment: u32) -> u32 {
     (bytes / FRAME_SLOTS) & !(alignment - 1)
+}
+
+/// The blocks of 16 a program's constants need copied, a bit each: those it names, or
+/// all of them when it indexes them with a run-time value.
+#[inline]
+pub fn constant_blocks(program: &TranslationMeta) -> u32 {
+    if program.addressed_constants {
+        return 0xFFFF;
+    }
+    program.constant_blocks_read & 0xFFFF
 }
 
 /// What a program needs copied: one past the highest constant it names, or the whole
@@ -152,54 +171,10 @@ pub fn build_fourth_corner(vertices: &mut [u32], stride: u32, rect: u32, at: u32
     }
 }
 
-// Byte-swapped into the arena, and the lowest and highest index named on the way through.
-// A list of nothing but restarts comes out lowest above highest, which write_indices turns
-// into vertex 0. Written without a branch -- the restart index counts as zero toward the
-// highest, and as the largest value it can never be the lowest -- so the loop vectorises;
-// built for AVX2 and for x86-64-v2, picked at run time (swaps).
-// Nothing is read back from `out`, which is write-combined memory.
-macro_rules! swap_indices {
-    ($name:ident, $avx2:ident, $v2:ident, $t:ty) => {
-        #[inline(always)]
-        unsafe fn $name(source: *const u8, out: *mut $t, count: u32) -> ($t, $t) {
-            const RESTART: $t = <$t>::MAX;
-            let (mut low, mut high): ($t, $t) = (RESTART, 0);
-            let input = source.cast::<$t>();
-            for i in 0..count as usize {
-                // SAFETY: the caller's: `count` indices readable at `source`, any alignment,
-                // and as many writable at `out`.
-                let value = <$t>::from_be(unsafe { ptr::read_unaligned(input.add(i)) });
-                // SAFETY: as above.
-                unsafe { out.add(i).write_unaligned(value) };
-                low = if value < low { value } else { low };
-                let counted = if value == RESTART { 0 } else { value };
-                high = if counted > high { counted } else { high };
-            }
-            (low, high)
-        }
-
-        /// # Safety
-        /// `count` indices readable at `source` and writable at `out`; the CPU has AVX2.
-        #[target_feature(enable = "avx2")]
-        unsafe fn $avx2(source: *const u8, out: *mut $t, count: u32) -> ($t, $t) {
-            // SAFETY: the caller's.
-            unsafe { $name(source, out, count) }
-        }
-
-        /// # Safety
-        /// `count` indices readable at `source` and writable at `out`.
-        unsafe fn $v2(source: *const u8, out: *mut $t, count: u32) -> ($t, $t) {
-            // SAFETY: the caller's.
-            unsafe { $name(source, out, count) }
-        }
-    };
-}
-swap_indices!(swap_indices16, swap_indices16_avx2, swap_indices16_v2, u16);
-swap_indices!(swap_indices32, swap_indices32_avx2, swap_indices32_v2, u32);
-
 /// The swaps this CPU runs: AVX2 where it has it, else x86-64-v2.
 pub fn swaps(avx2: bool) -> (Swap16, Swap32) {
-    if avx2 { (swap_indices16_avx2, swap_indices32_avx2) } else { (swap_indices16_v2, swap_indices32_v2) }
+    use super::index_swap::{swap16_avx2, swap16_v2, swap32_avx2, swap32_v2};
+    if avx2 { (swap16_avx2, swap32_avx2) } else { (swap16_v2, swap32_v2) }
 }
 
 impl Arena {
@@ -235,6 +210,10 @@ impl Arena {
             written: [0; ARENA_KINDS],
             reused: [0; ARENA_KINDS],
             corners: Vec::new(),
+            #[cfg(feature = "diagnostics")]
+            copied: census::Copied::default(),
+            #[cfg(feature = "diagnostics")]
+            fetch_values: [0; 192],
             swap16,
             swap32,
         }
@@ -242,6 +221,9 @@ impl Arena {
 
     /// BeginFrame's part: slot `slot`'s share from its start, and nothing it held cached.
     pub fn begin_frame(&mut self, slot: u32) {
+        // Nothing still to be copied into the share being left (a submission settled it
+        // already; this holds even without one).
+        super::copy_worker::settle();
         self.base = self.slot_bases[slot as usize];
         self.used = 0;
         self.pixel_window.valid = false;
@@ -253,6 +235,8 @@ impl Arena {
         self.fetch_block.valid = false;
         self.booleans.valid = false;
         self.loops.valid = false;
+        #[cfg(feature = "diagnostics")]
+        self.copied.new_frame();
     }
 
     /// A draw's constants, vertex data and indices are copied here and addressed by offset;
@@ -302,32 +286,66 @@ impl Arena {
 
     /// The file holds 512 vec4 and a pixel program sees 256 from wherever SQ_PS_CONST's base
     /// says -- usually 256, so uploading the low half would hand it the vertex program's
-    /// constants. `needed` is how many of the 256 the program reads; what sits above the copy
-    /// is whatever the arena held, which it never reads.
-    ///
-    /// `needed` is at most 256 (constants_needed), which keeps the copy inside the file.
-    fn write_pixel_constants(&mut self, r: &RegisterFile, needed: u32) -> u32 {
+    /// constants. `blocks` are the blocks of 16 of the 256 the program names, a bit each
+    /// (TranslationMeta::constant_blocks_read, all 16 for a program that indexes them): the
+    /// copy is laid out as the whole window, from its first constant, but only those blocks
+    /// are written into it -- a program names three or four of the sixteen, often the first
+    /// and one near the top -- and what lies between them is whatever the arena held, which
+    /// the program never reads.
+    fn write_pixel_constants(&mut self, r: &RegisterFile, blocks: u32) -> u32 {
         let base = ConstantWindow(r.get(SQ_PS_CONST)).base().min(256);
         let first = CONSTANT_BASE_ALU + base * 4;
-        // The cached copy covers `count` of them; it serves this draw if it reaches far
-        // enough and none of what it holds has been written since. Stamping only the
-        // copied range means a write to a constant nobody in this window reads does not
-        // throw it out.
+        let blocks = blocks & 0xFFFF;
+        // The newest write to any of `mask`'s blocks: each is 64 registers from the window's
+        // first (inside the file: base <= 256 and the last block ends 256 vec4 above it).
+        let written = |mask: u32| {
+            let mut newest = 0;
+            let mut bits = mask;
+            while bits != 0 {
+                let b = bits.trailing_zeros();
+                bits &= bits - 1;
+                newest = newest.max(r.stamp_of(first + b * 64, 64));
+            }
+            newest
+        };
+        // The cached copy holds the blocks in `count`, as the registers were when the
+        // file's write count was `stamp`; it serves this draw if it holds every block the
+        // program names and none of those has been written since. A write to a block the
+        // program does not name does not throw it out.
         let cache = self.pixel_window;
-        if cache.valid
-            && cache.base == u64::from(base)
-            && cache.count >= needed
-            && cache.stamp == r.stamp_of(first, cache.count * 4)
-        {
-            self.reused[ArenaKind::Constants as usize] += u64::from(needed * 16);
+        let current = cache.valid && cache.base == u64::from(base) && written(cache.count) <= cache.stamp;
+        if current && cache.count & blocks == blocks {
+            self.reused[ArenaKind::Constants as usize] += u64::from(blocks.count_ones() * 256);
             return cache.at;
         }
-        let at = self.copy_registers(r, first, needed * 4, ArenaKind::Constants);
+        // A copy that is still current but lacks a block is copied again with what it held
+        // as well, so that programs taking turns over one set of constants settle on one copy.
+        let copy = if current { blocks | cache.count } else { blocks };
+        let span = 32 - copy.leading_zeros(); // blocks to the highest one copied
+        let at = self.allocate(span * 256, ArenaKind::Constants);
         if at == u32::MAX {
             return at;
         }
-        self.pixel_window =
-            Cached { stamp: r.stamp_of(first, needed * 4), base: u64::from(base), at, valid: true, count: needed };
+        let mut bits = copy;
+        while bits != 0 {
+            let b = bits.trailing_zeros();
+            bits &= bits - 1;
+            debug_assert!((first + b * 64 + 64) as usize <= r.values.len());
+            // SAFETY: allocate gave span * 256 bytes at `at`, and b < span; the block's 64
+            // registers are inside the file (above).
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    r.values.as_ptr().add((first + b * 64) as usize).cast::<u8>(),
+                    self.mapped.add((at + b * 256) as usize),
+                    256,
+                )
+            };
+        }
+        // allocate counted the whole span.
+        self.written[ArenaKind::Constants as usize] -= u64::from((span - copy.count_ones()) * 256);
+        #[cfg(feature = "diagnostics")]
+        census::constants(Constants::PixelWindow, copy.count_ones() * 256);
+        self.pixel_window = Cached { stamp: r.writes, base: u64::from(base), at, valid: true, count: copy };
         at
     }
 
@@ -355,6 +373,8 @@ impl Arena {
                 if at == u32::MAX {
                     return at;
                 }
+                #[cfg(feature = "diagnostics")]
+                census::constants(Constants::VertexBlock, 256);
                 self.constant_blocks[b] = ConstantBlock { stamp, valid: true };
                 self.constant_table_words[4 + b] = at / 16;
                 moved = true;
@@ -370,6 +390,8 @@ impl Arena {
         if at == u32::MAX {
             return at;
         }
+        #[cfg(feature = "diagnostics")]
+        census::constants(Constants::Table, CONSTANT_TABLE_WORDS * 4);
         self.constant_table = Cached { stamp: 0, base: u64::from(base), at, valid: true, count: 0 };
         at
     }
@@ -403,7 +425,7 @@ impl Arena {
         if out.vertex_floats == u32::MAX {
             return out;
         }
-        out.pixel_floats = self.write_pixel_constants(r, constants_needed(pixel_program));
+        out.pixel_floats = self.write_pixel_constants(r, constant_blocks(pixel_program));
         if out.pixel_floats == u32::MAX {
             return out;
         }
@@ -422,7 +444,29 @@ impl Arena {
             && self.fetch_block.base == vertex_range(lowest_vertex, highest_vertex)
             && subs == self.fetch_subs
             && pairs == self.fetch_pairs;
+        // The first reason the block is not the previous draw's, and whether this draw
+        // copies any vertex data (rather than every fetch served by the shadow).
+        #[cfg(feature = "diagnostics")]
+        let cause = if fetch_cached {
+            FetchMiss::Reused
+        } else if rectangles != 0 {
+            FetchMiss::Rectangles
+        } else if !self.fetch_block.valid {
+            FetchMiss::NewFrame
+        } else if self.fetch_block.stamp != fetch_stamp {
+            FetchMiss::Stamp
+        } else if self.fetch_block.base != vertex_range(lowest_vertex, highest_vertex) {
+            FetchMiss::Range
+        } else if subs != self.fetch_subs {
+            FetchMiss::Subs
+        } else {
+            FetchMiss::Pairs
+        };
+        #[cfg(feature = "diagnostics")]
+        let mut copied_any = false;
         if fetch_cached {
+            #[cfg(feature = "diagnostics")]
+            census::fetch(FetchMiss::Reused, 0);
             if let Some(n) = notes.as_mut() {
                 n.vertex_window(ptr::null(), 0); // the previous draw's
             }
@@ -517,6 +561,10 @@ impl Arena {
                     // The fourth corners are worked out from the other three, so the
                     // vertices are put together here and not in the arena.
                     self.rectangle_vertices(va, given, total, stride, declared, rectangles, at, notes.as_mut());
+                    #[cfg(feature = "diagnostics")]
+                    {
+                        copied_any = true;
+                    }
                     unsafe { entry.write(at | kind) };
                     continue;
                 }
@@ -552,6 +600,8 @@ impl Arena {
                     && serve(physical.wrapping_add(first * 4), words * 4, clock.recording, clock.completed, clock.frame)
                 {
                     self.reused[ArenaKind::Vertices as usize] += u64::from(words * 4);
+                    #[cfg(feature = "diagnostics")]
+                    census::vertex_served(words * 4);
                     unsafe { entry.write(self.shadow_base.wrapping_add(physical) | kind) };
                     continue;
                 }
@@ -585,10 +635,35 @@ impl Arena {
                 } else {
                     // Never the union with what was cached: draws reaching into a shared
                     // heap from both ends would ratchet it out to the whole buffer.
-                    // SAFETY: guest memory, the window above.
-                    let at = unsafe { self.copy_into_arena(window, words * 4, ArenaKind::Vertices) };
+                    let at = self.allocate(words * 4, ArenaKind::Vertices);
                     if at == u32::MAX {
                         return out;
+                    }
+                    // Made by the copy thread, or here, before the consumer next settles
+                    // (copy_worker.rs): the title rewrites none of the window before then.
+                    // SAFETY: the window above, in guest memory; allocate gave words * 4
+                    // bytes at `at`, which nothing else touches before the settle.
+                    unsafe { super::copy_worker::hand_over(window, self.mapped.add(at as usize), words * 4) };
+                    #[cfg(feature = "diagnostics")]
+                    {
+                        copied_any = true;
+                        let why = if self.shadow_base == 0 {
+                            VertexCopy::NoShadow
+                        } else if va != PHYSICAL_BASE.wrapping_add(physical) {
+                            VertexCopy::NotPhysical
+                        } else {
+                            use crate::runtime::gpu::memory_watch::{Refusal, last_refusal};
+                            match last_refusal() {
+                                Refusal::NoShadow => VertexCopy::NoShadow,
+                                Refusal::Outside => VertexCopy::Outside,
+                                Refusal::InFlight => VertexCopy::InFlight,
+                                Refusal::BackingOff => VertexCopy::BackingOff,
+                                Refusal::ArmFailed => VertexCopy::ArmFailed,
+                            }
+                        };
+                        // SAFETY: the window just copied, guest memory.
+                        let bytes = unsafe { std::slice::from_raw_parts(window, words as usize * 4) };
+                        self.copied.copied(physical, first, last, why, bytes);
                     }
                     let k = found.unwrap_or_else(|| {
                         made_count += 1;
@@ -620,6 +695,8 @@ impl Arena {
             if out.booleans == u32::MAX {
                 return out;
             }
+            #[cfg(feature = "diagnostics")]
+            census::constants(Constants::Booleans, 32);
             self.booleans = Cached { stamp: bool_stamp, base: 0, at: out.booleans, valid: true, count: 0 };
         }
 
@@ -632,6 +709,8 @@ impl Arena {
             if out.loops == u32::MAX {
                 return out;
             }
+            #[cfg(feature = "diagnostics")]
+            census::constants(Constants::Loops, 128);
             self.loops = Cached { stamp: loop_stamp, base: 0, at: out.loops, valid: true, count: 0 };
         }
 
@@ -655,6 +734,31 @@ impl Arena {
         }
         // allocate counted the whole block.
         self.written[ArenaKind::Constants as usize] -= 96 * 16 - written;
+        #[cfg(feature = "diagnostics")]
+        {
+            census::constants(Constants::FetchBlock, written as u32);
+            census::fetch(cause, written as u32);
+            if !copied_any {
+                census::fetch_all_served(cause);
+            }
+            let fetch_now = &r.values[CONSTANT_BASE_FETCH as usize..CONSTANT_BASE_FETCH as usize + 192];
+            if cause == FetchMiss::Stamp {
+                let mut same = true;
+                for (i, &read) in pairs.iter().enumerate() {
+                    let mut bits = read;
+                    while bits != 0 {
+                        let pair = i * 32 + bits.trailing_zeros() as usize;
+                        bits &= bits - 1;
+                        same &= fetch_now[pair * 2] == self.fetch_values[pair * 2]
+                            && fetch_now[pair * 2 + 1] == self.fetch_values[pair * 2 + 1];
+                    }
+                }
+                if same {
+                    census::fetch_same_values();
+                }
+            }
+            self.fetch_values.copy_from_slice(fetch_now);
+        }
         self.fetch_block = Cached {
             stamp: fetch_stamp,
             base: vertex_range(lowest_vertex, highest_vertex),
@@ -737,6 +841,8 @@ impl Arena {
         let source = guest_memory::base().wrapping_add(address as usize);
         #[cfg(feature = "diagnostics")]
         stream::note_read(address, u64::from(bytes));
+        #[cfg(feature = "diagnostics")]
+        census::indices(bytes);
         if cfg!(feature = "diagnostics")
             && let Some(n) = notes
         {
@@ -746,6 +852,8 @@ impl Arena {
         // inside the reservation (the caller's).
         unsafe {
             let out = self.mapped.add(at as usize);
+            // The AVX2 swaps store 32 bytes at a time, aligned (index_swap.rs).
+            debug_assert!(out as usize % 32 == 0);
             if wide {
                 let (low, high) = (self.swap32)(source, out.cast(), count);
                 *lowest = low;

@@ -46,13 +46,10 @@ become host paths.
 
 ## Files inside a package (`src/runtime/kernel/files.rs`)
 
-The device prefix of a guest path is looked up in the mount table. A path under
-a mount resolves in the package directory, where `NtCreateFile` honours its
-create disposition, `NtWriteFile` writes, and `NtSetInformationFile` seeks,
-truncates and marks a file for deletion. Every other path resolves under the
-game root and is read-only; truncation is gated on the path being writable, not
-on what the disposition asks for, so opening a disc file with
-`FILE_OVERWRITE_IF` cannot empty it. See [runtime.md](runtime.md#files).
+A path under a mounted package resolves in the package directory, where files
+are created, written, truncated and deleted as on NT. Every other path resolves
+under the game root and is read-only, whatever disposition it is opened with
+([runtime.md](runtime.md#files)).
 
 ## The device selector
 

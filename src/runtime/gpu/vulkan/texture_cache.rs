@@ -197,6 +197,9 @@ struct Image {
     queued_segment: u64, // the segment it was last put on rewritten_this_segment
     // When its memory is watched, the stamp it was read under; zero when not watched.
     watch_stamp: u64,
+    // The stamp and the loosenings of its pages' groups when unchanged last found every
+    // page of it unwritten under that stamp (unchanged).
+    watch_memo: std::cell::Cell<(u64, u64)>,
     staged: u32,        // times staged; the draw list's version of it
     bound_segment: u64, // the last segment a draw of which bound it
     rewritten: bool,
@@ -271,6 +274,7 @@ impl Default for Image {
             sign_period: 1,
             queued_segment: u64::MAX,
             watch_stamp: 0,
+            watch_memo: std::cell::Cell::new((0, 0)),
             staged: 0,
             bound_segment: u64::MAX,
             rewritten: false,
@@ -1038,12 +1042,57 @@ fn track_image(frame: u64, image: &Image) -> u64 {
     track_source(frame, image.address, image.source_bytes, image.mip_address, image.mip_bytes)
 }
 
+/// Whether none of the texture's pages has been written since it was read under its stamp.
+/// The walk over every page is skipped when no page in the groups its memory falls in has
+/// left the watched state since the walk last answered yes (memory_watch's loosenings):
+/// then none of its pages can have.
 fn unchanged(image: &Image) -> bool {
-    image.watch_stamp != 0
-        && (image.source_bytes == 0
-            || bridge::watch::unwritten(image.address, image.source_bytes as u32, image.watch_stamp))
+    if image.watch_stamp == 0 {
+        return false;
+    }
+    // Read before the walk: a page that leaves the watched state during it moves the sum
+    // past what is kept, and the next look walks again.
+    let groups = bridge::watch::loosenings(image.address, image.source_bytes as u32)
+        .wrapping_add(bridge::watch::loosenings(image.mip_address, image.mip_bytes as u32));
+    if image.watch_memo.get() == (image.watch_stamp, groups) {
+        #[cfg(feature = "diagnostics")]
+        check_watch_memo(image);
+        return true;
+    }
+    let whole = unchanged_by_walk(image);
+    if whole {
+        image.watch_memo.set((image.watch_stamp, groups));
+    }
+    whole
+}
+
+fn unchanged_by_walk(image: &Image) -> bool {
+    (image.source_bytes == 0 || bridge::watch::unwritten(image.address, image.source_bytes as u32, image.watch_stamp))
         && (image.mip_bytes == 0
             || bridge::watch::unwritten(image.mip_address, image.mip_bytes as u32, image.watch_stamp))
+}
+
+/// MW2_CHECK_TEXTURE_WATCH=1: every answer the memo gives walked as well, and a
+/// disagreement logged -- one is a way out of the watched state that does not count its
+/// loosening.
+#[cfg(feature = "diagnostics")]
+fn check_watch_memo(image: &Image) {
+    static ON: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| crate::env::flag(c"MW2_CHECK_TEXTURE_WATCH"));
+    static SHOWN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if !*ON || unchanged_by_walk(image) {
+        return;
+    }
+    // A page written between the memo's answer and this walk moved its group's count: the
+    // memo was right when it answered. Only a count that has not moved is a disagreement.
+    let groups = bridge::watch::loosenings(image.address, image.source_bytes as u32)
+        .wrapping_add(bridge::watch::loosenings(image.mip_address, image.mip_bytes as u32));
+    if image.watch_memo.get().1 == groups && SHOWN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 16 {
+        log_warn!(
+            "textures: the watch's memo says the texture at %08X (%u bytes) is unwritten, and its pages say otherwise",
+            image.address,
+            image.source_bytes as u32
+        );
+    }
 }
 
 /// The texture as its memory holds it now, through the fetch constant it was uploaded from.

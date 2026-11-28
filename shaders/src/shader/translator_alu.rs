@@ -44,6 +44,7 @@ impl Translator<'_> {
         // So the renderer can copy the window this program reads rather than
         // all 256 of them.
         self.result.meta.constants_read = self.result.meta.constants_read.max(at32 + 1);
+        self.result.meta.constant_blocks_read |= 1 << (at32 / 16);
         if !self.pixel {
             let window = self.m.constant_u(at32);
             return self.vertex_constant(window);

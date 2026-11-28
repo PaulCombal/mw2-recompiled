@@ -215,6 +215,45 @@ struct Stats {
     frame_cpu: [Stat; FRAME_BINS],
     frame_wall: [Stat; FRAME_BINS],
     shaders_seen: Stat,
+    // Runs of registers written from the stream (type 0 and SET_CONSTANT), by the window
+    // they start in and their length; the dwords they carry; ONE_REG_WRITE dwords; runs
+    // gathered because they wrapped round the ring; LOAD_ALU_CONSTANT by length.
+    runs: [[Stat; RUN_BINS]; RUN_WINDOWS],
+    run_dwords: [Stat; RUN_WINDOWS],
+    one_reg_dwords: Stat,
+    runs_gathered: Stat,
+    alu_loads: [Stat; RUN_BINS],
+    alu_load_dwords: Stat,
+}
+
+const RUN_BINS: usize = 8;
+const RUN_WINDOWS: usize = 4;
+
+// The histogram's bin for a run of `n` dwords: 1, 2, 3-4, 5-8, 9-16, 17-64, 65-256, more.
+#[cfg(feature = "diagnostics")]
+fn run_bin(n: u32) -> usize {
+    match n {
+        0..=1 => 0,
+        2 => 1,
+        3..=4 => 2,
+        5..=8 => 3,
+        9..=16 => 4,
+        17..=64 => 5,
+        65..=256 => 6,
+        _ => 7,
+    }
+}
+
+// The window a run starts in: ordinary registers, float constants, fetch constants,
+// booleans and loops.
+#[cfg(feature = "diagnostics")]
+fn run_window(first: u32) -> usize {
+    match first {
+        f if f < r::CONSTANT_BASE_ALU => 0,
+        f if f < r::CONSTANT_BASE_FETCH => 1,
+        f if f < r::CONSTANT_BASE_BOOL => 2,
+        _ => 3,
+    }
 }
 
 const FRAME_BINS: usize = 7;
@@ -243,6 +282,12 @@ static STATS: Stats = Stats {
     frame_cpu: [const { Stat::new() }; FRAME_BINS],
     frame_wall: [const { Stat::new() }; FRAME_BINS],
     shaders_seen: Stat::new(),
+    runs: [const { [const { Stat::new() }; RUN_BINS] }; RUN_WINDOWS],
+    run_dwords: [const { Stat::new() }; RUN_WINDOWS],
+    one_reg_dwords: Stat::new(),
+    runs_gathered: Stat::new(),
+    alu_loads: [const { Stat::new() }; RUN_BINS],
+    alu_load_dwords: Stat::new(),
 };
 // Counted in every build: the first 32 are warned of.
 static UNKNOWN_OPCODES: AtomicU32 = AtomicU32::new(0);
@@ -355,6 +400,8 @@ mod host {
     }
 
     pub fn raise_interrupt(cpu_mask: u32) {
+        // As write_physical: the draws' copies made before the title hears of anything.
+        crate::runtime::bridge::renderer::settle_copies();
         super::super::gpu::raise_command_processor_interrupt(cpu_mask);
     }
 
@@ -435,6 +482,22 @@ impl Source {
         self.remaining -= n;
     }
 
+    /// Whether the next `n` dwords lie in one piece: a linear buffer's always, the ring's
+    /// unless they wrap round its end.
+    #[inline(always)]
+    fn in_one_piece(&self, n: u32) -> bool {
+        self.wrap_mask == 0 || (self.index & self.wrap_mask) + n <= self.wrap_mask + 1
+    }
+
+    /// The next `n` dwords, which lie in one piece (in_one_piece), in place, and past them.
+    #[inline(always)]
+    fn take_in_place(&mut self, n: u32) -> *const u32 {
+        let taken = self.words.wrapping_add((self.index & self.index_mask) as usize);
+        self.index = self.index.wrapping_add(n);
+        self.remaining -= self.remaining.min(n);
+        taken
+    }
+
     /// The next `n` dwords as the guest holds them, big-endian, and past them: where
     /// they lie in one piece, in place; where they wrap round the ring, gathered into
     /// `room`.
@@ -501,6 +564,9 @@ fn shader_dump_directory() -> Option<&'static std::ffi::CStr> {
 
 /// The command processor's write of a dword at a physical address.
 pub fn write_physical(rd: &mut Renderer, physical_address: u32, value: u32) {
+    // The title may conclude from this that draws parsed so far are done, and rewrite
+    // what they read: their copies are made first (copy_worker.rs).
+    renderer::settle_copies();
     let va = kernel::from_physical(physical_address & !3);
     if va == 0 {
         return;
@@ -581,6 +647,9 @@ fn register_or_aperture(registers: &RegisterFile, index: u32) -> u32 {
 // whole count, written when the GPU has finished counting -- as the console's GPU
 // writes it.
 fn write_sample_counts(address: u32, count: u32) {
+    // A count tells the title the draws it brackets are done: their copies first
+    // (copy_worker.rs).
+    renderer::settle_copies();
     const RECORD_BYTES: u32 = 0x20;
     let record = address & !(RECORD_BYTES - 1);
     let va = if record != 0 { kernel::from_physical(record) } else { 0 };
@@ -676,6 +745,10 @@ impl CommandProcessor {
         // at SCRATCH_ADDR + 4n, as Xenia's command processor does. The title writes one
         // and then WAIT_REG_MEMs on that memory to know the GPU has got this far.
         if (SCRATCH_REG0..=SCRATCH_REG0 + 7).contains(&index) {
+            // The title can read a scratch register back without the write-back, and learn
+            // from it how far the parse got: the copies of the draws parsed are made first
+            // (copy_worker.rs).
+            renderer::settle_copies();
             let n = index - SCRATCH_REG0;
             let umsk = register_or_aperture(&self.registers, SCRATCH_UMSK);
             if umsk & (1 << n) != 0 {
@@ -712,8 +785,34 @@ impl CommandProcessor {
     // A run of `count` registers from `first`, read from `s`. Above the ordinary
     // registers' start nothing has a side effect -- every constant window is there -- so
     // a run there goes into the file a block at a time.
-    #[inline]
-    fn write_registers(&mut self, rd: &mut Renderer, mut first: u32, mut count: u32, s: &mut Source) {
+    //
+    // A packet in three carries one, nearly always a short run that lies in one piece in
+    // the stream: that is written here, inline, straight from the stream. The rest -- a
+    // run among the registers with side effects, or one that wraps round the ring's end --
+    // goes out of line, where the gathering buffer is.
+    #[inline(always)]
+    fn write_registers(&mut self, rd: &mut Renderer, first: u32, count: u32, s: &mut Source) {
+        #[cfg(feature = "diagnostics")]
+        {
+            let window = run_window(first);
+            STATS.runs[window][run_bin(count)].bump();
+            STATS.run_dwords[window].add(u64::from(count));
+            if !s.in_one_piece(count) {
+                STATS.runs_gathered.bump();
+            }
+        }
+        if first >= r::CONSTANT_BASE_REGISTERS && first.wrapping_add(count) <= REGISTER_COUNT && s.in_one_piece(count) {
+            let taken = s.take_in_place(count);
+            // SAFETY: `count` dwords at `taken`, in one piece in guest memory (in_one_piece).
+            self.registers.write_run(first, count, |i| unsafe { taken.add(i).read() });
+            return;
+        }
+        self.write_registers_apart(rd, first, count, s);
+    }
+
+    // The rest of write_registers.
+    #[inline(never)]
+    fn write_registers_apart(&mut self, rd: &mut Renderer, mut first: u32, mut count: u32, s: &mut Source) {
         if first < r::CONSTANT_BASE_REGISTERS || first.wrapping_add(count) > REGISTER_COUNT {
             for i in 0..count {
                 let value = s.next();
@@ -1423,6 +1522,9 @@ impl CommandProcessor {
 
             PM4_WAIT_REG_MEM => {
                 // { info, address, reference, mask, poll interval }
+                // The title may be waiting to be let on by something these draws did:
+                // their copies are made before it is (copy_worker.rs).
+                renderer::settle_copies();
                 if count >= 5 {
                     let info = s.next();
                     let address = s.next();
@@ -1498,7 +1600,11 @@ impl CommandProcessor {
             return;
         }
         #[cfg(feature = "diagnostics")]
-        stream::note_read(va, u64::from(size_dwords) * 4);
+        {
+            stream::note_read(va, u64::from(size_dwords) * 4);
+            STATS.alu_loads[run_bin(size_dwords)].bump();
+            STATS.alu_load_dwords.add(u64::from(size_dwords));
+        }
         let first = CONSTANT_WINDOWS[kind as usize] + index;
         if first + size_dwords > REGISTER_COUNT {
             for i in 0..size_dwords {
@@ -1565,6 +1671,7 @@ impl CommandProcessor {
                     if header & 0x8000 == 0 {
                         self.write_registers(rd, base, payload, s);
                     } else {
+                        STATS.one_reg_dwords.add(u64::from(payload));
                         for _ in 0..payload {
                             let value = s.next();
                             self.write_register(rd, base, value);
@@ -1854,6 +1961,36 @@ pub fn report() {
             log_info!("  0x%02X %-22s %llu", op as u32, opcode_name(op as u32).unwrap_or(c"(unknown)"), n);
         }
     }
+    let row = |n: &[Stat; RUN_BINS]| {
+        crate::log::format_text!(
+            "1: %llu, 2: %llu, 3-4: %llu, 5-8: %llu, 9-16: %llu, 17-64: %llu, 65-256: %llu, more: %llu",
+            n[0].get(),
+            n[1].get(),
+            n[2].get(),
+            n[3].get(),
+            n[4].get(),
+            n[5].get(),
+            n[6].get(),
+            n[7].get()
+        )
+    };
+    for (window, name) in
+        [c"ordinary registers", c"float constants", c"fetch constants", c"booleans and loops"].iter().enumerate()
+    {
+        log_info!(
+            "gpu: register runs from the stream into %s, %llu dwords, by length: %s",
+            *name,
+            s.run_dwords[window].get(),
+            row(&s.runs[window]).as_c_str()
+        );
+    }
+    log_info!(
+        "gpu: %llu ONE_REG_WRITE dwords; %llu runs gathered round the ring's end; LOAD_ALU_CONSTANT %llu dwords, by length: %s",
+        s.one_reg_dwords.get(),
+        s.runs_gathered.get(),
+        s.alu_load_dwords.get(),
+        row(&s.alu_loads).as_c_str()
+    );
     if s.cond_writes_written.get() != 0
         || s.cond_writes_skipped.get() != 0
         || s.reg_rmws_applied.get() != 0

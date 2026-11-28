@@ -6,8 +6,7 @@
 // skips all of this.
 
 // The custom maps' (src/hooks/custom_map_list.rs), which only the update's multiplayer has.
-#[cfg_attr(not(T_UI_LoadArenas), allow(dead_code))]
-pub mod arena;
+pub use mw2_install::arena;
 #[allow(unsafe_code)]
 pub mod spawn;
 

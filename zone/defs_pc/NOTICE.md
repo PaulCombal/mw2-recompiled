@@ -9,5 +9,5 @@ files `src/Common/Game/IW4/IW4_Assets.h` and `src/ZoneCode/Game/IW4/`, also lice
 GNU General Public License v3.0: the PC game's (version 276) structures and how it streams them.
 
 `iw4_assets.h` describes the structures; `commands.txt` and `assets/*.txt` say how the game
-streams them out of a zone. The map converter (`launcher/mapport/`, through `launcher/zone/`)
+streams them out of a zone. The map converter (`mapport/`, through the zone crate)
 reads a PC map with them.

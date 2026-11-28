@@ -178,11 +178,9 @@ defines them with `kernel_import!(<Name>, ...)` in `src/runtime/kernel/`:
 | `net.rs` | XNet and Winsock |
 | `audio.rs`, `xma.rs` | `XAudio*`, `XMA*`, the render driver and the XMA decoder's contexts ([audio.md](audio.md)) |
 
-`cargo xtask` writes `kernel_stubs.rs` into the recompiled Rust tree (`xtask/src/generate.rs`):
-every import the recompiled code declares and no `src/runtime/kernel/*.rs` defines (with
-`kernel_import!`) becomes a stub, defined with `kernel_import!` too, that logs its name once, counts
-its calls and returns 0. `src/runtime/kernel/stubs.rs` includes the file. The end-of-run report lists
-the stubs a run reached.
+An import the recompiled code declares and nothing defines is a generated stub
+(`kernel_stubs.rs`, `xtask/src/generate.rs`) that logs its name once and returns
+0; the end-of-run report lists the stubs a run reached.
 
 Two kernel exports are data, not functions, and nothing resolves them, so
 `kernel::initialise` writes them into the image:
@@ -218,8 +216,7 @@ Both recompiler configs name the pair (`setjmp_address`, `longjmp_address`), so
 the recompiler emits host `setjmp`/`longjmp` there, saving the guest registers
 at the `setjmp` and restoring them when the `longjmp` lands. Recompiled as
 ordinary functions, the `longjmp` would return into the code that raised the
-error, which carries on in a state the title never expects: a client dropped at
-the end of a match hung in its error cleanup. A function that calls `setjmp`
+error, which carries on in a state the title never expects. A function that calls `setjmp`
 keeps its registers in the context, where the host `longjmp` restores them,
 although the others keep theirs in locals ([building.md](building.md)).
 
@@ -266,9 +263,7 @@ The one lock also holds the handle table and the headers, so a call takes it
 once. A waiting thread has a condition variable of its own, registered with
 every object it waits on, and is woken once a sleep however many of them are
 signalled: a wake is a system call, and one for a thread that is awake already
-costs most where the lock is wanted most. An object that is not a dispatcher
-object (a file, a session, an enumerator) sits in the table as `Kind::Other`,
-boxed as `dyn Any` (`src/runtime/kernel/objects.rs`).
+costs most where the lock is wanted most.
 
 Critical sections are the console's `RTL_CRITICAL_SECTION` in guest memory,
 taken with an atomic on the lock count; only a thread that finds one held
@@ -346,8 +341,9 @@ it is in (null page, function table slot, image, past the top of the space),
 and a backtrace. The recompiled functions are ordinary `sub_XXXXXXXX` symbols
 (exported on Linux, and only they: `runtime/exports.list`), so the host
 backtrace is the guest call stack; runtime frames print as `mw2-sp(+offset)`; on Windows frames are printed as `exe+offset` for `llvm-symbolizer`. A
-`SIGTRAP` is a guest trap instruction, which IW4 uses for its asserts. A
-`SIGFPE` is an integer divide by zero whose guarding trap the recompiler drops.
+`SIGTRAP` is a guest trap instruction, which IW4 uses for its asserts. A guest
+divide never raises `SIGFPE`: it gives 0 where the host's would trap
+([security.md](security.md)).
 An indirect call to an address outside the code section is reported, and ends
 the process, instead of reading past the function table
 ([security.md](security.md)). With `MW2_TRACE_INDIRECT`, which `build.rs` always defines, so is
@@ -371,9 +367,7 @@ once for each executable, since the campaign and the multiplayer are the same
 engine built twice with every function somewhere else. XenonRecomp emits each
 function as `__imp__sub_XXXXXXXX` with a weak alias `sub_XXXXXXXX`;
 `guest_hook!(T_x, ...)` defines a strong `sub_` in its place, and
-`T_x.original(ctx, memory)` calls the original. The hooks cover D3D9's present and
-command-buffer paths, the engine's print, error and console paths, the job
-system's spin waits, and the memcard setup.
+`T_x.original(ctx, memory)` calls the original.
 
 Stores the recompiler marks as hardware-register writes (a store followed by
 `eieio`) go through `ppc_mm_store_u32` from `config/mw2_hooks.rs`, which the

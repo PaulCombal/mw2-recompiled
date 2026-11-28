@@ -3,8 +3,7 @@
 //
 // It is the launcher's library target, apart from the binary, so that its tests run:
 // the binary has no harness to run them with, as its `main` is the C runtime's
-// (main.rs), and it links with the C++ a build folder holds. `cargo test -p
-// mw2-launcher` runs these alone, without the C++.
+// (main.rs). `cargo test -p mw2-launcher --lib` runs these alone.
 #![deny(unsafe_code)]
 
 /// The release this build is ("v0.8.2"), cargo xtask's --release-tag, or empty: a build

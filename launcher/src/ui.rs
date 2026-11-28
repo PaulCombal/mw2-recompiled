@@ -109,6 +109,9 @@ pub struct Card {
     pub name: Vec<u8>,
     pub title: Vec<u8>,
     pub label: Vec<u8>,
+    /// One of several to choose from: the chosen one is framed in amber, the others
+    /// dimmed. None: shown as it is.
+    pub chosen: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -131,6 +134,8 @@ pub struct Frame {
     // The play entries show the network the game plays on and the profile at the first
     // controller.
     pub cards: Vec<Card>,
+    // And under them, what the chosen card's setting allows, in two columns.
+    pub features: Vec<Vec<u8>>,
 
     pub slider: f32,              // a setting with a range: where it is on its track, 0 to 1
     pub fov: f32,                 // and the field of view the pane shows a picture of (preview.rs),
@@ -158,6 +163,7 @@ impl Default for Frame {
             amount: Vec::new(),
             fraction: -1.0,
             cards: Vec::new(),
+            features: Vec::new(),
             slider: -1.0,
             fov: 0.0,
             aspect: 16.0 / 9.0,
@@ -591,9 +597,16 @@ pub fn draw(
         // Side by side: a square emblem on the left of a banner -- stripes for the
         // title's picture -- with the name, and the title under it -- and what the card
         // is above it.
-        let (height, width, gap, label) = (s(58.0), s(300.0), s(16.0), small.size + s(6.0));
+        // The line above a card is left out when no card has one.
+        let labelled = frame.cards.iter().any(|card| !card.label.is_empty());
+        let (height, width, gap) = (s(58.0), s(300.0), s(16.0));
+        let label = if labelled { small.size + s(6.0) } else { 0.0 };
+        // A card not chosen is its emblem alone.
+        let width_of = |card: &Card| if card.chosen == Some(false) { height } else { width };
         let mut x = left;
         for (index, card) in frame.cards.iter().enumerate() {
+            let width = width_of(card);
+            let whole = card.chosen != Some(false);
             if !card.label.is_empty() {
                 spaced(draw, small, small.size, point(x, py), rgba(236, 236, 232, 170), &card.label, s(1.0));
             }
@@ -609,7 +622,7 @@ pub fn draw(
             );
             draw.push_clip(min, max);
             let mut stripe = x + height - s(20.0);
-            while stripe < max.x {
+            while whole && stripe < max.x {
                 draw.add_quad_filled(
                     point(stripe + s(26.0), min.y),
                     point(stripe + s(32.0), min.y),
@@ -623,19 +636,52 @@ pub fn draw(
             draw.add_rect_filled(min, point(x + height, max.y), rgba(0, 0, 0, 60), 0.0);
             draw_emblem(draw, steam, card.emblem, point(x + s(13.0), min.y + s(13.0)), height - s(26.0), AMBER);
             draw.add_rect(min, max, rgba(236, 236, 232, 30), 0.0, std_max(1.0, s(1.0)));
-            let text_left = x + height + s(12.0);
-            let text_width = max.x - text_left - s(10.0);
-            let name = fitted(menu, &card.name, text_width);
-            draw.add_text(menu, menu.size, point(text_left, min.y + s(6.0)), WHITE, &name, 0.0);
-            let title = fitted(small, &card.title, text_width);
-            draw.add_text(small, small.size, point(text_left, max.y - small.size - s(7.0)), AMBER, &title, 0.0);
+            if whole {
+                let text_left = x + height + s(12.0);
+                let text_width = max.x - text_left - s(10.0);
+                let name = fitted(menu, &card.name, text_width);
+                draw.add_text(menu, menu.size, point(text_left, min.y + s(6.0)), WHITE, &name, 0.0);
+                let title = fitted(small, &card.title, text_width);
+                draw.add_text(small, small.size, point(text_left, max.y - small.size - s(7.0)), AMBER, &title, 0.0);
+            }
+            match card.chosen {
+                Some(true) => {
+                    let edge = std_max(2.0, s(2.0));
+                    draw.add_rect(min, max, AMBER, 0.0, edge);
+                }
+                Some(false) => draw.add_rect_filled(min, max, rgba(0, 0, 0, 120), 0.0),
+                None => {}
+            }
             x += width + gap;
-            if x + width > right && index + 1 != frame.cards.len() {
+            if frame.cards.get(index + 1).is_some_and(|next| x + width_of(next) > right) {
                 x = left;
                 py += label + height + gap;
             }
         }
         py += label + height + s(18.0);
+    }
+    if !frame.features.is_empty() {
+        // An amber square before each, down the first column and then the second; a
+        // little smaller than the body's text.
+        let size = s(18.0);
+        let (row, rows) = (size + s(7.0), frame.features.len().div_ceil(2));
+        let (mark, indent) = (s(6.0), s(16.0));
+        let wide = |text: &[u8]| body.width(size, text);
+        let first = frame.features[..rows].iter().map(|feature| wide(feature)).fold(0.0, std_max);
+        let last = frame.features[rows..].iter().map(|feature| wide(feature)).fold(0.0, std_max);
+        // Past the first column's widest, unless the second's widest would then run off.
+        let second = std_min(left + indent + first + s(36.0), right - indent - last);
+        for (index, feature) in frame.features.iter().enumerate() {
+            let x = if index < rows { left } else { second };
+            let y = py + row * (index % rows) as f32;
+            let middle = y + size * 0.5;
+            draw.add_rect_filled(point(x, middle - mark * 0.5), point(x + mark, middle + mark * 0.5), AMBER, 0.0);
+            // fitted measures at the font's own size: the room scaled to it.
+            let room = if index < rows { second - x - indent - s(12.0) } else { right - x - indent };
+            let text = fitted(body, feature, room * body.size / size);
+            draw.add_text(body, size, point(x + indent, y), rgba(236, 236, 232, 225), &text, 0.0);
+        }
+        py += row * rows as f32 + s(14.0);
     }
     if frame.busy {
         let count = format!("STEP {} OF {}", frame.step, frame.steps);

@@ -3,8 +3,7 @@
 # defs/assets/, a walk of every asset of a zone in the loader's order, and the shaders
 # that walk finds, as the renderer will be handed them. The launcher's compile pass
 # lists the game's shaders with it. defs/ and defs_pc/ are GPL 3.0 definitions
-# (NOTICE.md in each); the map converter's C++ (launcher/mapport/, launcher/zone/)
-# reads them too.
+# (NOTICE.md in each); the map converter (mapport/) reads them with this crate too.
 [package]
 name = "mw2-zone"
 version = "0.0.0"

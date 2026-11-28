@@ -49,7 +49,7 @@ mw2-truetype = { path = "truetype" }
 mw2-install = { path = "install" }
 
 [workspace]
-members = ["install", "launcher", "shaders", "truetype", "wmapro", "zone"]
+members = ["install", "launcher", "mapport", "shaders", "truetype", "wmapro", "zone"]
 # Each of these is a workspace of its own.
 exclude = ["generated", "relay", "xtask"]
 

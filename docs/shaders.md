@@ -50,8 +50,8 @@ payload is command buffer rather than microcode.
 
 A shader is identified by a hash of its microcode. An `IM_LOAD`'s microcode and
 hash are kept by address, length and stage while the memory watch
-(`src/runtime/gpu/memory_watch.rs`) says nothing has written their pages, so a frame's
-thousands of loads of a few hundred shaders read and hash each one once. With diagnostics compiled in
+(`src/runtime/gpu/memory_watch.rs`) says nothing has written their pages, so a frame
+loading the same shaders over and over reads and hashes each one once. With diagnostics compiled in
 (the default; `cargo xtask build --release` removes them, see
 [building.md](building.md)), `MW2_DUMP_SHADERS=<dir>` writes each distinct
 program as
@@ -124,7 +124,7 @@ chooses the addressing register (a0 rather than aL) and says nothing about
 whether addressing happens. Whether a source is addressed comes from
 `const_0_rel_abs` (w1 bit 31) and `const_1_rel_abs` (w1 bit 30), selected by how
 many earlier operands were constants, because the hardware carries two bits for
-three possible constant operands (`Alu::SourceConstantIsAddressed`).
+three possible constant operands (`source_constant_is_addressed`).
 
 ## The module interface
 
@@ -172,7 +172,7 @@ the draw's record, in the arena at the dword the draw passes as its base vertex
   invocation (`OpGroupNonUniformBroadcastFirst`). Without that, every
   constant read in a pixel shader would be a load per pixel. A subgroup never
   spans two draws: a texture index without `NonUniform` already relies on
-  that. Vulkan does not promise it, so it is measured: `MW2_SUBGROUP_CHECK=1`
+  that. Vulkan does not promise it, so it is checked: `MW2_SUBGROUP_CHECK=1`
   (diagnostics builds) draws, at the renderer's start, 10^6 adjacent
   triangles of one to three pixels, each its own draw, in multi-draw runs as
   the renderer gathers them (half without indices, half with; one call a draw
@@ -187,50 +187,38 @@ the draw's record, in the arena at the dword the draw passes as its base vertex
   the device puts several triangles in one subgroup at all. The check passes
   only where the control shows it does; where it does not, the check could
   not have failed and says so ("no verdict"). `MW2_SUBGROUP_CHECK=2` runs the
-  control alone.
-
-  | Device | Subgroup | The check (multi-draw, one call a draw) | The control |
-  |---|---|---|---|
-  | AMD Radeon (RADV, Renoir) | 64 | passed: no subgroup held two draws | 1,921,575 of 2,000,000 pixels saw another triangle's record |
-  | lavapipe (llvmpipe, LLVM 20) | 8 | no subgroup held two draws, no verdict | none: a subgroup is one triangle's, so the check cannot fail there |
+  control alone. On RADV (subgroup 64) the check passes and the control shows
+  triangles sharing subgroups; on lavapipe (subgroup 8) a subgroup is one
+  triangle's, so the check gives no verdict there.
 
   A device that fails needs the record taken per pixel (`OpLoad` of the
   flat input alone), a translator change and so a new shader build.
 - **Each record word is loaded once**, where a driver would sink the load:
   in the narrowest block that dominates every read of it, ahead of the first
-  (`RecordWord`, `PlaceRecordLoads`). A straight-line program is one block,
+  (`record_word`, `place_record_loads`). A straight-line program is one block,
   so a word is loaded at its first read. In a program with the dispatcher a
   word read in one case is loaded in that case, and one read in several at
   the top of the iteration, in the block that switches. A driver merges two
   equal loads only where one dominates the other, which a straight-line
-  program's repeated loads already were; the dispatcher's cases each loaded
-  the words again. Loading every word in the entry block instead leaves the
-  placement to the driver: RADV sinks a load to where its reads meet but not
-  into a loop, so the words stayed live across the dispatcher's loop and it
-  spilled scalar registers in 1,089 pixel shaders (356 unscaled), and a
-  driver that does not sink would keep every word live across every program.
-  On RADV (Renoir), over the game's 15,044 shaders, the 1,688 pixel shaders
-  with the dispatcher come out with 6% fewer instructions and 17-20% fewer
-  scalar loads; 77 of them spill a few scalar registers more than before
-  (2 unscaled), with no fewer waves; the straight-line pixel shaders and the
-  vertex shaders compile to the same code as before. Building all of them
-  takes 4-6% fewer CPU instructions. The GPU time of a frame moves by under
-  1% (S.S.D.D.: 720p -1.0%, 1080p and three times the title's size -0.4%),
-  at the edge of the run-to-run spread.
+  program's repeated loads already are, but the dispatcher's cases would each
+  load the words again. Loading every word in the entry block instead leaves
+  the placement to the driver: RADV sinks a load to where its reads meet but
+  not into a loop, so the words stay live across the dispatcher's loop and
+  spill scalar registers, and a driver that does not sink would keep every
+  word live across every program ([performance.md](performance.md)).
 - **Why no push constants.** RADV places push constants per draw by reading
-  each bound shader's description, a cache miss on every draw, which was a
-  third of the recorder thread's time; binding a texture set per draw was
-  another tenth. Both are gone: the two sets are bound once a command buffer,
-  and a draw is a pipeline when it changes, the dynamic state that changed,
-  and the draw.
+  each bound shader's description, a cache miss on every draw, and binding a
+  texture set per draw is another per-draw cost. So the two sets are bound
+  once a command buffer, and a draw is a pipeline when it changes, the dynamic
+  state that changed, and the draw ([performance.md](performance.md)).
 - **Modules are SPIR-V 1.3**, the first version with `BaseVertex` and the
   subgroup operations in the core. Before 1.4 an entry point lists only its
   Input and Output variables.
 
 - Every constant is in the frame arena, copied there from the register file,
   and found by the offset the draw's record holds for its block. Binding five
-  dynamic uniform blocks at every draw, as the runtime once did, cost a
-  descriptor upload each time, and nearly every draw moves one of them.
+  dynamic uniform blocks at every draw would cost a descriptor upload each
+  time, and nearly every draw moves one of them.
 - The hardware constant file holds 512 vec4; `SQ_VS_CONST` and `SQ_PS_CONST`
   give each stage a window into it (D3D9 gives vertex the low half, pixel the
   high half).
@@ -238,12 +226,13 @@ the draw's record, in the arena at the dword the draw passes as its base vertex
   reads through the constant table: a uvec4 whose x is the window's base, then
   for each of the file's 32 blocks of 16 vec4 the vec4 index of its copy in
   the arena. Constant `i` is `arena[table[4 + (base + i) / 16] + (base + i) % 16]`.
-  A draw changes a block or so of the ten or so a vertex program reads (its
-  world matrix), and the table lets it copy only the blocks that changed.
+  A draw usually changes few of the blocks a vertex program reads (its world
+  matrix), and the table lets it copy only the blocks that changed.
 - The translator records the highest float constant a program reads
-  (`Translation::constantsRead`) so the renderer copies only that much, unless
-  the program addresses constants through a0/aL (`addressedConstants`), where
-  the whole window must go across.
+  (`constants_read`) and the blocks of 16 it names (`constant_blocks_read`), so
+  the renderer copies only those; a pixel window is laid out whole but only
+  the named blocks are written into it. A program that addresses constants
+  through a0/aL (`addressed_constants`) needs the whole window.
 - A vertex shader writes `gl_Position` and all sixteen interpolators to
   locations 0..15 (zero until written), because a pixel-shader input with no
   vertex output behind it is invalid. A pixel shader reads the interpolators it
@@ -251,7 +240,7 @@ the draw's record, in the arena at the dword the draw passes as its base vertex
   ones it uses are the low temporaries any instruction reads, a texture
   fetch's coordinates included: some are read by nothing else.
 - Set 1 declares a slot as 2D, cube or 3D according to how the program fetches
-  it (`Translation::textureKinds`); 1D fetches are sampled as 2D at v = 0.
+  it (`texture_kinds`); 1D fetches are sampled as 2D at v = 0.
   The three kinds' variables share binding 0, which Vulkan allows for
   variables whose types the binding's descriptor type admits: a sampled
   image's descriptor is the same whatever its view's kind, and ids are shared
@@ -368,7 +357,7 @@ move.
 | Vertex 0..15 | interpolators |
 | Vertex 62 | position |
 | Vertex point size | dropped; point size is fixed at 1 |
-| Vertex eM0..eM5 (memory export) | dropped and counted (`droppedMemoryExports`) |
+| Vertex eM0..eM5 (memory export) | dropped and counted (`dropped_memory_exports`) |
 | Pixel 0..3 | colour targets |
 | Pixel depth | translation fails |
 | Pixel, anything else | dropped and counted |

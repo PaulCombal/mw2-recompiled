@@ -56,7 +56,7 @@ or a patch.
    the `generated` link at it;
 7. writes the kernel import stubs (`kernel_stubs.rs`) into that tree
    (`xtask/src/generate.rs`);
-8. builds the game with cargo, then the launcher (cargo, its C++ through CMake) and the tools
+8. builds the game with cargo, then the launcher (cargo) and the tools
    ([Cargo](#cargo)).
 
 `cargo xtask prepare` stops after step 4, `cargo xtask recompile` after step 7. A
@@ -70,13 +70,13 @@ before the guest code it depends on is generated.
 | `--title sp\|mp` | `sp` (default): `default.xex`, the campaign and special ops. `mp`: `default_mp.xex`, the multiplayer. Each has its own recompiled tree, switch tables, recompiler config and build directory |
 | `--tu <path>` | the title update: its package, or a folder holding its files. Needed until `mw2/update/` has them |
 | `--tu0` | builds the disc's own executables, without the update; see [The disc version](#the-disc-version) |
-| `--release` | builds without diagnostics (the `diagnostics` feature off) and, on Linux, with the launcher's C++ library linked statically (`portable`); the release game compiles no C++, and on Linux links no C++ library; adds `-release` to the build directory |
+| `--release` | builds without diagnostics (the `diagnostics` feature off, `portable` on); the release game and the launcher compile no C++, and on Linux link no C++ library; adds `-release` to the build directory; the guest code writes the return address only where a hook or a kernel import can read it (XenonRecomp's `--minimal-lr`, from the functions of the title's table in `runtime/title.h`), where a diagnostics build writes it at every call for the pacing trace's walk of guest frames |
 | `--windows` | cross-compiles for Windows with llvm-mingw; the build directory becomes `build-win...` and the executable `mw2.exe` |
 | `--llvm-mingw <dir>` | the unpacked [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) release, required by `--windows`; `LLVM_MINGW` in the environment names it too |
 | `--iso <path>` | the disc image. Without one, `mw2/tu0/default.xex` and `mw2/tu0/default_mp.xex` are enough to build, and no game data is extracted |
 | `--build-dir <dir>` | builds there instead of the default directory |
-| `--targets "<target> ..."` | builds the game and only those targets instead of all of them: `launcher` and `translate-shader`, which cargo builds, or CMake's (`map-port`, ...) |
-| `--keep-generated` | keeps the recompiled tree already there (skips steps 5-6; the stubs are written again), for a second build of the same title |
+| `--targets "<target> ..."` | builds the game and only those targets instead of all of them: `launcher` and `translate-shader`, which cargo builds, or CMake's |
+| `--keep-generated` | keeps the recompiled tree already there (skips steps 5-6; the stubs are written again), for a second build of the same title; a tree recompiled for the other kind of build (`ppc_rs/lr-mode`) is recompiled anyway |
 | `--release-tag <tag>` | the release the build is published as (`v0.3.0`): the launcher looks for a newer one than it. Without it the launcher does not |
 | `--cmake-extra <arg>` | one argument for CMake's configure step (a compiler launcher, `-DFETCHCONTENT_BASE_DIR=...`), passed as it is, not split at spaces; repeated for more |
 
@@ -112,7 +112,7 @@ again, into `target/`.
 | `tools/inflate_diff.py`, `tools/inflate_diff.rs` | the `install` crate's inflate against zlib's: the game's gunzip on every image's XLAST, the launcher's unzlib on the game's fastfiles' zones, made streams and damaged copies of each |
 | `tools/launcher_diff.py`, `tools/launcher_diff.rs`, `tools/launcher_diff.cpp` | the launcher's Rust against the C++ it replaced, compiled from git: its settings, profile screen, a bug report's scrubbing and its menu sounds' finding |
 | `tools/font_diff.py`, `tools/font_diff.rs`, `tools/font_diff.cpp` | the screens' font rasteriser against stb_truetype |
-| `tools/draw_diff.py`, `tools/draw_diff.rs`, `tools/draw_diff.cpp` | the launcher's drawing against Dear ImGui, which drew its window before: the font atlas, the glyphs, the triangles of random frames and their pixels |
+| `tools/draw_diff.py`, `tools/draw_diff.rs`, `tools/draw_diff.cpp` | the launcher's drawing against Dear ImGui: the font atlas, the glyphs, the triangles of random frames and their pixels |
 | `tools/ui_diff.py`, `tools/ui_diff.rs`, `tools/ui_diff.cpp` | the launcher's window against the C++ it replaced, compiled from git with Dear ImGui: its screens as triangles and pixels, the backdrop under them, and what it reads of SDL's events |
 | `tools/zone_diff.py`, `tools/zone_diff.rs`, `tools/zone_diff.cpp` | the zone crate against the C++ reader it replaced, compiled from git with zlib: the definitions and rules as read, expressions, the executables' tables and shaders, every fastfile's zone, walk and shaders, and damaged zones |
 | `rustfmt.toml` | the width for `cargo fmt`; `rustfmt` and `clippy` come with the pinned toolchain |
@@ -235,7 +235,7 @@ kernel stubs are Rust.
   for both in a build folder's target folder. The C++ `build.rs` compiles takes its
   headers from that build, as the launcher's C++ does (its `build.rs` hands CMake the
   folder as `MW2_SDL_DIR`), and rustc links it, with what it asks for. Unlike the rest of the C, it is compiled
-  without ThinLTO and the profile. `sdl3-sys` builds it once in a target folder and
+  without ThinLTO. `sdl3-sys` builds it once in a target folder and
   never again, so `build.rs` stops a build whose toolchain files or llvm-mingw
   changed since.
   `cargo clean -p sdl3-sys` builds it again, as a newly installed development package
@@ -372,24 +372,21 @@ The switches are in [switches.md](switches.md).
 
 ## CMake options
 
-CMake builds the launcher's C++ (`launcher_core`, which the launcher's `build.rs` links)
-and the tools.
+CMake builds the tools, and on Windows the Vulkan import library the launcher links; its
+cache holds the version and the logging the launcher's `build.rs` reads.
 
 | option | default | effect |
 |---|---|---|
 | `MW2_VERSION` | `tu6` | `tu6`, or `tu0` for the disc's: which executables in `mw2/` the launcher installs, by their SHA-256, which the launcher's `build.rs` reads from the cache; with `tu0` the launcher installs the disc as it is |
 | `MW2_LOGGING` | `ON` | `OFF` compiles out every log line, warnings included |
-| `MW2_PORTABLE` | `OFF` | links map-port's libstdc++ and libgcc statically (Linux) |
+| `MW2_PORTABLE` | `OFF` | `cargo xtask build --release` sets it; no target of CMake's links a C++ library |
 | `MW2_LTO` | `ON` | ThinLTO: every target, the fetched libraries included, optimised across files at the link, with `lld` ([Optimisation](#optimisation)) |
 | `MW2_LTO_CACHE` | `<build>/lto-cache` | where the linker keeps ThinLTO's results for the next link |
 
 The game's options are environment variables of the same names that `build.rs`
 reads (`MW2_LOGGING`, `MW2_LTO`, `MW2_LTO_CACHE`),
 with the same effect on the C++ it compiles; `MW2_LOGGING=OFF` compiles out the
-Rust's log lines too. The game is compiled for x86-64-v2 (`-march` in `build.rs`,
-`target-cpu` in `.cargo/config.toml`): below SSSE3 every big-endian vector load,
-store and permute of the recompiled code becomes sixteen byte moves.
-`src/runtime/cpu_level.rs` tells a player whose processor lacks the level.
+Rust's log lines too. The game is compiled for x86-64-v2 ([Optimisation](#optimisation)).
 
 The launcher's `build.rs` reads the SHA-256 of the images in `mw2/` and `mw2/tu0/`
 (the `.pe` files `cargo xtask prepare` writes, both titles' and the disc's whatever is built) and
@@ -399,8 +396,8 @@ installs only a disc with that code and that disc's update. The image, not the
 file: every region's executable decrypts to the same one under its own signed
 header. Both hash with the `install` crate, which the workspace compiles
 optimised in build scripts too (`[profile.release.package.mw2-install]`):
-unoptimised, the 128 MB took 4 s at every run of the launcher's, which any
-change to its sources runs again.
+unoptimised, hashing the 128 MB of images slows every run of the launcher's
+build script, which any change to its sources runs again.
 
 ### Optimisation
 
@@ -413,68 +410,16 @@ ThinLTO optimises the C++: what `build.rs` compiles into the game (the GPU captu
   files that did not change (`lto-cache/` in the build folder, or
   `MW2_LTO_CACHE`): a result is keyed by everything that went into it, so one
   taken from the cache is the one the link would have made.
+- **x86-64-v2** (`-march` in `build.rs`, `target-cpu` in `.cargo/config.toml`).
+  Below SSSE3 every big-endian vector load, store and permute of the recompiled
+  code becomes sixteen byte moves. `src/runtime/cpu_level.rs` tells a player
+  whose processor lacks the level.
 
-#### The Rust code
+The C++'s ThinLTO does not reach the Rust: the guest code, the runtime and the
+renderer arrive at the link as machine code, without a profile and without LTO
+across the Rust crates.
 
-The C++'s ThinLTO does not reach the Rust. The guest code, the runtime and the
-renderer arrive at the link as machine code, without a profile.
-
-**Why a Rust profile is tied to one build.** The compiler finds a function's counts by
-its mangled name and a hash of its shape. A C++ name depends only on the code, so one
-recording would serve the release, the diagnostics build and Windows alike. A Rust
-symbol carries a hash of its crate's identity, which cargo
-derives from the package and, among other things, its enabled features and the
-target. The diagnostics build (`diagnostics`), the release (`portable`) and a
-Windows build therefore name the same function three ways, and a profile recorded
-on one finds no function in the others. A release profile is therefore recorded
-on a release build, where only the console script (`MW2_CONSOLE`) of the run
-switches works: the flights and walks, the input script and the quit on arrival
-are diagnostics only. A release recording run walks a route with
-`tools/padwalk.py` ([switches.md](switches.md#moving-the-player)), which drives the
-game from outside and ends it with SIGINT, which SDL turns into a quit; or it is
-played by hand.
-
-**LTO across the Rust crates.** Cargo sets `lto` for the whole build and not per
-crate. Fat LTO (`lto = "fat"`) merges every Rust crate into one module, the guest
-code included, and fails there: a hook replaces a weak guest function with a strong
-one, which the linker resolves but a merged module refuses ("changed binding to
-STB_GLOBAL", one error per hook). ThinLTO across the Rust crates (`lto = "thin"`)
-builds, keeps every hook and inlines runtime code into the guest code; what it gains
-is measured below. Joining the Rust to the C++'s ThinLTO (`-Clinker-plugin-lto`)
-needs clang and lld from the LLVM version rustc uses (22 for rustc 1.97.1; the
-build's clang is 18).
-
-**A Rust profile.** None is built. To build one on Linux, the flags reach the release
-without a change to the code: `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS`
-around `cargo xtask build --release`, which cargo adds to `.cargo/config.toml`'s
-and the xtask's flags (`RUSTFLAGS` would replace them). Between a training build and
-the release built from its profile the names match: no function of the game's crates
-lacked counts. The training build has `-Cprofile-generate` and links an object
-defining `__wrap__exit`, which calls `__llvm_profile_write_file()` and then `_exit`,
-with `-Wl,--wrap=_exit`: the game ends through `_exit`, which skips the writer.
-LLVM's continuous mode (`%c`) would avoid the wrap, but with rustc 1.97.1 it writes a
-truncated file. The counts are merged with rustc's own `llvm-profdata` (the
-`llvm-tools` component; clang's is another LLVM version) and read back with
-`-Cprofile-use`. A profile for a build with ThinLTO across the Rust crates is
-recorded on a training build with it: one recorded without left 1730 of the game's
-functions without counts, one recorded with it none. The counts of a function local
-to its crate appear to be keyed by its codegen unit's name, which `lto` changes.
-Each title, version and system needs a profile of its own, recorded again as the
-code changes.
-
-**Measured, and why neither is on.** The builds were multiplayer releases. The
-profiles were recorded by `tools/padwalk.py` walks on mp_terminal and mp_checkpoint.
-Each build was measured by three walks of mp_afghan's route, which no profile had
-seen, the builds taking turns, and the graphics chip held the frame rate near 166.
-Per frame, the plain build's consumer took 4.33 ms of CPU time and its other threads
-10.63 ms; with ThinLTO across the Rust crates 4.13 and 10.30, with the profile 4.22
-and 10.32, with both 4.24 and 10.26. That is 2 to 5% less, about as much as walks of
-one build differ from each other (2 to 4%), and the two together gain no more than
-either alone. The campaign flight, in diagnostics builds, ran no faster with ThinLTO
-across the Rust crates. Standing at the spawn a profile was recorded at, the
-consumer's time fell 7% and the other threads' 5%, and at S.S.D.D.'s nothing
-changed: that measures a profile on its own training run, which a walk of an unseen
-map does not.
+See [performance.md](performance.md) for what each optimisation gains and the ones not used.
 
 ## The launcher
 
@@ -485,37 +430,18 @@ included in it, and, for the install, the `install` crate the game reads its
 executable with ([The install crate](#the-install-crate)), whose patcher applies
 the title update. For the compile pass it has the zone crate, which reads the game's
 shaders out of its files ([The zone crate](#the-zone-crate)), and the shaders crate
-the game builds its shaders with (`shaders/`); for the map converter, zlib (fetched,
-v1.3.1) and the zone definitions written out as arrays at configure time.
+the game builds its shaders with (`shaders/`); for the custom maps, the map converter
+([The map converter](#the-map-converter)).
 
-It is a cargo binary of the workspace (`launcher/Cargo.toml`), which `cargo xtask
-build` builds with the build directory's features (`diagnostics`, or `portable` for
-`--release`) and puts in the build directory as `mw2-launcher`. It is Rust
-(`launcher/src/`) but for the C++ it keeps, the static library `launcher_core` of
-`CMakeLists.txt`: the map converter (`mapport/`, with its front, `maps.cpp`, and the
-reader of the zone definitions it walks a map by, `zone/`). The launcher's `build.rs`
-builds it with zlib
-through CMake, in the build directory `cargo xtask` configured (`MW2_BUILD_DIR`), so
-ninja's dependencies decide what is compiled again; it runs again when one of their
-archives or a source folder changed, and links them as CMake's link of them would.
-Only it builds `launcher_core`, which is in no `all`: the C++ is compiled with the
-headers of the SDL `sdl3-sys` built, whose folder only cargo knows, and `build.rs`
-hands it to CMake as `MW2_SDL_DIR`, configuring the directory again when it changed.
-Without `MW2_BUILD_DIR` it does neither: a `cargo check` of the workspace (an editor's)
-checks the Rust, and a `cargo build` fails at the link. A check or clippy run is best
-made without it too: with other flags than `cargo xtask`'s, cargo builds `sdl3-sys`
-again, so SDL a second time, and `build.rs` points `MW2_SDL_DIR` at that build; the
-next `cargo xtask build` points it back, and `launcher_core` is compiled again each
-time. CMake writes what the link is
-into `launcher_core.txt` there (the archives, their system libraries, the compiler's
-standard ones, the Vulkan import library on Windows, ThinLTO and its cache). On Linux
-the archives and, for `portable`, `libstdc++.a`, `libgcc_eh.a` and `libgcc.a` are
-rustc's own native libraries, which it puts ahead of the standard library's `-lgcc_s`:
-from a response file after it, lld would take the shared `libgcc_s` for symbols of
-`libstdc++.a`, and the executable would need it. On Windows everything is linked
-statically (`-static`, libc++ and libunwind by file name), the icon is compiled by
-llvm-mingw's `windres`, and a release is a GUI program (`windows_subsystem`) where the
-diagnostics build keeps its console. `main` is the C runtime's (`#![no_main]`), so
+It is a cargo binary of the workspace (`launcher/Cargo.toml`), all Rust, which `cargo
+xtask build` builds with the build directory's features (`diagnostics`, or `portable` for
+`--release`, which changes nothing in it) and puts in the build directory as
+`mw2-launcher`. Its `build.rs` reads the version and the logging from the CMake cache of
+the build directory `cargo xtask` configured (`MW2_BUILD_DIR`), and on Windows has CMake
+make the Vulkan import library there. Without `MW2_BUILD_DIR` a `cargo check` of the
+workspace (an editor's) checks the Rust all the same. On Windows everything is linked
+statically (`-static`), the icon is compiled by llvm-mingw's `windres`, and a release is a
+GUI program (`windows_subsystem`) where the diagnostics build keeps its console. `main` is the C runtime's (`#![no_main]`), so
 nothing of Rust's start-up runs: SIGPIPE is not ignored, which the game the launcher
 starts would inherit. On Windows the arguments are read from the wide command line,
 which has whole what the code page cannot spell.
@@ -543,12 +469,12 @@ README's banner, tiles and headings into `docs/images/readme/`.
 | `src/ui.rs` | the one screen, drawn by hand: a computed backdrop whose smoke drifts, the column of entries, the pane with its cards, progress, slider and picture, the wordmark |
 | `src/preview.rs` | the street FOV shows, drawn at the angle with the game's projection |
 | `src/input.rs` | the keyboard, a controller and the pointer read as Dear ImGui's IO and SDL3 backend read them: its event queue and repeats |
-| `src/maps.rs` | custom maps, through `maps.cpp`: listed, added, put in or out of the game, removed; the PC game's folder |
+| `src/maps.rs` | custom maps: listed, added (a PC map converted, a 360 one checked, copied, a picture made from the `.iwd`), put in or out of the game, removed ([gameplay.md](gameplay.md)); the PC game's folder, Steam's copy found |
 | `src/precompile.rs` | every shader of the game compiled before it is played ([rendering.md](rendering.md#every-shader-compiled-before-play)), read out by the zone crate and built on the shaders crate, on threads of its own; its log |
 | `src/setup.rs` | the install: checks the disc, gets the update, patches the executables, copies the files, on the `install` crate; the progress a job reports to the window (`Progress`) |
 | `src/download.rs` | one file over HTTPS: `URLDownloadToFileW` (urlmon) on Windows, the `curl` program elsewhere, or `wget` where curl is not installed; the install's and the self-update's |
 | `src/update.rs` | the self-update: looks for a newer release and puts it in place of the running programs; its progress to the same `Progress` as the install's |
-| `src/release.rs` | what the self-update reads in a release's description, and whether the release is newer: the package's library target, so that `cargo test -p mw2-launcher` runs its tests, which the binary, whose `main` is the C runtime's and which links with a build folder's C++, cannot |
+| `src/release.rs` | what the self-update reads in a release's description, and whether the release is newer: the package's library target, so that `cargo test -p mw2-launcher --lib` runs its tests, which the binary, whose `main` is the C runtime's, cannot |
 | `src/settings.rs` | what the player sets for the game, kept in `.env`, which the game reads as it starts; numbers read as C's `atoi` and `scanf` read them (`src/cnum.rs`) |
 | `src/single.rs` | one window a copy: a second start brings the first up in front and ends |
 | `src/profile.rs` | the profile screen's changes to the files under `saves/` ([saves.md](saves.md#what-the-launcher-changes)); days by the C library's local time (`src/clock.rs`) |
@@ -556,12 +482,9 @@ README's banner, tiles and headings into `docs/images/readme/`.
 | `src/report.rs`, `src/scrub.rs` | a bug report: a run with its log kept, the system's description, the new-issue page; the log without what says who the player is |
 | `src/sound.rs`, `src/fastfile.rs` | the game's two menu sounds, found in the installed `code_post_gfx.ff` at each start, decoded by the game's XMA decoder (the `wmapro` crate), and played as the entries are moved through and chosen, as the title plays them: in the front pair of a 5.1 stream, at the volume the player set in the game's options; none without an install |
 | `src/play.rs`, `src/spawn.rs` | starting the campaign, the multiplayer or a new launcher with a copy of the launcher's environment, and whether a game is running |
-| `src/boundary.rs` | what crosses to the C++: text, and paths as UTF-8 |
+| `src/boundary.rs` | paths as bytes: a path's own on Linux, its name in UTF-8 on Windows |
 | `src/atlas.rs`, `src/draw.rs`, `src/present.rs` | the window's drawing as Dear ImGui did it: its four fonts rasterised into one atlas (on the `mw2-truetype` crate, with stb_rect_pack's packer), shapes and text made into triangles with smoothed edges, and those drawn with SDL's renderer; ports of Dear ImGui and stb_rect_pack, see `NOTICE.md` |
 | `icon/steam_emblem.rs` | generated: the Steam card's emblem (`tools/steam_emblem.py`) |
-| `maps.cpp` | custom maps, the converter's front: added (a PC map converted, a 360 one checked, copied, a picture made from the `.iwd`), put in or out of the game, removed ([gameplay.md](gameplay.md)); Steam's copy of the PC game found |
-| `mapport/` | the map converter: a PC map's fastfiles made the 360's ([maps.md](maps.md)); GPL v3, see its `NOTICE.md` |
-| `zone/` | the map converter's reader of the zone definitions (`zone/defs/` and `zone/defs_pc/` at the top, which the zone crate reads too): the structures laid out (`defs.cpp`, `expr.cpp`) and the loading rules (`schema.cpp`, `rules.cpp`) |
 
 An install (`src/setup.rs`), in order: the disc's two executables are read and
 their images checked against the known disc's, by the SHA-256 the launcher's
@@ -574,7 +497,7 @@ A fastfile's header carries a mask of its languages (`1 << language`: English
 "Language mismatch on download content", so one disc's update cannot go with
 another. The update is taken from the file or folder given, from a package left
 beside the launcher, or downloaded from CoD Xenon's archive of title updates
-(`codxenon/xbox360-title-updates`, its maintainer's suggestion), for now from a
+(`codxenon/xbox360-title-updates`, its maintainer's suggestion), from a
 fork that adds the other languages' (`PaulCombal/xbox360-title-updates`), at a
 pinned commit; its three fastfiles are checked against that disc's (the
 USA/Europe ones hashed from `mw2/update/` by `build.rs`, the others written in
@@ -591,8 +514,8 @@ and no disc is asked for. A `--tu0` build installs the disc as it is.
 The window tells what `game/` holds the same way, before its first frame
 (`setup::state`): installed when both executables' images are the ones the
 build was made from, needing the update when each is that or the disc's, and
-not installed otherwise. Each image takes about half a second to decrypt and
-hash, so the two are hashed on two threads.
+not installed otherwise. Decrypting and hashing an image is slow enough to
+delay the first frame, so the two are hashed on two threads.
 
 The window and the terminal mode run the install on a thread of their own
 (`setup::install`), handing it the `Progress` the window draws or the terminal
@@ -637,7 +560,7 @@ or (B) to go back.
 PLAY CAMPAIGN and PLAY MULTIPLAYER start `mw2-sp` and `mw2-mp` beside the
 launcher, the names a release gives the two game executables. Before that,
 and before REPORT A BUG starts either, the launcher checks the compiled
-shaders, and compiles them first when they no longer fit (SHADERS, with its
+shaders, and compiles them first when they do not fit (SHADERS, with its
 progress and CANCEL). It does the same after an install. While either entry
 is chosen, the pane shows two cards in the look of the game's callsigns
 (`ui::Frame::cards`): the NETWORK setting the game will play on, and the
@@ -676,7 +599,8 @@ shaders are bound for their pass's declaration as the title binds them
 offset past what the file could have is an `Error`.
 
 The definitions are GPL v3 (`defs/NOTICE.md`, `defs_pc/NOTICE.md`); `defs_pc/`, the
-PC game's, is the map converter's, whose C++ (`launcher/zone/`) embeds both.
+PC game's, is the map converter's, which embeds it and reads it with this crate's
+`rules::load`.
 
     cargo run --release -p mw2-zone --bin zone-shaders -- [--hashes dir] [--dump dir] \
         game/default_mp.xex game/default.xex game/*.ff
@@ -685,6 +609,25 @@ prints each file's shader count, how long it took and how much of that was the
 inflate; `--hashes` writes each file's sorted `<pixel> <hash>` lines, `--dump` each
 shader's microcode, named as `MW2_DUMP_SHADERS` names what a run draws with. `tools/zone_diff.py` holds the crate
 to the C++ it replaced ([Cargo](#cargo)).
+
+### The map converter
+
+`mapport/` (the `mw2-mapport` crate) makes a map made for the PC game into one the 360's
+multiplayer loads ([maps.md](maps.md)); the launcher's maps screen runs it
+(`launcher/src/maps.rs`), and so does `map-port` (`mapport/map_port.rs`, built with
+`cargo build --release -p mw2-mapport`), with the checks it is held to. It reads the 360's
+zones by the zone crate's rules and a PC map's by `zone/defs_pc/`, which its `build.rs`
+embeds, into a tree of nodes (`src/tree.rs`): every node of a conversion is in one
+`Store`, named by its place there, so that a pointer back to earlier data names its
+target as itself. `src/reader.rs` walks a zone as the loader streams it, reading a tree
+or writing one back out; a stock file read on a thread of its own is read into a `Store`
+of its own, which the conversion's absorbs. What it writes is deflated as zlib 1.3.1's
+`compress2` deflates at level 6 (`src/deflate.rs`), so that a converted map is the same
+bytes whatever built it. Its text, a zone's names and the paths in its messages, is
+bytes, a char each (`src/text.rs`), turned back into the bytes it stands for where it is
+printed or shown. Nothing in it panics on what a file holds: a damaged file is an
+`Error`, and a conversion stopped from the window is `Error::Cancelled`, which no step
+takes for an error.
 
 ### The install crate
 
@@ -747,11 +690,10 @@ for each archive, its name, size, SHA-256 and address, and compares the tag
 with its own. The workflow gives the build its tag
 (`--release-tag v0.3.0`, the game's and the launcher's `build.rs`'s `MW2_RELEASE_TAG`); a build without
 one has nothing to compare and the entry is off. The archive it wants is the
-one for its system, `mw2-<tag>-<linux|windows>`. Releases up to v0.7.x were
-built once per online service and their launchers want
-`mw2-<tag>-<system>-<steam|lan>`, which releases after v0.9.0 no longer publish:
-such a launcher finds no archive of its name and offers no update, so its player
-downloads a release by hand.
+one for its system, `mw2-<tag>-<linux|windows>`. A launcher of a release up to
+v0.7.x, built once per online service, wants `mw2-<tag>-<system>-<steam|lan>`,
+which releases after v0.9.0 do not publish: it finds no archive of its name and
+offers no update, so its player downloads a release by hand.
 
 Choosing UPDATE TO downloads that archive into `update/` beside the launcher,
 checks its SHA-256, unpacks it with the system's `tar` (Windows 10 and later
@@ -797,12 +739,11 @@ game rather than other programs; the busiest of the game's threads, in % of
 one processor thread, the rest being the driver's and the system's threads;
 and the memory, with what the hardware keeps for itself (an integrated
 graphics chip's share, on Windows), the least that was free in play and the
-game's own peak. A reading costs about 0.1 ms, once a second, on the ring
-consumer's thread. A fourth line counts the memory watch's write faults and
-changes of page protection a second of play (`src/runtime/gpu/memory_watch.rs`), and
-what the changes cost: a few microseconds each on Linux, more on Windows,
-and more again with Memory Integrity on. They are counted and timed only in
-this mode.
+game's own peak. The reading is made once a second, on the ring consumer's
+thread. A fourth line counts the memory watch's write faults and changes of page
+protection a second of play (`src/runtime/gpu/memory_watch.rs`), and what the
+changes cost, which is more on Windows than on Linux and more again with Memory
+Integrity on. They are counted and timed only in this mode.
 
 The launcher then writes `reports/mw2-report-<date>-<time>.txt`: the version,
 the system, processor, memory, whether Windows' Memory Integrity runs, whether
@@ -828,14 +769,14 @@ report from it, NO deletes it.
 `cargo xtask build --windows --title mp --release --llvm-mingw <dir>` produces
 `build-win-mp-release/mw2.exe`: cargo builds for `x86_64-pc-windows-gnullvm`, with
 llvm-mingw's clang as `build.rs`'s compiler and the linker, against the UCRT, and
-CMake builds the launcher's C++ with `cmake/mingw-w64.cmake`. XenonRecomp itself is built
+CMake builds the tools with `cmake/mingw-w64.cmake`. XenonRecomp itself is built
 with the host's clang-18. The executable needs nothing beside it:
 
 - the C++ runtime, Rust's and threads are linked statically;
 - `vulkan-1.dll` comes with the GPU driver, so `build.rs` makes the import library
   from the build machine's Vulkan headers (`libvulkan-dev`'s) with llvm-mingw's
   `dlltool`, and `cmake/vulkan-windows.cmake` fetches the headers and does the same
-  for the launcher;
+  for the launcher, whose `build.rs` has CMake make it;
 - the executable asks for 16 MB thread stacks (Linux gives 8 MB), since the
   recompiled code nests deeply on the host stack;
 - a release build is a windowed program (`-mwindows`) that attaches to the
@@ -874,15 +815,16 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `shaders/` | the shaders crate the game and the launcher share ([The renderer](#the-renderer)) |
 | `install/` | what the game, the launcher and `cargo xtask` read the disc, the update and the executables with, and apply the update's patches with ([The install crate](#the-install-crate)); its LZX decoder is LGPL 2.1 and its patcher MIT, see its `NOTICE.md` |
 | `zone/` | the launcher's reader of the game's fastfiles, for the shaders it compiles ([The zone crate](#the-zone-crate)); the zone definitions (`defs/`, `defs_pc/`), GPL v3, see their `NOTICE.md` |
+| `mapport/` | the map converter, the launcher's custom maps' ([The map converter](#the-map-converter)); GPL v3, see its `NOTICE.md` |
 | `XenonRecomp-rs/` | the recompiler, a submodule |
-| `CMakeLists.txt`, `cmake/` | the launcher's C++ (`launcher_core`) and the tools' build; the Windows toolchain, the Vulkan import library and SDL's toolchain for `sdl3-sys` |
+| `CMakeLists.txt`, `cmake/` | the tools' build; the Windows toolchain, the Vulkan import library and SDL's toolchain for `sdl3-sys` |
 | `config/MW2.toml`, `config/MW2MP.toml` | recompiler config, campaign and multiplayer; `*.tu0.toml` for the disc version |
 | `ppc_rs/`, `ppc_mp_rs/` | generated Rust and the kernel stubs (`kernel_stubs.rs`); its `cpp/ppc_fallback.cpp` has no functions, as `--no-cpp-fallback` holds it, and is not compiled (gitignored) |
 | `src/` | the host runtime ([The runtime](#the-runtime)) |
-| `runtime/` | the game's C++ beside the Rust, the headers it and the launcher include, and the address table |
+| `runtime/` | the game's C++ beside the Rust (diagnostics), its headers, and the address table |
 | `tools/` | generators, reverse-engineering scripts, capture helpers |
 | `tools/routes/` | recorded walks and flights for `MW2_WALK_PATH` and `MW2_FLY_PATH` |
-| `launcher/` | the launcher, a cargo binary with its C++ in `launcher_core`: install, and starting the game ([The launcher](#the-launcher)) |
+| `launcher/` | the launcher, a cargo binary: install, starting the game, custom maps ([The launcher](#the-launcher)) |
 | `assets/icons/` | the game's and the launcher's icons, made by `tools/icons.py` ([The launcher](#the-launcher)) |
 | `assets/fonts/` | the fonts of the launcher and the system's screens (Barlow), and Michroma for the README's titles; SIL Open Font License |
 | `relay/` | the relay server for NETWORK SERVER, and its Dockerfile ([relay.md](relay.md)) |
@@ -932,10 +874,9 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `inflate_diff.py`, `font_diff.py` | the game's and the launcher's inflate against zlib, the font rasteriser against stb_truetype ([Cargo](#cargo)) |
 | `launcher_diff.py` | the launcher's Rust against the C++ it replaced ([Cargo](#cargo)) |
 | `draw_diff.py` | the launcher's drawing (`launcher/src/atlas.rs`, `draw.rs`, `present.rs`) against Dear ImGui 1.91.9b: the atlas, every glyph, random frames' triangles bit for bit, and their pixels on SDL's software renderer |
-| `ui_diff.py` | the launcher's window (`launcher/src/ui.rs`, `preview.rs`, `input.rs`) against `ui.cpp` and `preview.cpp` as they were at 8f5c04e, with Dear ImGui 1.91.9b and its SDL3 backend: random screens at every window scale as triangles bit for bit and as pixels with the backdrop, and random SDL events as the keys, pointer and time the window reads of them |
+| `ui_diff.py` | the launcher's window (`launcher/src/ui.rs`, `preview.rs`, `input.rs`) against `ui.cpp` and `preview.cpp`, compiled from git at the script's `--old` commit, with Dear ImGui 1.91.9b and its SDL3 backend: random screens at every window scale as triangles bit for bit and as pixels with the backdrop, and random SDL events as the keys, pointer and time the window reads of them |
 | `replay_diff.py` | a GPU capture replayed on two executables and compared ([rendering.md](rendering.md)) |
-| `map_port.cpp` | the `map-port` tool: the launcher's map converter on its own ([maps.md](maps.md)) |
-| `zone_diff.py` | the zone crate (`zone/src/`) against the C++ reader it replaced, as it was at 942f6e3: both definition headers and folders as read, random expressions, the executables' binding tables and shaders, every fastfile's zone, walk event by event, and shaders code word by code word, and zones damaged at random |
+| `zone_diff.py` | the zone crate (`zone/src/`) against the C++ reader it replaced, compiled from git at the script's `--from` commit: both definition headers and folders as read, random expressions, the executables' binding tables and shaders, every fastfile's zone, walk event by event, and shaders code word by code word, and zones damaged at random |
 | `find_in_title.py` | finds the other executable's copy of a function by its code |
 | `analyze.py`, `callgraph.py`, `xref.py`, `strings_in.py` | questions about the guest image: indirect branches, the call graph, address references, strings |
 | `d3d_region.py`, `classify_d3d.py`, `resource_audit.py` | map the statically linked D3D9 ([d3d9-seam.md](d3d9-seam.md)) |
@@ -960,6 +901,7 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | [relay.md](relay.md) | running a server for NETWORK SERVER, and its protocol |
 | [audio.md](audio.md) | the audio driver and the XMA decoder |
 | [saves.md](saves.md) | content packages, saved games and the profile |
+| [performance.md](performance.md) | what each optimisation gains, how it was measured, and the ones not used |
 
 ## Local changes to XenonRecomp
 
@@ -967,7 +909,7 @@ These are in [XenonRecomp-rs](https://github.com/PaulCombal/XenonRecomp-rs), the
 fork the `XenonRecomp-rs/` submodule holds:
 
 - **`XenonRecomp/recompiler.cpp`**
-  - Instructions MW2 uses that the recompiler did not handle: load/store update
+  - Instructions MW2 uses that upstream's recompiler does not handle: load/store update
     forms (`lhzu`, `lhau`, `lfsu`, `lfdu`, `sthu`, `stfsu`, `stfdu`, `stbux`,
     `lbzux`, `lhzux`, `lwzux`, `ldux`, `lfsux`, `sthux`, `stdux`), `lhbrx`,
     `dcbst` (no-op), `bdzf`, `eqv`, `addc`, `addme`, `subfze`, `mulhdu`,
@@ -977,7 +919,7 @@ fork the `XenonRecomp-rs/` submodule holds:
   - A jump table switches on the low 32 bits of the index register: the guard
     ahead of it is `cmplwi`, and the high half may hold other bits.
   - A jump table's `default:` returns instead of `__builtin_unreachable()`, which
-    let the compiler drop the bounds check.
+    lets the compiler drop the bounds check.
   - `mftb` reads `PPC_QUERY_TIMEBASE()`, a 50 MHz counter the runtime supplies,
     instead of `__rdtsc()`.
 - **`XenonRecomp/register_flow.cpp`** (new), with `recompiler.cpp` and
@@ -997,13 +939,13 @@ fork the `XenonRecomp-rs/` submodule holds:
   every register in the context (about 140 of 28,000 in each executable; the
   recompiler prints the count and why), and so do the register save/restore
   helpers, which the other functions skip. `PPCContext` keeps every register:
-  the `PPC_CONFIG_*_AS_LOCAL` defines are no longer emitted.
+  the `PPC_CONFIG_*_AS_LOCAL` defines are not emitted.
 - **`XenonAnalyse/main.cpp`**: jump-table patterns for XDK 8276's instruction
   order, which schedules the index shift between the `lis` and the `addi`; the
   table and base address pairs are located by opcode rather than fixed offset,
   and `nop` padding inside a pattern is skipped.
 - **`XenonAnalyse/function.cpp`**: a `bclr` ends a function only when its BO
   ignores both the condition and the counter. `bdzlr` tests the counter, and
-  treating it as a return cut `memset` short.
+  treating it as a return cuts `memset` short.
 - **`XenonUtils/ppc_context.h`**: `simde_mm_vctuxs` (float to unsigned word with
   saturation), and the `PPC_QUERY_TIMEBASE` declaration.

@@ -533,6 +533,7 @@ impl Renderer {
             mw2_shaders::pipeline::on_device_lost(bridge::request_exit);
             recorder::start(vk_pointer, Some(make_gathered_draws));
         }
+        super::copy_worker::start();
         true
     }
 
@@ -559,6 +560,8 @@ impl Renderer {
             // Before anything is destroyed, the display table's pipeline included: the last
             // frames are still on the GPU, and the last commands may still be with the
             // recorder thread.
+            // The copies into the arena made and the copy thread gone, before the arena is.
+            super::copy_worker::stop();
             recorder::stop();
             let _ = vk.device_wait_idle();
             gpu_time::stop();
@@ -757,6 +760,8 @@ impl Renderer {
     }
 
     pub fn before_stream_write(&mut self, physical: u32, size: u32) {
+        // The consumer is about to write guest memory: copies of it come first.
+        super::copy_worker::settle();
         if let Some(vk) = self.vk.as_deref() {
             self.core.before_stream_write(vk, physical, size);
         }

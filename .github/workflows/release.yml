@@ -58,10 +58,9 @@ jobs:
           wget -qO llvm.sh https://apt.llvm.org/llvm.sh
           sudo bash llvm.sh 18
           # Clang builds against the newest libstdc++ it finds, and 22.04's is
-          # GCC 12's. The toolchain PPA's GCC 13 one is what the launcher is
-          # built with elsewhere; a release links it statically (the portable feature),
-          # so the launcher still asks for nothing past glibc 2.35. The game
-          # has no C++.
+          # GCC 12's: the build's own C++ (XenonRecomp) takes the toolchain PPA's
+          # GCC 13 one. Nothing a player gets links a C++ library: the game and
+          # the launcher have no C++, and ask for nothing past glibc 2.35.
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
           # SDL3's video, audio, input and dialog backends, and the Vulkan loader.
           sudo apt-get update

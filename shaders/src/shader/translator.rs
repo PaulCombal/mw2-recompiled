@@ -68,6 +68,11 @@ pub struct TranslationMeta {
     // the whole window has to go across.
     pub constants_read: u32,
     pub addressed_constants: bool,
+    // The blocks of 16 among those constants that the program names, a bit
+    // each (bit b: 16b to 16b + 15): a pixel window is copied a block at a
+    // time, and a block no instruction names is left as the arena held it.
+    // Meaningless when `addressed_constants`, where every block is read.
+    pub constant_blocks_read: u32,
     pub colour_mask: u32, // colour targets a pixel shader writes
     pub writes_depth: bool,
     pub writes_memory: bool, // uses the memory export path
@@ -92,6 +97,7 @@ impl Default for TranslationMeta {
             fetch_pairs_read: [0; 3],
             constants_read: 0,
             addressed_constants: false,
+            constant_blocks_read: 0,
             colour_mask: 0,
             writes_depth: false,
             writes_memory: false,

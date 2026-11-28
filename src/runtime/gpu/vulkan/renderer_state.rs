@@ -142,8 +142,8 @@ pub struct Cached {
     pub base: u64,
     pub at: u32,
     pub valid: bool,
-    /// For a constant window: how many of the 256 the copy actually holds, so a draw
-    /// needing more than the cached copy covers is not handed it.
+    /// For the pixel window: the blocks of 16 the copy holds, a bit each, so a draw whose
+    /// program names one it lacks is not handed it.
     pub count: u32,
 }
 

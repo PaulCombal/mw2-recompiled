@@ -9,9 +9,8 @@ The title reads its fastfiles from the game root (`mw2/game` for a developer
 build; see [building.md](building.md)). File paths resolve case-insensitively
 onto that one flat directory.
 
-| files | status |
-|---|---|
-| `.ff` fastfiles, `.pak` image archives, `.bik` Bink movies | all of them are extracted, by `cargo xtask` from the ISO or by the launcher (`launcher/`) |
+Every `.ff` fastfile, `.pak` image archive and `.bik` Bink movie is extracted,
+by `cargo xtask` from the ISO or by the launcher (`launcher/`).
 
 Every fastfile is needed, not only the current level's: a zone whose file is
 missing makes the title report a dirty disc and fail, and the multiplayer picks
@@ -48,7 +47,7 @@ files are there:
 
 The launcher's MAPS screen adds (converting a PC map first, [maps.md](maps.md)),
 removes and lists the same maps, and puts at most 8 in the game, the menu's room; a ninth there is left out with a warning in
-the log (`runtime/install/arena.h`, `launcher/maps.cpp`, `launcher/src/maps.rs`). `map <map>` at the
+the log (`install/src/arena.rs`, `launcher/src/maps.rs`). `map <map>` at the
 console (`MW2_CONSOLE`) starts one directly.
 
 A signed file is still checked. Nothing checks an unsigned one: the loader
@@ -154,7 +153,7 @@ At the first controller the Guide button (or the keyboard's Home) opens the
 guide (`src/runtime/guide.rs`): the player's name, the time, what the title says they are
 doing, the network and the friends on it, then Resume, Invite friends and Quit
 to desktop, which asks once more. "What the title says" is its rich presence,
-as the console's guide showed it ("Playing Team Deathmatch in Afghan"): the
+as the console's guide shows it ("Playing Team Deathmatch in Afghan"): the
 title sets contexts with `XUserSetContext`, and the strings for each are in its
 XLAST, gzipped in the SPA resource of its image (`src/runtime/presence.rs`). The system's
 screens are drawn over a blurred and darkened copy of the game
@@ -183,28 +182,18 @@ middle of the frame by the presenter, as a copy: it is opaque.
 ## The save-device prompt
 
 The campaign asks which storage device to save to until each controller has
-one. `Memcard_InitializeSystem` keeps the choice in a table of one word per
-controller, and zero means "not chosen". On the console the choice lives in the
-profile and is made once; here the table starts empty every launch. The runtime
-hooks `Memcard_InitializeSystem` (`src/runtime/kernel/content.rs`) and, after it
-returns, writes the hard disk's device id into every empty slot, so the prompt
-does not appear. `MW2_NO_AUTO_SAVE_DEVICE=1` leaves the prompt to the title.
-The table's address is known only for the campaign (`T_DATA_DeviceTable` is zero
-in the multiplayer build). Saves themselves are in [saves.md](saves.md).
+one; the runtime fills the choice in so the prompt does not appear
+([saves.md](saves.md#the-device-selector)).
 
 ## What the level load relies on
 
 These kernel and translation details are not visible in the menus, and the
 first level load fails without them.
 
-**Processor numbers.** The title pins its threads with `KeSetAffinityThread` (and
-the top byte of the thread creation flags), a one-bit mask over the console's
-six hardware threads. The runtime stores the chosen processor in
-`KPCR.CurrentProcessorNumber` (offset 268), because the engine reads it: the
-renderer's command-buffer jobs are admitted only on processors 1 and 2, whose
-per-processor contexts they write into, and XAudio2's mixer threads wait on each
-other by processor number. With every thread reporting 0, the first frame of a
-level never finishes. Threads pinned to one processor run concurrently here,
+**Processor numbers.** The engine dispatches on the processor a thread was put
+on ([runtime.md](runtime.md#r13-the-kpcr-and-thread-ids)): the renderer's
+command-buffer jobs write into per-processor contexts, and with every thread
+reporting 0 the first frame of a level never finishes. Threads pinned to one processor run concurrently here,
 which the console never does, so per-processor data is a place to look when
 something races.
 
@@ -258,5 +247,5 @@ Everything the title draws is scaled by the same factor, as its own
 `cg_fovScale` does: a sight zooms in less at a wider view, and a scripted zoom
 or split screen's narrower view keeps its proportion. The weapon in the
 player's hands is drawn with the view's angle as well: at 120 it is smaller
-and longer, and more of the arms shows. A wider view has more in it: the S.S.D.D. flight spends
-14.9 ms a frame in the renderer at 90 where it spends 13.2 at 65.
+and longer, and more of the arms shows. A wider view has more in it, so the renderer takes longer over each frame
+([performance.md](performance.md)).

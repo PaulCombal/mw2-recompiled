@@ -580,6 +580,9 @@ impl Core {
     }
 
     fn submit_timed(&mut self, vk: &Vk, wait: bool) -> bool {
+        // What the submission's draws read out of the arena is all in it before the GPU
+        // is handed it (copy_worker.rs).
+        super::copy_worker::settle();
         if !self.recording {
             return true;
         }

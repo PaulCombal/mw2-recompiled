@@ -24,9 +24,6 @@ example, are built in the title's own memory (`tools/resource_audit.py`).
 Resource creation must therefore keep running the title's code. A host backend
 can adopt the guest structs but cannot replace them.
 
-The D3D hooks below are `src/hooks/d3d_hooks.rs`, the image pool's
-`src/hooks/image_move.rs`, and the shader hooks `src/hooks/shader_preload.rs`.
-
 | Hook (`title.h`) | Campaign | MP | Purpose |
 |---|---|---|---|
 | `T_D3D_Present` | `820C3390` | `820DFD10` | notes the present for pacing and stutter tracking; under `MW2_FPS_LIMIT`, sets the present interval |
@@ -52,23 +49,15 @@ Every address handed to the GPU is physical. `kernel::from_physical` maps it bac
 
 ## The ring consumer (`src/runtime/gpu/gpu.rs`)
 
-The ring consumer, the vblank and the interrupts they raise are
-`src/runtime/gpu/gpu.rs`, and the arena's progress `src/runtime/gpu/arena.rs`. The ring's
-place, size and read index, the read-pointer write-back and the interrupt callback with
-its context (one word) are atomics, as other threads write them. A second `shutdown`
-(the exit thread's while the run thread shuts down) waits for the first to finish, then
-returns.
+The ring's place, size and read index, the read-pointer write-back and the
+interrupt callback with its context (one word) are atomics, as other threads
+write them. A second `shutdown` (the exit thread's while the run thread shuts
+down) waits for the first to finish, then returns.
 
-The command processor, the register file, the census and the image pool are
-`src/runtime/gpu/command_processor.rs`, `registers.rs`, `hash.rs`, `census.rs` and
-`image_move.rs`. They call the renderer the ring consumer owns directly, once a
-draw, resolve, swap, completion point and occlusion event, passed down beside the register file (`src/runtime/bridge.rs`'s
-`renderer` module, inline), and the memory watch at each `IM_LOAD`. The GPU capture,
-which is C++ (`runtime/gpu/stream_capture.cpp`, diagnostics), is called through
-`runtime/rust_calls.cpp` (`mw2_stream_*`) and reaches back for the swap count, the
-command processor's state and the replayed moves (`src/runtime/gpu/exports.rs`). The
-state is the consumer's; what the reports print are single-writer atomics, and the
-display table's finished ramp a mutex with a release flag.
+The command processor's state belongs to the consumer thread alone; the renderer
+it owns is called directly at each draw, resolve, swap, completion point and
+occlusion event. What other threads read for reports are single-writer atomics,
+and the display table's finished ramp is a mutex with a release flag.
 
 The ring consumer thread has its own KPCR, as a hardware thread does. It polls
 `CP_RB_WPTR` in the register aperture (`0x7FC80000 + 0x714`), executes up to
@@ -132,13 +121,12 @@ Parsing rules:
 
 The runtime ignores other known opcodes. It skips unknown ones and logs them.
 `REG_RMW`, `COND_WRITE` and `REG_TO_MEM` follow Xenia's command processor
-(`pm4_command_processor_implement.h`). MW2 issues 5 `REG_RMW`s a run (registers
-`0x81`, `0x82`, `0x1841`, `0x1E4E`) and 512 `COND_WRITE`s, each setting
-`DC_LUT_RW_INDEX` to the next display-table entry with the always-true poll
-(function 7): a register write. Each comes right after the colour write whose
-auto-increment has already set the index to that value, so it leaves the display
-table as it was. The report counts them
-(`gpu: COND_WRITE n written, n skipped ...; REG_RMW n applied; n ... reads where the aperture holds another value than the file`).
+(`pm4_command_processor_implement.h`). MW2's `REG_RMW`s touch registers `0x81`,
+`0x82`, `0x1841` and `0x1E4E`. Its `COND_WRITE`s each set `DC_LUT_RW_INDEX` to
+the next display-table entry with the always-true poll (function 7): a register
+write. Each comes right after the colour write whose auto-increment has already
+set the index to that value, so it leaves the display table as it was. The
+report counts both.
 
 `REG_RMW` and `REG_TO_MEM` read a register from the file, or from the aperture where
 the file holds 0. This is not Xenia's literal rule. Xenia keeps one register file
@@ -149,7 +137,6 @@ hold either. The report counts the reads where the aperture holds a value other
 than 0 and other than the file's, whichever answered. One disagreement stays unseen:
 the aperture at 0 against a file that is not, as a CPU write of 0 cannot be told
 from no write. So a count of 0 does not prove the runtime reads what Xenia would.
-In the one flight probed for it, MW2's five `REG_RMW`s found 0 in both.
 
 **Shaders and draws.** A draw uses the shaders the last `IM_LOAD`s set,
 identified by an FNV-1a hash of the microcode. Its initiator goes to
@@ -167,8 +154,8 @@ set in `SCRATCH_UMSK` (`0x1DC`) is also stored at `SCRATCH_ADDR` (`0x1DD`) +
 register, or on memory when `info & 0x10` is set, comparing with the function in
 `info & 7`. Memory is byte-swapped according to the address's low two bits
 (Xenia's `GpuSwap`). `COHER_STATUS_HOST` (`0x0A31`) is satisfied at once. An
-unsatisfied wait polls every 50 us (`std::this_thread::sleep_for`, which on Windows is a
-`Sleep` of a whole millisecond) and gives up with a warning after 500 ms.
+unsatisfied wait polls every 50 us (on Windows a sleep lasts a whole
+millisecond) and gives up with a warning after 500 ms.
 
 ### Completion points
 

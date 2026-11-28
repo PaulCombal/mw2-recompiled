@@ -1,11 +1,9 @@
-# The launcher (launcher/): what a player opens, mw2-launcher. It is Rust -- its window,
-# its compile pass, on the shaders crate the game builds its shaders with (shaders/), its
-# install, on the crate the game reads its executable with (install/) -- but for the C++
-# library launcher_core: the fastfile reader the compile pass reads the game's shaders
-# with (zone/, precompile.cpp) and the map converter (mapport/, maps.cpp), which build.rs
-# builds through CMake (CMakeLists.txt) in the build folder cargo xtask configured, and
-# links with the game's SDL. cargo xtask build makes it; it is not
-# the workspace's default member, so a plain cargo build makes the game alone.
+# The launcher (launcher/): what a player opens, mw2-launcher. It is Rust: its window, its
+# compile pass, on the shaders crate the game builds its shaders with (shaders/), its
+# install, on the crate the game reads its executable with (install/), and its custom
+# maps, on the map converter (mapport/). cargo xtask build makes it, in the build folder it
+# configured (build.rs); it is not the workspace's default member, so a plain cargo build
+# makes the game alone.
 [package]
 name = "mw2-launcher"
 version = "0.0.0"
@@ -15,7 +13,7 @@ build = "build.rs"
 
 # What the self-update reads in a release's description (src/release.rs), apart so that
 # cargo test runs its tests: the binary's main is the C runtime's, which no test harness
-# replaces, and it links with a build folder's C++.
+# replaces.
 [lib]
 path = "src/release.rs"
 doctest = false
@@ -29,12 +27,12 @@ test = false
 default = ["diagnostics"]
 # On Windows, the console window a terminal run prints to.
 diagnostics = []
-# The C++ standard library linked in, for a binary that runs on other machines.
+# A player's build, which cargo xtask build --release asks for: the launcher links no C++
+# library, so it is the same build as without.
 portable = []
 
 [dependencies]
-# SDL, the game's (sdl3-sys builds it, cmake/sdl.cmake): rustc links it, and the C++ is
-# compiled with its headers (build.rs).
+# SDL, the game's (sdl3-sys builds it, cmake/sdl.cmake).
 sdl3-sys = { version = "=0.7.2", default-features = false, features = ["build-from-source-static"] }
 ash = { version = "=0.38.0", default-features = false, features = ["std", "linked"] }
 mw2-shaders = { path = "../shaders" }
@@ -48,6 +46,8 @@ mw2-truetype = { path = "../truetype" }
 # The game's fastfiles read as its loader streams them, for the shaders the compile pass
 # builds (src/precompile.rs).
 mw2-zone = { path = "../zone" }
+# The map converter, for the maps screen (src/maps.rs).
+mw2-mapport = { path = "../mapport" }
 
 [build-dependencies]
 # The SHA-256 build.rs hashes the executables and the update's fastfiles the install

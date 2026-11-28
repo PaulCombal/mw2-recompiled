@@ -167,14 +167,12 @@ read back, which its tracked use stands for.
 
 ## A draw
 
-`Draw` resolves the topology, both shaders (by microcode hash) and the scissor,
-and handles the clear idiom. It finds the targets and opens a rendering
-instance if they changed. It writes indices, constants and vertex data into the
-arena, builds the pipeline, finds each sampled texture's place in the texture
-set, and writes the draw's record: where its constants are, its textures, and
-the register state its shaders apply. It queues a `DrawOp` holding only the
-dynamic state that differs from what the command buffer has bound, and the
-draw, which names its record as its base vertex. Draws that cannot be made
+Shaders are found by microcode hash. A rendering instance is opened only when
+the targets change. Each draw writes a record into the arena -- where its
+constants are, its textures, and the register state its shaders apply -- and
+names that record as its base vertex, so no push constants or per-draw
+descriptor sets are needed. The queued `DrawOp` holds only the dynamic state
+that differs from what the command buffer has bound. Draws that cannot be made
 are counted by reason (`Skip`).
 
 Primitives 1-6 map to Vulkan's point, line and triangle topologies, and 12 (line
@@ -221,9 +219,8 @@ The buffer is written and never read back. The driver maps it write-combined,
 where a read is many times the cost of one from ordinary memory, so whatever
 has to be looked at again after it is written (the fetch constants while their
 addresses are rewritten, a rectangle's corners) is put together in ordinary
-memory and copied across once. Reading the fetch block in place cost a fifth
-of the ring consumer's time on Team Player. Of the fetch block's 96 pairs only
-those the draw's two programs read are put together and written (the
+memory and copied across once ([performance.md](performance.md)). Of the
+fetch block's 96 pairs only those the draw's two programs read are put together and written (the
 translator records them, `fetchPairsRead`); the rest of it is whatever the
 arena held, which nothing reads.
 
@@ -238,14 +235,16 @@ A draw's record says where each of its five constant blocks is in the arena
 records would be the same share one.
 
 - **Float constants.** Each stage reads 256 from its `SQ_VS_CONST` /
-  `SQ_PS_CONST` base. A pixel program's window is copied as far as the shader
-  reads (all of it under relative addressing), and reused while the register
-  file's write stamp over that range is unchanged. A vertex program's is
-  copied a block of 16 at a time: a block whose stamp has not moved since its
-  last copy into this frame's arena is not copied again, and the draw gets a
-  table of where the blocks are. With four players in split screen that halved
-  the constants copied a frame, 25 MB to 13 MB. D3D sends a draw's constants
-  whole, so a write of the value a register already holds does not stamp it,
+  `SQ_PS_CONST` base. A pixel program's window is copied a block of 16 at a
+  time: the translator records which of the window's sixteen blocks the
+  program names (`constant_blocks_read`; all of them under relative
+  addressing), and only those are written into a copy laid out as the whole
+  window; the rest is whatever the arena held, which the program never reads.
+  The copy is reused while the register file's write stamp over those blocks
+  is unchanged. A vertex program's is also copied a block of 16 at a time: a
+  block whose stamp has not moved since its last copy into this frame's arena
+  is not copied again, and the draw gets a table of where the blocks are.
+  D3D sends a draw's constants whole, so a write of the value a register already holds does not stamp it,
   and a run of them is swapped, compared and stored in one pass straight from
   the command buffer, and stamped, a block of 64 registers at a time
   (`RegisterFile::WriteRun`). Fetch constants are stamped by every write: the
@@ -260,12 +259,34 @@ records would be the same share one.
 - **Indices** are byte-swapped from big-endian for every draw, never cached,
   and scanned for their range, ignoring the restart value.
 
-The arena is `src/runtime/gpu/vulkan/renderer_arena.rs` (the allocator, the
-five constant blocks, the vertex windows, the index swap built for AVX2 and for
-x86-64-v2 and picked at start), the arithmetic of a draw `renderer_draw.rs`
-(scissor, viewport, the clip transform, the alpha test, the record's length, the
-depth bias), the state mappings and `PipelineState` `renderer_pipelines.rs`, and
-the keys they share `renderer_state.rs`.
+The arena is `src/runtime/gpu/vulkan/renderer_arena.rs`, the arithmetic of a
+draw `renderer_draw.rs`, the state mappings `renderer_pipelines.rs` and the
+keys they share `renderer_state.rs`. The index swap (`index_swap.rs`) has an
+AVX2 version, picked at start, because whole aligned 32-byte stores suit the
+write-combined arena and the compiler's own loop for the x86-64-v2 build
+splits each store in two.
+
+### The copy thread
+
+Most of a draw's vertex copying reads geometry the title wrote up to a frame
+earlier, out of memory rather than any cache. With `MW2_COPY_THREAD=1` the ring
+consumer hands a copy of 1 KB or more to a thread of its own, `gpu copier`
+(`src/runtime/gpu/vulkan/copy_worker.rs`), and goes on with the draw. It is off
+by default: it takes cycles off the consumer, but on a processor whose cores
+share a power budget, as a laptop's and the Steam Deck's do, the core it keeps
+busy lowers the consumer's clock as much, and the frame rate stays the same
+([performance.md](performance.md)).
+
+A copy can be made late because the console's GPU reads a draw's vertices only
+when it reaches the draw. The title therefore rewrites none of them until the
+command processor has let it see the draw done: a write to its memory (a fence,
+the arena's progress, a scratch register), an interrupt, the read pointer's
+write-back. The consumer **settles** before each of those, before a
+submission hands the arena to the GPU, before it writes guest memory itself (an
+image-pool move) and at shutdown: every copy handed over is made, by the copy
+thread or by the consumer, which takes those not yet started. The copies are
+independent of each other, so either thread makes any of them in any order, and
+a full queue makes the copy on the spot.
 
 ### The shadow of guest memory
 
@@ -294,7 +315,7 @@ consumer stores `Arming`, protects the run read-only, copies it and moves it to
   without asking the kernel, so `loose faults` is not a livelock count.
 - **Turning the watch off makes every `Loose` page writable too.** Such a page
   can still be read-only when the renderer shuts down, and once the watch is off
-  the handler no longer answers, so a write to it would be taken for a crash.
+  the handler does not answer, so a write to it would be taken for a crash.
   `set_shadow(null)` makes each run of `Loose` pages writable in one call before
   it turns the handler off. These protections are not counted in the report.
 - The fault handler, `will_write` and the protect take no lock, allocate
@@ -332,8 +353,8 @@ destination address, and a texture fetch of that address binds the image.
 - **The surface's width is its texture's.** `RB_COPY_DEST_PITCH` gives the
   pitch, the width rounded up to 32 texels, and a fetch normalises over its
   own width. A 960-wide scene's quarter-size blur buffers are 240 wide in
-  256-wide surfaces, and an image as wide as the pitch stretched them: the
-  aimed sight's blur doubled, the menus' blurred backdrop slid off the right.
+  256-wide surfaces, and an image as wide as the pitch would stretch them: the
+  aimed sight's blur doubles, the menus' blurred backdrop slides off the right.
   The first fetch narrower than its copy is remembered
   (`State::fetchedWidth`), and the resolves after it make the image that
   wide. The console's sizes never differ.
@@ -457,7 +478,7 @@ The launcher's SHADOWS entry keeps it as `MW2_SHADOW_SCALE=<n>`.
 `MW2_RENDER=<w>x<h>` (`src/hooks/render_size.rs`, `src/runtime/render_size.rs`) gives the title another frame
 than the console's 1280x720, and so another shape: 960x600 is 16:10, and at
 `MW2_SCALE=2` the window gets 1920x1200. The present images are the frame
-times the scale; the window letterboxes them as before.
+times the scale; the window letterboxes them.
 
 **Where the title takes its sizes.** Not from the video mode: `R_VideoSizes`
 writes a 1024x600 scene and a 1280x720 frame whenever the mode is high
@@ -538,10 +559,10 @@ multisampled surfaces with a shader. Where the device cannot sample a
 multisampled depth image of both formats at the counts in use, an empty
 rendering instance resolves it with `SAMPLE_ZERO`, the stencil too though
 nothing reads it: Intel's Windows driver, asked to resolve the depth alone (a
-stencil resolve of `NONE`, which `independentResolveNone` allows), resolved
-nothing, and the depth of field blurred the whole screen when aiming (issue
-#37). The draw costs what a depth-only resolve costs; resolving the stencil as
-well costs 0.3 ms a frame at 1080p on a Renoir iGPU. Both resolve straight into
+stencil resolve of `NONE`, which `independentResolveNone` allows), resolves
+nothing, and the depth of field then blurs the whole screen when aiming. The
+draw is preferred where it can be made, because the stencil resolve costs GPU
+time ([performance.md](performance.md)). Both resolve straight into
 the resolve's image, which for depth must be an attachment as well. The resolve
 writes where the rectangle sits in its surface. So a depth resolve goes through
 a single-sampled **twin** of the surface, and is copied from there, in two
@@ -585,31 +606,23 @@ resolve image that is replaced), `retire_before_destroy` submits and waits,
 drains the recorder, and idles the device. Otherwise a command buffer points at
 freed memory and the GPU page-faults.
 
-The renderer whole is `src/runtime/gpu/vulkan/renderer.rs` (its start, its end,
-and the report it leaves in a static for the report written after the shutdown),
-`renderer_frame.rs` (frame slots, segments, submissions, the occlusion
-queries), `renderer_draw.rs` (a draw and the runs the recorder makes with one
-multi-draw), `renderer_diagnostics.rs` and `renderer_passtime.rs`. It has one
-owner, the ring consumer (`src/runtime/gpu/gpu.rs`): the run thread makes and
-starts it before the consumer starts and hands it over; the
-command processor passes it down, beside the register file, to each draw,
-resolve, swap, completion point and occlusion event, a direct call; the
-shutdown takes it back when the consumer is joined. It is boxed, and its device
-tables boxed inside it, because the recorder thread and the pipeline optimiser
-hold a pointer to them. What other threads tell it goes through atomics or a
-queue: the texture cache's `memory_written_elsewhere` from a guest thread (the image
-pool's move made at once: whenever nothing consumes the stream, and in play
-when the destination has no word-aligned physical address for the copy draw to
-name) is queued and applied at the start of the consumer's next batch; the report counts the ranges
-queued and the ranges applied, and only one queued after the consumer's last
-batch, during the exit, is never applied. The texture cache is kept after the
-shutdown for the report;
-the report of a run that ends on a fault prints only what statics hold. A slot's
-fence counts only once the recorder has made the submission
-(`queued_at`), the submission resets its fence under the queue's lock and
-signals it with an empty submission when its command buffer will not end or the
-submission fails, and the trace writes the submission where it is made, before
-`gpu_time` submits it.
+The renderer is `src/runtime/gpu/vulkan/renderer.rs`, with `renderer_frame.rs`
+(frame slots, segments, submissions, the occlusion queries). It has one owner,
+the ring consumer (`src/runtime/gpu/gpu.rs`), and the command processor calls
+it directly beside the register file; the run thread makes it before the
+consumer starts and the shutdown takes it back when the consumer is joined. It
+is boxed, and its device tables boxed inside it, because the recorder thread
+and the pipeline optimiser hold a pointer to them. What other threads tell it
+goes through atomics or a queue: the texture cache's `memory_written_elsewhere`
+from a guest thread (the image pool's move made at once: whenever nothing
+consumes the stream, and in play when the destination has no word-aligned
+physical address for the copy draw to name) is queued and applied at the start
+of the consumer's next batch; only one queued after the consumer's last batch,
+during the exit, is never applied. The report of a run that ends on a fault
+prints only what statics hold. A slot's fence counts only once the recorder has
+made the submission (`queued_at`); a submission whose command buffer will not
+end, or that fails, still signals its fence with an empty submission, so a wait
+on the slot ends.
 
 ## The recorder thread
 
@@ -626,9 +639,9 @@ enough. A call due now does not spend it: the recorder can make that call and
 sleep again at the same position before the producer looks at its flag, and the
 next 64 KB would then wait for a flush. A diagnostics build counts the wakes
 made only because a call due now left the wake unspent. Calls come every couple of
-microseconds and the recorder is faster than that, so a recorder that spun
-until the next one never slept, and held a core; one that waited on the queue
-position itself woke at every call, because the wait spins first.
+microseconds and the recorder is faster than that, so a recorder that spins
+until the next one never sleeps, and holds a core; one that waits on the queue
+position itself wakes at every call, because the wait spins first.
 
 Draws are made in runs. A draw that changes no state since the last one is
 held back, and a run of them is made with one `vkCmdDrawMultiIndexedEXT` (or
@@ -636,8 +649,8 @@ held back, and a run of them is made with one `vkCmdDrawMultiIndexedEXT` (or
 driver checks and emits the state once a run, and each draw is then a base
 vertex and a draw packet. A run ends at a draw that changes any state, and at
 any other call: the recorder runs `make_gathered_draws` before every call not
-queued with `recorder::joining`. With four players in split screen 97% of draws are made
-this way, about thirty to a call. Without `VK_EXT_multi_draw` each draw is
+queued with `recorder::joining`. Nearly every draw is made this way
+([performance.md](performance.md)). Without `VK_EXT_multi_draw` each draw is
 made on its own.
 
 An indirect draw over commands the consumer writes into the arena does as much
@@ -721,8 +734,8 @@ the blank. Three things hold it at 60, and each is released its own way:
   waits behind the frame on screen, so the guest's blank is never lengthened.
 
 The guest's blank itself stays the display's; only the retiring of frames
-leaves it. The simulation's speed does not change: a route walked at 93 frames
-a second takes the time it takes at 60. `MW2_STUTTERS`, which counts blanks
+leaves it. The simulation's speed does not change: a route takes the same time
+at any frame rate as at 60. `MW2_STUTTERS`, which counts blanks
 without a new frame, is off in this mode.
 
 ## Occlusion queries
@@ -815,7 +828,7 @@ pipelines are built on a device that has pipeline libraries.
 ### Every shader compiled before play
 
 The workers compile a level's shaders as it loads, but a driver with a cold
-cache still takes tens of milliseconds a shader, and a level has thousands. So
+cache is slow to compile a shader, and a level has thousands. So
 a player's copy is played only with every shader of the game already in the
 pipeline cache it starts with, `shaders/pipelines.bin`, or
 `shaders/pipelines-scaled.bin` when anything is drawn larger than the title's
@@ -851,12 +864,12 @@ sizes (the translated code differs). The launcher fills it
   - the resolution scale;
   - each fastfile's and executable's name, size and time.
 
-  A change to any of these means the cache no longer holds what the game will
+  A change to any of these means the cache does not hold what the game will
   build. Each scale keeps its pair, so a player who changes the resolution and
   goes back finds the first still compiled; a pass removes the other scale's
   pair only when the code, the device or the driver changed.
 - **The gates.** The launcher checks the marker before PLAY and REPORT A BUG,
-  and runs the pass again first when it no longer fits; it also runs the pass
+  and runs the pass again first when it does not fit; it also runs the pass
   after an install. The game checks the marker on a player start, once the
   renderer has settled its device and scale and before the title runs. If it
   does not fit, the game starts `mw2-launcher --play <title> --device <id>` and
@@ -874,8 +887,17 @@ sizes (the translated code differs). The launcher fills it
 
 A device without pipeline libraries compiles a shader only together with a
 draw's state, so the pass compiles nothing there. It leaves a marker that
-says so, and the game builds pipelines at their first draw as before, into
+says so, and the game builds pipelines at their first draw, into
 that scale's cache, which it writes back at its end for the next run.
+
+The launcher warns of such a driver before a start (`launcher/src/driver.rs`).
+Vulkan says only what the installed driver does, so the families whose
+maker's newest Windows driver still lacks the feature are listed by PCI id.
+For any other card on its maker's Windows driver a newer driver helps, and
+the warning comes at every start, with the maker's download page. Otherwise it
+comes only when the pass looks at the shaders anew: on a listed card, where no
+update helps, and on Mesa's drivers (Linux, or Wine), which come with the
+system.
 
 `MW2_SHADER_CACHE=<file>` records every pipeline a run builds: microcode,
 formats and state (`SMW2`, version 4). The next run rebuilds them at start-up.

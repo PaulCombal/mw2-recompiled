@@ -163,8 +163,7 @@ enum Stop {
 use Stop::{Cancelled, Failed};
 
 /// How a job is going, for the window to draw and the terminal mode to print: the
-/// install's, the self-update's, a map's conversion (maps.cpp reports through the calls at
-/// the end). The steps are taken under the lock; CANCEL sets `cancel`, which the job
+/// install's, the self-update's, a map's conversion (maps.rs). The steps are taken under the lock; CANCEL sets `cancel`, which the job
 /// looks at.
 #[derive(Default)]
 pub struct Progress {
@@ -665,60 +664,4 @@ pub fn install(disc: &Path, update: &Path, progress: &Progress) -> (Outcome, Str
 /// has to fetch it.
 pub fn update_address() -> &'static str {
     update_url()
-}
-
-// ---- what maps.cpp calls -----------------------------------------------------------
-// A map's conversion reports to the Progress the window draws, handed to it as a
-// pointer; text crosses as bytes and a length.
-
-#[allow(unsafe_code)]
-mod exports {
-    use super::Progress;
-    use crate::boundary::bytes;
-    use std::ffi::{c_char, c_int};
-    use std::sync::atomic::Ordering;
-
-    // SAFETY, each: `progress` is the Progress maps.cpp was handed, alive across its
-    // call, and each text points at its length of readable bytes.
-
-    /// A run of `steps` begun at `step`: its title, nothing else said yet.
-    #[unsafe(no_mangle)]
-    unsafe extern "C" fn mw2_progress_set(
-        progress: *const Progress,
-        step: c_int,
-        steps: c_int,
-        title: *const c_char,
-        length: usize,
-    ) {
-        let mut state = unsafe { &*progress }.state();
-        state.steps = steps;
-        state.step = step;
-        state.title = unsafe { bytes(title, length) }.to_vec();
-        state.detail.clear();
-        state.done = 0;
-        state.total = 0;
-    }
-
-    /// What the step is doing; with `step` above 0, the step it is now and its title.
-    #[unsafe(no_mangle)]
-    unsafe extern "C" fn mw2_progress_line(
-        progress: *const Progress,
-        step: c_int,
-        title: *const c_char,
-        title_length: usize,
-        detail: *const c_char,
-        detail_length: usize,
-    ) {
-        let mut state = unsafe { &*progress }.state();
-        if step > 0 {
-            state.step = step;
-            state.title = unsafe { bytes(title, title_length) }.to_vec();
-        }
-        state.detail = unsafe { bytes(detail, detail_length) }.to_vec();
-    }
-
-    #[unsafe(no_mangle)]
-    unsafe extern "C" fn mw2_progress_cancelled(progress: *const Progress) -> bool {
-        unsafe { &*progress }.cancel.load(Ordering::Relaxed)
-    }
 }

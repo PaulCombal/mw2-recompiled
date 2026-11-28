@@ -287,6 +287,7 @@ mod machine {
         pub const RRF_RT_REG_DWORD: u32 = 0x18;
         pub const ERROR_SUCCESS: i32 = 0;
 
+        #[link(name = "advapi32")]
         unsafe extern "system" {
             pub fn RegGetValueW(
                 key: isize,

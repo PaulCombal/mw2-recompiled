@@ -72,7 +72,7 @@ walking to it.
 | `MW2_WALK_TO="x,y[,radius[,yaw]]"` | walks to a point and holds there, facing the yaw given or turning slowly; reports the closest approach and how often it got itself unstuck |
 | `MW2_WALK_PATH=<file>[,<file>...]` | walks a recorded route (`x y z yaw pitch` per line), looking where the player looked; with several, the one starting nearest the spawn. A line `left x y z yaw pitch` or `fire x y z yaw pitch` goes to the spot, turns to the aim, and presses d-pad left or the right trigger there |
 | `MW2_TEAM_UP=1\|2` | on the team selection, taps Up that many times before choosing, instead of Auto-assign, so a run spawns on the same side every time |
-| `MW2_WALK_REACH=<units>` | how near a route's point the walk has to come before heading for the next: 24 for a point recorded with its view, 140 for the older routes that stop at yaw |
+| `MW2_WALK_REACH=<units>` | how near a route's point the walk has to come before heading for the next: 24 for a point recorded with its view, 140 for a route whose points stop at yaw |
 | `MW2_WALK_PAUSE=<seconds>` | stands still at every corner of the route |
 | `MW2_QUIT_AFTER_ARRIVAL=<seconds>` | ends the run that long after the walk arrives, or after it stops getting nearer for `MW2_QUIT_IF_STUCK` seconds (45) |
 | `MW2_RECORD_FLIGHT=<file>` | writes where the camera is and when, twenty times a second, as a flight for `MW2_FLY_PATH`; noclip and all |
@@ -121,9 +121,10 @@ the title writes the height twice a frame and a read from outside sees both valu
 |---|---|
 | `MW2_DUMP_SHADERS=<dir>` | every distinct shader's microcode, for `tools/xenos_shader.py` and `translate-shader`; and the built-in shaders as SPIR-V, for `spirv-val`: the window's backdrop (`builtin_backdrop_vertex.spv`, `builtin_backdrop_pixel.spv`), the display's colour table (`builtin_display_table.spv`) and the drawn depth resolve's (`builtin_drawn_resolve_cover_vertex.spv`, `builtin_drawn_resolve_fetch_depth.spv`), each when it is first made |
 | `MW2_DUMP_TEXTURES=<dir>` | every distinct bound texture, untiled, as PNM with each mip level, its fetch constant logged. `MW2_DUMP_TEXTURES_RAW=1` also writes the guest bytes; `MW2_DUMP_TEXTURES_AFTER=<seconds>` starts later, since a streamed texture is empty at its first bind |
+| `MW2_CHECK_TEXTURE_WATCH=1` | every answer the texture cache's memo of the write watch gives without walking the texture's pages ([textures.md](textures.md)) is followed by the walk, and a disagreement whose groups' counts have not moved is logged |
 | `MW2_CHECK_TEXTURE_PARTS=1` | every re-read in parts ([textures.md](textures.md#read-again-in-parts)) is followed by a whole read: the report counts the parts whose bytes differ with none of their pages written since (missed by the watch; each logged), those written after their read, and the bytes the copy's regions put elsewhere than the parts' bytes say, worked out from the regions as the Vulkan specification addresses a copy |
-| `MW2_COUNT_PAST_ROWS=1` | the report counts the texture changes caught only past each level's whole rows, which the write watch and signature missed before they covered what the reader reads ([textures.md](textures.md)), zero included, so a run shows the switch was on; off by default, as it signs most new textures a second time while they are read |
-| end-of-run reports | packets by opcode, frame times, draws and presents per second, arena copies, draws per render target, texture and shader work |
+| `MW2_COUNT_PAST_ROWS=1` | the report counts the texture changes caught only past each level's whole rows (a tiled slice under 4 KB, a 1D tail): bytes the reader reads that whole rows' extents leave out, which the write watch and signature cover ([textures.md](textures.md)), zero included, so a run shows the switch was on; off by default, as it signs most new textures a second time while they are read |
+| end-of-run reports | packets by opcode and register runs by window and length, frame times, draws and presents per second, arena copies with the census of what they were (constants by kind, why a fetch block or a vertex window was copied, vertex bytes an earlier draw of the frame copied), draws per render target, texture and shader work |
 
 ## Drawing
 
@@ -154,6 +155,7 @@ the title writes the height twice a frame and a read from outside sees both valu
 | `MW2_NO_CULL=1`, `MW2_NO_DEPTH_TEST=1` | | take culling or the depth test out of every pipeline |
 | `MW2_NO_SHADOW=1` | | no shadow of guest memory: every draw copies its vertex data into the arena |
 | `MW2_RECORD_THREAD=0` | | makes the Vulkan calls on the ring consumer instead of the recorder thread |
+| `MW2_COPY_THREAD=1` | R | makes the vertex copies into the frame arena on a thread of their own instead of the ring consumer ([rendering.md](rendering.md#the-copy-thread)) |
 | `MW2_TIME_RENDER=1` | | where the ring consumer's time goes, and how long it waits on the GPU |
 | `MW2_TIME_PASSES=<seconds>` | | from that far into the run, the GPU's time a frame by rendering instance (by target size, samples and format), resolve and the work between them, from a timestamp at each; a table at exit |
 | `MW2_TRACE_PACING=<file>` | | a timeline written at exit: the consumer's batches and swaps, the title's presents, and every guest thread's engine waits, kernel waits and sleeps with their callers ([multiplayer.md](multiplayer.md)) |

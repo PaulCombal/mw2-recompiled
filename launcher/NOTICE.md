@@ -1,8 +1,8 @@
 # Notice
 
 Four files of the launcher are ports of other projects' code and keep their licences. (The map
-converter, `mapport/`, and the zone definitions, `../zone/defs/` and `../zone/defs_pc/`, have notices
-of their own.)
+converter, `../mapport/`, and the zone definitions, `../zone/defs/` and `../zone/defs_pc/`, have
+notices of their own.)
 
 ## src/draw.rs, src/atlas.rs, src/present.rs, src/input.rs: Dear ImGui, MIT
 

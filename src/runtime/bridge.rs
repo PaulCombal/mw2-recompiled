@@ -315,6 +315,13 @@ pub mod renderer {
         rd.before_stream_write(physical, size);
     }
 
+    /// Every vertex copy handed to the copy thread made (copy_worker.rs), before the
+    /// consumer lets the title see how far it has got. The consumer's.
+    #[inline(always)]
+    pub fn settle_copies() {
+        crate::runtime::gpu::vulkan::copy_worker::settle();
+    }
+
     /// vk::textures::MemoryWritten, on the ring consumer.
     pub fn textures_memory_written(rd: &mut Renderer, physical: u32, size: u32) {
         rd.core.textures.memory_written(physical, size);
@@ -354,6 +361,10 @@ pub mod watch {
 
     pub fn unwritten(physical: u32, bytes: u32, since: u64) -> bool {
         watch::unwritten(physical, bytes, since)
+    }
+
+    pub fn loosenings(physical: u32, bytes: u32) -> u64 {
+        watch::loosenings(physical, bytes)
     }
 
     /// Before this runtime writes a large range of guest memory itself.

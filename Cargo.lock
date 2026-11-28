@@ -57,11 +57,20 @@ version = "0.0.0"
 dependencies = [
  "ash",
  "mw2-install",
+ "mw2-mapport",
  "mw2-shaders",
  "mw2-truetype",
  "mw2-zone",
  "sdl3-sys",
  "wmapro",
+]
+
+[[package]]
+name = "mw2-mapport"
+version = "0.0.0"
+dependencies = [
+ "mw2-install",
+ "mw2-zone",
 ]
 
 [[package]]

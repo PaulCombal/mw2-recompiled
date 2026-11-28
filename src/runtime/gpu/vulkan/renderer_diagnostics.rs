@@ -1485,6 +1485,8 @@ pub fn report() {
                 (r.arena_reused[kind] / frames) >> 10
             );
         }
+        #[cfg(feature = "diagnostics")]
+        super::arena_census::report(frames.get());
     }
     if r.verts_matched != 0 {
         log_info!(

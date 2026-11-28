@@ -1,12 +1,14 @@
-// RFC 1951's deflate without zlib, in RFC 1952's gzip member (gunzip) or RFC 1950's zlib
-// stream (unzlib), read the way zlib's inflate reads it with a 32 KB window and that wrapper
-// only (inflateInit2 with 16 + MAX_WBITS, inflateInit), so that it takes and refuses what
-// zlib did: the header's method, window, check and flags, a gzip header's optional fields
-// and CRC, the dynamic tables' limits and zlib's rule for incomplete codes, distances
-// before the start, and the trailer's CRC and length or Adler-32. The game gunzips its
-// title's XLAST (src/runtime/presence.rs); the launcher unzlibs a fastfile's zone. Bytes
-// after the trailer are left alone, as zlib leaves them. tools/inflate_diff.py holds both
-// to zlib.
+// RFC 1951's deflate without zlib, in RFC 1952's gzip member (gunzip), RFC 1950's zlib
+// stream (unzlib) or neither (inflate_raw, a zip entry's), read the way zlib's inflate
+// reads it with a 32 KB window and that wrapper only (inflateInit2 with 16 + MAX_WBITS,
+// inflateInit, inflateInit2 with -MAX_WBITS), so that it takes and refuses what zlib did:
+// the header's method, window, check and flags, a gzip header's optional fields and CRC,
+// the dynamic tables' limits and zlib's rule for incomplete codes, distances before the
+// start, and the trailer's CRC and length or Adler-32. The game gunzips its title's XLAST
+// (src/runtime/presence.rs); the launcher unzlibs a fastfile's zone, and the map
+// converter a PC map's zone and raw files, and inflates the entries of its .iwd files.
+// Bytes after the trailer are left alone, as zlib leaves them. tools/inflate_diff.py holds
+// gunzip and unzlib to zlib.
 
 /// The `size` bytes a gzip stream holds, or None if it does not hold exactly those.
 pub fn gunzip(packed: &[u8], size: usize) -> Option<Vec<u8>> {
@@ -45,6 +47,15 @@ pub fn unzlib(packed: &[u8], most: usize) -> Option<Vec<u8>> {
     input.align();
     let adler = u32::from_be_bytes(input.data.get(input.at..input.at + 4)?.try_into().ok()?);
     (adler == adler32(&out)).then_some(out)
+}
+
+/// The `size` bytes a raw deflate stream (a zip entry's) holds, or None if it does not hold
+/// exactly those: zlib's inflateInit2 with -MAX_WBITS, given that much room and Z_FINISH.
+pub fn inflate_raw(packed: &[u8], size: usize) -> Option<Vec<u8>> {
+    let mut input = Bits { data: packed, at: 0, bit: 0 };
+    let mut out = Vec::with_capacity(size.min(packed.len().saturating_mul(1032)));
+    inflate(&mut input, &mut out, size)?;
+    (out.len() == size).then_some(out)
 }
 
 // The header's length, if zlib takes it.

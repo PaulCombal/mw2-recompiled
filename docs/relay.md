@@ -66,9 +66,9 @@ it has no password, so publish it on the machine alone:
 **The firewall** lets in UDP on the relay's port, from anywhere. Players need
 nothing open.
 
-**The players** set, under NETWORK in the launcher: NETWORK SERVER, SERVER to
-the relay's address (`relay.example.com`, or `relay.example.com:<port>` for
-another port than 3074), and PASSWORD.
+**The players** set, under NETWORK in the launcher: NETWORK SERVER, then, in
+the two entries that shows, SERVER to the relay's address (`relay.example.com`,
+or `relay.example.com:<port>` for another port than 3074), and PASSWORD.
 
 The relay logs a line, with the time in UTC, for each player who joins,
 leaves, goes quiet, or is refused, and why.

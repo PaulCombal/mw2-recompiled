@@ -12,5 +12,5 @@ models and model surfaces, sounds, animations, the sound driver globals asset, m
 collision, glass and water data.
 
 `iw4_assets.h` describes the structures; `commands.txt` and `assets/*.txt` say how the game
-streams them out of a zone. The zone crate (`zone/src/`) and the map converter's C++
-(`launcher/zone/`) read them as they are.
+streams them out of a zone. The zone crate (`zone/src/`) reads them as they are, for the
+launcher's compile pass and the map converter (`mapport/`).

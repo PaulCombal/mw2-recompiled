@@ -71,6 +71,20 @@ const WATCHED: u8 = 3; // read-only, the copy is current
 
 static STATE: [AtomicU8; PAGES] = [const { AtomicU8::new(NEVER) }; PAGES];
 
+// How many times a page of each group of 64 has left Watched. A page leaves it in two
+// places only, loosen and will_write, and each counts it here: a range whose groups'
+// counts have not moved since every page of it was last found watched has had none of them
+// written since (loosenings, the texture cache's memo of unwritten). Any new way out of
+// Watched has to count here too.
+const GROUP_SHIFT: usize = 6;
+static LOOSENINGS: [AtomicU64; (PAGES >> GROUP_SHIFT) + 1] = [const { AtomicU64::new(0) }; (PAGES >> GROUP_SHIFT) + 1];
+
+// A page has left Watched. Safe in a signal handler.
+#[inline(always)]
+fn count_loosening(page: usize) {
+    LOOSENINGS[page >> GROUP_SHIFT].fetch_add(1, Release);
+}
+
 // The consumer's bookkeeping.
 struct Consumer {
     last_served: [u64; PAGES], // the last submission to read the page's copy
@@ -179,6 +193,7 @@ fn loosen(page: usize) {
         }
         protect(page as u32, 1, true);
         if state.compare_exchange_weak(was, LOOSE, AcqRel, Acquire).is_ok() {
+            count_loosening(page);
             #[cfg(feature = "diagnostics")]
             LOOSENED[page].fetch_add(1, Relaxed);
             return;
@@ -377,10 +392,12 @@ fn copy_in(c: &mut Consumer, p: usize, last: usize, completed: u64, frame: u64, 
         let served = c.last_served[q];
         if served != 0 && served > completed {
             bump(&REFUSED_IN_FLIGHT, 1);
+            refused(Refusal::InFlight);
             return false;
         }
         if back_off && state == LOOSE && frame < u64::from(c.armed_frame[q]) + (1u64 << c.strikes[q]) {
             bump(&REFUSED_BACKING_OFF, 1);
+            refused(Refusal::BackingOff);
             return false;
         }
     }
@@ -398,16 +415,53 @@ fn copy_in(c: &mut Consumer, p: usize, last: usize, completed: u64, frame: u64, 
         all &= arm(c, q as u32, run as u32, frame);
         q += run;
     }
+    if !all {
+        refused(Refusal::ArmFailed);
+    }
     all
+}
+
+/// Why the last serve or track answered false, for the arena's census (diagnostics).
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Refusal {
+    NoShadow = 1,
+    Outside,
+    InFlight,
+    BackingOff,
+    ArmFailed,
+}
+
+#[cfg(feature = "diagnostics")]
+static LAST_REFUSAL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+#[inline(always)]
+fn refused(_why: Refusal) {
+    #[cfg(feature = "diagnostics")]
+    LAST_REFUSAL.store(_why as u8, Relaxed);
+}
+
+/// The reason the last serve answered false. Ring consumer only.
+#[cfg(feature = "diagnostics")]
+pub fn last_refusal() -> Refusal {
+    match LAST_REFUSAL.load(Relaxed) {
+        2 => Refusal::Outside,
+        3 => Refusal::InFlight,
+        4 => Refusal::BackingOff,
+        5 => Refusal::ArmFailed,
+        _ => Refusal::NoShadow,
+    }
 }
 
 #[inline(always)]
 fn pages(physical: u32, bytes: u32) -> Option<(u32, u32)> {
     if SHADOW.load(Relaxed).is_null() || bytes == 0 {
+        refused(Refusal::NoShadow);
         return None;
     }
     if u64::from(physical) + u64::from(bytes) > u64::from(PHYSICAL_BYTES) {
         bump(&REFUSED_OUTSIDE, 1);
+        refused(Refusal::Outside);
         return None;
     }
     let first = physical / PAGE_BYTES;
@@ -437,7 +491,10 @@ pub fn will_write(guest_address: u32, bytes: u32) {
         let mut state = STATE[p].load(Acquire);
         while state >= ARMING {
             match STATE[p].compare_exchange_weak(state, LOOSE, AcqRel, Acquire) {
-                Ok(_) => break,
+                Ok(_) => {
+                    count_loosening(p);
+                    break;
+                }
                 Err(now) => state = now,
             }
         }
@@ -504,6 +561,19 @@ pub fn track(physical: u32, bytes: u32, completed: u64, frame: u64) -> u64 {
     }
     bump(&TRACKED, 1);
     c.stamp
+}
+
+/// The loosenings counted in the groups [physical, physical + bytes) falls in, summed: when
+/// the sum is what it was when unwritten last answered true for the range and a stamp, it
+/// answers true again (LOOSENINGS). 0 for an empty range or one past the bank. Read before
+/// the unwritten it stands for.
+pub fn loosenings(physical: u32, bytes: u32) -> u64 {
+    if bytes == 0 || u64::from(physical) + u64::from(bytes) > u64::from(PHYSICAL_BYTES) {
+        return 0;
+    }
+    let first = (physical / PAGE_BYTES) as usize >> GROUP_SHIFT;
+    let last = ((physical + (bytes - 1)) / PAGE_BYTES) as usize >> GROUP_SHIFT;
+    LOOSENINGS[first..=last].iter().fold(0u64, |sum, count| sum.wrapping_add(count.load(Acquire)))
 }
 
 pub fn unwritten(physical: u32, bytes: u32, since: u64) -> bool {

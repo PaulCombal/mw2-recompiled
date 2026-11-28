@@ -386,6 +386,9 @@ fn worker(pcr: u32, mut owned: Owned) -> Owned {
                     }
                 }
             }
+            // The title reads how far the parse got: the copies of the draws parsed are made
+            // before it can (copy_worker.rs).
+            renderer::settle_copies();
             RING.read_index.store(wptr, Ordering::Relaxed);
             let write_back = RPTR_WRITE_BACK.load(Ordering::Relaxed);
             if write_back != 0 {

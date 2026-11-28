@@ -9,6 +9,7 @@
 
 use crate::boundary::{path_of, utf8};
 use crate::draw::{DrawList, Texture, point};
+use crate::driver;
 use crate::input::{Input, Key};
 use crate::maps::{self, Map};
 use crate::play::{CAMPAIGN, LAUNCHER, MULTIPLAYER};
@@ -109,6 +110,7 @@ pub enum Action {
     // The question a start asks when the graphics card cannot compile shaders ahead.
     PlayAnyway,
     DriverBack,
+    DriverPage,
 }
 
 // More than any screen has, so that a screen's list never moves while it is filled.
@@ -390,6 +392,43 @@ fn network_name(network: settings::Network) -> &'static str {
     }
 }
 
+const NETWORKS: [settings::Network; 4] =
+    [settings::Network::None, settings::Network::Lan, settings::Network::Server, settings::Network::Steam];
+
+// A network's card: what it is, and who it reaches.
+fn network_card(network: settings::Network, label: &[u8], chosen: Option<bool>) -> Card {
+    let address = settings::server();
+    let (emblem, name, title): (Emblem, &[u8], &[u8]) = match network {
+        settings::Network::Lan => (Emblem::Lan, b"LAN", b"LOCAL NETWORK"),
+        settings::Network::Server => {
+            (Emblem::Server, b"SERVER", if address.is_empty() { b"NO ADDRESS SET" } else { &address })
+        }
+        settings::Network::Steam => (Emblem::Steam, b"STEAM", b"STEAM FRIENDS"),
+        settings::Network::None => (Emblem::Computer, b"NO NETWORK", b"THIS COMPUTER ONLY"),
+    };
+    Card { emblem, name: name.to_vec(), title: title.to_vec(), label: label.to_vec(), chosen }
+}
+
+// What the multiplayer can do on a network (src/runtime/online/, docs/multiplayer.md).
+// The title's split screen is offline only, and its system link takes one player a copy.
+fn network_features(network: settings::Network) -> &'static [&'static str] {
+    const SPLIT: &str = "Split screen, up to 4 on this computer";
+    const PRIVATE: &str = "Xbox LIVE parties and private matches";
+    const FIND: &str = "FIND GAME: Xbox LIVE matchmaking";
+    match network {
+        settings::Network::None => &[SPLIT, "SYSTEM LINK between copies on this computer"],
+        settings::Network::Lan => {
+            &[SPLIT, "SYSTEM LINK on the local network", PRIVATE, "Invitations to everyone on the network"]
+        }
+        settings::Network::Server => {
+            &[SPLIT, "SYSTEM LINK with everyone on the server", FIND, PRIVATE, "Invitations to everyone on the server"]
+        }
+        settings::Network::Steam => {
+            &[SPLIT, "SYSTEM LINK with every Steam player", FIND, PRIVATE, "Invitations to your Steam friends"]
+        }
+    }
+}
+
 // As C's toupper in the C locale: the ASCII letters.
 fn upper(text: &[u8]) -> Vec<u8> {
     text.to_ascii_uppercase()
@@ -512,11 +551,11 @@ struct App {
     // it, and until the player chooses, the limit is the screen's.
     fps_limits: [i32; 4],
     screen_fps: i32,
-    recording: bool,        // the reported run goes on
-    pending_report: bool,   // a recorded run was never reported: the start asks about it
-    driver_warned: Action,  // shaders cannot be compiled ahead: what to start past the question
-    driver_device: Vec<u8>, // and the shaders' device it starts with
-    driver_card: Vec<u8>,   // that device by name
+    recording: bool,           // the reported run goes on
+    pending_report: bool,      // a recorded run was never reported: the start asks about it
+    driver_warned: Action,     // shaders cannot be compiled ahead: what to start past the question
+    driver_device: Vec<u8>,    // and the shaders' device it starts with
+    driver_card: driver::Card, // that device
     recording_since: Instant,
     game_checked: Instant,
     focus: i32,
@@ -565,7 +604,7 @@ impl App {
             pending_report: false,
             driver_warned: Action::None,
             driver_device: Vec::new(),
-            driver_card: Vec::new(),
+            driver_card: driver::Card::default(),
             recording_since: now,
             game_checked: now,
             focus: 0,
@@ -795,6 +834,11 @@ impl App {
                 if action == Action::PlayAnyway {
                     let device = self.driver_device.clone();
                     self.launch(then, &device);
+                }
+            }
+            Action::DriverPage => {
+                if let Some(page) = driver::download_page(&self.driver_card) {
+                    driver::open(page);
                 }
             }
             Action::NextPlayer => self.player = (self.player + 1) % self.players.len(),
@@ -1522,31 +1566,35 @@ impl App {
     fn network_entries(&self) -> Vec<Entry> {
         let mut entries: Vec<Entry> = Vec::with_capacity(MOST_ENTRIES);
         let network = settings::current_network();
-        let now = match network {
-            settings::Network::Lan => "the local network.",
-            settings::Network::Server => "the server below.",
-            settings::Network::Steam => "Steam.",
-            settings::Network::None => "none: system link plays on this computer only.",
+        let about: &str = match network {
+            settings::Network::None => "The multiplayer plays on this computer only.",
+            settings::Network::Lan => "SYSTEM LINK finds the games on your local network.",
+            settings::Network::Server => {
+                "Everyone on the same server plays together, wherever they are. Whoever runs it gives you its \
+                 address and password, below. Anyone on it can join your games: play only with people you trust."
+            }
+            settings::Network::Steam => {
+                "Plays through the Steam you run, as Spacewar; anyone on Steam can join your games. Without \
+                 Steam running, it plays as LAN."
+            }
         };
         entries.push(Entry::new(
             Action::NextNetwork,
             cat!("NETWORK ", network_name(network)),
             "NETWORK",
             cat!(
-                "How the multiplayer reaches other players: now ",
-                now,
-                "\n\nLAN: SYSTEM LINK finds the games on your local network.\
-                 \n\nSERVER: everyone on the same server sees each other's games in SYSTEM LINK, can join each \
-                 other's private matches, and finds games with FIND GAME, wherever they are. Whoever runs the server \
-                 gives you its address and password.\
-                 \n\nSTEAM: invite your Steam friends to a private match. SYSTEM LINK lists the games every Steam \
-                 player hosts, and anyone on Steam can join yours. The game shows as Spacewar. Without Steam \
-                 running, it plays as LAN.\
-                 \n\nPlayers can only meet on the same setting, so choose the one your friends use. Choose this \
-                 entry to switch to the next network. Restart the multiplayer for the change to take effect."
+                about,
+                "\n\nPlayers only meet on the same network mode. Restart the multiplayer for it to \
+                 take effect."
             ),
         ));
         let server = network == settings::Network::Server;
+        if !server {
+            let mut back = Entry::new(Action::Back, "BACK", "", "");
+            back.shown.rule_above = true;
+            entries.push(back);
+            return entries;
+        }
         let typing_server = self.typing && self.field == Field::Server;
         let typing_password = self.typing && self.field == Field::Password;
         let address = settings::server();
@@ -1560,9 +1608,7 @@ impl App {
                 cat!(
                     "The server's address, such as mw2.example.com or mw2.example.com:3074: now ",
                     if address.is_empty() { b"none.".to_vec() } else { cat!(address, ".") },
-                    "\n\nChoose to type it. It is used with NETWORK SERVER",
-                    if server { "." } else { ", which is not chosen now." },
-                    "\n\nAnyone on the server can join the games you host: play only with people you trust."
+                    "\n\nChoose to type it."
                 )
             },
         ));
@@ -1852,8 +1898,11 @@ impl App {
             let stopped = job.compile.cancel.load(Ordering::SeqCst);
             drop(job);
             self.focus_placed = false;
+            // A card a newer driver would help is warned of at every start; any other
+            // only when the shaders are looked at anew.
+            let warn = result.no_libraries && (!result.current || driver::warn_every_start(&result.card));
             if result.ok {
-                if result.no_libraries {
+                if warn {
                     self.message = cat!(
                         "The graphics driver for ",
                         result.device,
@@ -1866,11 +1915,11 @@ impl App {
                 self.message_is_error = false;
                 // Asked first: the start goes on past the question, or not.
                 if then == Action::None || stopped {
-                } else if result.no_libraries {
+                } else if warn {
                     self.message.clear();
                     self.driver_warned = then;
                     self.driver_device = result.device_id.clone();
-                    self.driver_card = result.device.clone();
+                    self.driver_card = result.card.clone();
                 } else {
                     self.launch(then, &result.device_id);
                 }
@@ -1993,18 +2042,35 @@ impl App {
             ];
         }
         if self.driver_warned != Action::None {
-            let text = cat!(
+            let mut text = cat!(
                 "The graphics driver for ",
-                self.driver_card,
+                self.driver_card.name,
                 " cannot prepare the game's shaders \
                  before it is played. The game then prepares each one the first time it is needed, \
-                 and stutters while it does.\n\n\
-                 A newer driver from the maker of your graphics card usually can. Install it, then \
-                 start the game again."
+                 and stutters while it does.\n\n"
             );
-            let mut anyway = Entry::new(Action::PlayAnyway, "PLAY ANYWAY", "UPDATE YOUR GRAPHICS DRIVER", text.clone());
+            let page = driver::download_page(&self.driver_card);
+            let heading = if driver::no_newer_driver(&self.driver_card) {
+                text.extend_from_slice(b"No driver for this graphics card can, so the game stutters on it.");
+                "YOUR GRAPHICS CARD IS TOO OLD"
+            } else {
+                text.extend_from_slice(if page.is_some() {
+                    b"A newer driver from the maker of your graphics card can. Download it and install it, \
+                      then start the game again."
+                } else {
+                    b"A newer driver from the maker of your graphics card usually can. Install it, then \
+                      start the game again."
+                });
+                "UPDATE YOUR GRAPHICS DRIVER"
+            };
+            let mut entries = vec![Entry::new(Action::DriverBack, "GO BACK", heading, text.clone())];
+            if page.is_some() {
+                entries.push(Entry::new(Action::DriverPage, "DOWNLOAD A NEWER DRIVER", heading, text.clone()));
+            }
+            let mut anyway = Entry::new(Action::PlayAnyway, "PLAY ANYWAY", heading, text);
             anyway.shown.rule_above = true;
-            return vec![Entry::new(Action::DriverBack, "GO BACK", "UPDATE YOUR GRAPHICS DRIVER", text), anyway];
+            entries.push(anyway);
+            return entries;
         }
         let mut entries: Vec<Entry> = Vec::with_capacity(MOST_ENTRIES);
         let add = |entries: &mut Vec<Entry>, action, label: &str, enabled: bool, heading: &str, text: Vec<u8>| {
@@ -2398,28 +2464,25 @@ pub fn run(updated: String, then: Action, device: Vec<u8>) -> i32 {
             frame.focus = app.focus;
             let current = &entries[app.focus as usize];
             frame.heading = current.heading.clone();
+            if app.network_screen {
+                // Every network, the one the multiplayer plays on marked, and what it allows.
+                let network = settings::current_network();
+                frame.cards = NETWORKS
+                    .iter()
+                    .map(|&each| {
+                        let chosen = each == network;
+                        network_card(each, if chosen { b"ACTIVE" } else { b"" }, Some(chosen))
+                    })
+                    .collect();
+                frame.features = network_features(network).iter().map(|feature| feature.as_bytes().to_vec()).collect();
+            }
             if (current.action == Action::PlayCampaign || current.action == Action::PlayMultiplayer)
                 && current.shown.enabled
             {
                 // Who and on what the game will play, so a player who meant to join
                 // friends sees before starting that it is set otherwise.
                 let network = settings::current_network();
-                let address = settings::server();
-                let setting = b"NETWORK SETTING".to_vec();
-                let card = |emblem, name: &[u8], title: &[u8]| Card {
-                    emblem,
-                    name: name.to_vec(),
-                    title: title.to_vec(),
-                    label: setting.clone(),
-                };
-                frame.cards.push(match network {
-                    settings::Network::Lan => card(Emblem::Lan, b"LAN", b"LOCAL NETWORK"),
-                    settings::Network::Server => {
-                        card(Emblem::Server, b"SERVER", if address.is_empty() { b"NO ADDRESS SET" } else { &address })
-                    }
-                    settings::Network::Steam => card(Emblem::Steam, b"STEAM", b"STEAM FRIENDS"),
-                    settings::Network::None => card(Emblem::Computer, b"NO NETWORK", b"THIS COMPUTER ONLY"),
-                });
+                frame.cards.push(network_card(network, b"NETWORK SETTING", None));
                 // On Steam the others see Steam's name for the player, which the launcher
                 // does not know; the stats are still the profile's.
                 let first = app.players.iter().find(|p| p.first && !p.name.is_empty());
@@ -2429,6 +2492,7 @@ pub fn run(updated: String, then: Action, device: Vec<u8>) -> i32 {
                     name,
                     title,
                     label: b"DEFAULT PROFILE".to_vec(),
+                    chosen: None,
                 };
                 frame.cards.push(match first {
                     None => profile(

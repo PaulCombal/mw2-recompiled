@@ -9,9 +9,7 @@
 // (settings.rs), the one window a copy (single.rs), the profile screen's work
 // (profile.rs), the bug report (report.rs, scrub.rs), the menu sounds (sound.rs,
 // fastfile.rs), on the game's XMA decoder, starting the game (play.rs, spawn.rs) and the
-// custom maps (maps.rs). C++ is left in the map converter (mapport/, with the zone
-// definitions' reader it shares, zone/, and its front, maps.cpp), the library
-// launcher_core, which build.rs builds through CMake.
+// custom maps (maps.rs), on the map converter (mapport/, the mw2-mapport crate).
 //
 // `main` is the C runtime's, as the C++ launcher's was: the arguments it hands over
 // (Windows' in the code page, which terminal.rs reads the wide command line instead of),
@@ -27,6 +25,7 @@ mod boundary;
 mod clock;
 mod cnum;
 mod download;
+mod driver;
 mod draw;
 mod fastfile;
 mod input;

@@ -1,0 +1,24 @@
+# The map converter: a map made for the PC game (IW4x's, or the 2009 game's) made into one
+# the 360's multiplayer loads, with what it needs from the console's own files (src/). The
+# launcher's MAPS screen runs it; map-port (map_port.rs) runs it and its checks from a
+# terminal. It reads the 360's zones by the rules of the zone crate (zone/defs/) and a PC
+# map's by the PC's (zone/defs_pc/, embedded by build.rs).
+[package]
+name = "mw2-mapport"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+doctest = false
+
+[dependencies]
+# The zone definitions and the loading rules (zone/src/defs.rs, schema.rs, rules.rs).
+mw2-zone = { path = "../zone" }
+# The zlib stream's inflate, and a zip entry's (install/src/inflate.rs).
+mw2-install = { path = "../install" }
+
+[[bin]]
+name = "map-port"
+path = "map_port.rs"
+test = false

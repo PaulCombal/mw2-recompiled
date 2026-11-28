@@ -251,6 +251,9 @@ pub struct TextureSlots {
     pub recent: [TextureSlot; 64],
     pub kept: u64,
     pub looked_up: u64,
+    /// The draw's answer for each slot, written for a slot as textures_for reaches it and
+    /// read only for those: kept here rather than zeroed afresh on every draw.
+    pub ids: [u64; TEXTURE_SLOTS as usize],
 }
 
 impl Default for TextureSlots {
@@ -260,6 +263,7 @@ impl Default for TextureSlots {
             recent: [TextureSlot::default(); 64],
             kept: 0,
             looked_up: 0,
+            ids: [0; TEXTURE_SLOTS as usize],
         }
     }
 }
@@ -305,13 +309,13 @@ pub fn textures_for<T: Textures>(
             scaled[usize::from(copy_scale != pass.scale)] |= 1u32 << slot;
         }
     };
-    let mut ids = [0u64; TEXTURE_SLOTS as usize];
     let epoch = cache.epoch();
     let resolve_epoch = resolves.resolve_epoch;
     let mut bits = mask;
     while bits != 0 {
         let slot = bits.trailing_zeros() as usize;
         bits &= bits - 1;
+        slots.ids[slot] = 0;
         let mut fetch = TextureFetch::default();
         for (i, word) in fetch.d.iter_mut().enumerate() {
             *word = r.get(CONSTANT_BASE_FETCH + slot as u32 * 6 + i as u32);
@@ -326,27 +330,34 @@ pub fn textures_for<T: Textures>(
         let answers = |entry: &TextureSlot| {
             entry.valid && entry.epoch == epoch && entry.resolve_epoch == resolve_epoch && entry.fetch == fetch.d
         };
-        let recent_at = recent_texture(&fetch.d) as usize;
+        // The hash only when the slot's own memo does not answer, which it does for most.
         let mut known = false;
+        let mut recent_at = None;
         if draw_record.is_none() {
             if answers(&slots.slots[slot]) {
                 known = true;
-            } else if answers(&slots.recent[recent_at]) {
-                slots.slots[slot] = slots.recent[recent_at];
-                known = true;
+            } else {
+                let at = recent_texture(&fetch.d) as usize;
+                recent_at = Some(at);
+                if answers(&slots.recent[at]) {
+                    slots.slots[slot] = slots.recent[at];
+                    known = true;
+                }
             }
         }
         if known {
             slots.kept = slots.kept.wrapping_add(1);
             let kept = slots.slots[slot];
-            ids[slot] = kept.id;
+            slots.ids[slot] = kept.id;
             note(scaled, slot, kept.copy_scale);
-            if cfg!(feature = "diagnostics") && kept.copy_scale == 0 && ids[slot] != 0 && pass.current_samples > 1 {
-                ids[slot] = cache.note_drawn_in_world(ids[slot]);
+            if cfg!(feature = "diagnostics") && kept.copy_scale == 0 && slots.ids[slot] != 0 && pass.current_samples > 1
+            {
+                slots.ids[slot] = cache.note_drawn_in_world(slots.ids[slot]);
             }
             continue;
         }
         slots.looked_up = slots.looked_up.wrapping_add(1);
+        let recent_at = recent_at.unwrap_or_else(|| recent_texture(&fetch.d) as usize);
         let keep = |slots: &mut TextureSlots, id: u64, copy_scale: u32| {
             let kept = TextureSlot { fetch: fetch.d, id, copy_scale, epoch, resolve_epoch, valid: true };
             slots.slots[slot] = kept;
@@ -379,38 +390,40 @@ pub fn textures_for<T: Textures>(
             let key = u64::from(base) | (u64::from(newest_index.wrapping_add(1)) << 32) | (u64::from(linearise) << 34);
             let (view, filterable) =
                 if linearise { (newest.gamma_view, newest.gamma_filterable) } else { (newest.view, newest.filterable) };
-            ids[slot] = cache.adopt(key, view, &fetch, filterable);
-            if ids[slot] != 0 {
+            slots.ids[slot] = cache.adopt(key, view, &fetch, filterable);
+            if slots.ids[slot] != 0 {
                 note(scaled, slot, newest.scale);
-                keep(slots, ids[slot], newest.scale);
+                let id = slots.ids[slot];
+                keep(slots, id, newest.scale);
                 if let Some(record) = draw_record.as_mut() {
-                    record(slot as u32, &fetch, ids[slot], true);
+                    record(slot as u32, &fetch, slots.ids[slot], true);
                 }
                 continue;
             }
         }
-        ids[slot] = cache.upload(&fetch);
-        keep(slots, ids[slot], 0);
+        slots.ids[slot] = cache.upload(&fetch);
+        let id = slots.ids[slot];
+        keep(slots, id, 0);
         // MW2_MARK_EMPTY: the world pass is the multisampled one; a texture read from an
         // empty block matters when a draw into the world binds it.
-        if cfg!(feature = "diagnostics") && ids[slot] != 0 && pass.current_samples > 1 {
-            ids[slot] = cache.note_drawn_in_world(ids[slot]);
+        if cfg!(feature = "diagnostics") && slots.ids[slot] != 0 && pass.current_samples > 1 {
+            slots.ids[slot] = cache.note_drawn_in_world(slots.ids[slot]);
         }
         if let Some(record) = draw_record.as_mut() {
-            record(slot as u32, &fetch, ids[slot], false);
+            record(slot as u32, &fetch, slots.ids[slot], false);
         }
     }
     let mut bits = pixel.texture_mask;
     while bits != 0 {
         let slot = bits.trailing_zeros() as usize;
         bits &= bits - 1;
-        record[(RECORD_TEXTURES as usize) + slot] = cache.handle(ids[slot], pixel.texture_kinds[slot]);
+        record[(RECORD_TEXTURES as usize) + slot] = cache.handle(slots.ids[slot], pixel.texture_kinds[slot]);
     }
     let mut bits = vertex.texture_mask;
     while bits != 0 {
         let slot = bits.trailing_zeros() as usize;
         bits &= bits - 1;
-        record[(RECORD_VERTEX_TEXTURES as usize) + slot] = cache.handle(ids[slot], vertex.texture_kinds[slot]);
+        record[(RECORD_VERTEX_TEXTURES as usize) + slot] = cache.handle(slots.ids[slot], vertex.texture_kinds[slot]);
     }
     if let (Some(began), Some(nanoseconds)) = (began, nanoseconds) {
         *nanoseconds = nanoseconds.wrapping_add(crate::runtime::clock::nanoseconds().wrapping_sub(began));
@@ -1510,7 +1523,8 @@ mod path {
             );
         }
         // What the arena holds: written by this draw, read back (write-combined: slow, and
-        // only here).
+        // only here), its vertex copies made first (copy_worker.rs).
+        crate::runtime::gpu::vulkan::copy_worker::settle();
         let arena_word = |at: u32| -> u32 {
             let mut word = [0u8; 4];
             // SAFETY: inside the arena: the fetch window write_constants wrote, or a vertex
