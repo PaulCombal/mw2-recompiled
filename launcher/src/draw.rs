@@ -1,12 +1,11 @@
 // The window's shapes and text as triangles for SDL's renderer (present.rs draws them):
 // lines, rectangles square and rounded, quadrilaterals, circles, gradients, pictures and
-// text, each made as Dear ImGui 1.91.9b's draw list makes it, which drew the launcher's
-// window before -- every edge smoothed by a fringe a pixel wide that fades to clear, a
-// line of whole pixels drawn from a band in the font atlas (atlas.rs), text set on whole
-// pixels and wrapped where Dear ImGui wraps it -- so that the window is drawn to the same
-// pixels. Each vertex is made with the same float operations in the same order, down to
-// the SSE reciprocal square root Dear ImGui normalises with on x86; tools/draw_diff.py
-// holds the triangles to Dear ImGui's, bit for bit.
+// text, each made as Dear ImGui 1.91.9b's draw list makes it -- every edge smoothed by a
+// fringe a pixel wide that fades to clear, a line of whole pixels drawn from a band in the
+// font atlas (atlas.rs), text set on whole pixels and wrapped where Dear ImGui wraps it --
+// so that the window is drawn to the same pixels. Each vertex is made with the same float
+// operations in the same order, down to the SSE reciprocal square root Dear ImGui
+// normalises with on x86.
 //
 // Dear ImGui is Copyright (c) 2014-2025 Omar Cornut, under the MIT licence, whose text is
 // in launcher/NOTICE.md.
@@ -620,7 +619,7 @@ impl DrawList {
 
     /// Text in `font` drawn `size` pixels tall from `pos` (its top left, set on a whole
     /// pixel), wrapped at `wrap` pixels across when that is above 0. It ends at a zero
-    /// byte, as the C string it was would have.
+    /// byte, as a C string does.
     pub fn add_text(&mut self, font: &Font, size: f32, pos: Point, col: u32, text: impl AsRef<[u8]>, wrap: f32) {
         let text = c_str(text.as_ref());
         if col & ALPHA == 0 || text.is_empty() {

@@ -50,8 +50,7 @@ pub fn now() -> i64 {
     seconds(SystemTime::now())
 }
 
-/// A moment's whole seconds since 1970, as std::chrono::system_clock::to_time_t rounds
-/// them: toward zero.
+/// A moment's whole seconds since 1970, rounded toward zero.
 pub fn seconds(time: SystemTime) -> i64 {
     match time.duration_since(UNIX_EPOCH) {
         Ok(after) => after.as_secs() as i64,

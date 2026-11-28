@@ -216,7 +216,7 @@ impl Sha256 {
         self.held = rest.len();
     }
 
-    /// Lower-case hex, as CMake's file(SHA256) writes it.
+    /// Lower-case hex.
     pub fn finish_hex(mut self) -> String {
         let mut last = [0u8; 128];
         last[..self.held].copy_from_slice(&self.pending[..self.held]);
@@ -230,7 +230,7 @@ impl Sha256 {
     }
 }
 
-/// Lower-case hex, as CMake's file(SHA256) writes it.
+/// Lower-case hex.
 pub fn sha256_hex(data: &[u8]) -> String {
     let mut hash = Sha256::new();
     hash.update(data);

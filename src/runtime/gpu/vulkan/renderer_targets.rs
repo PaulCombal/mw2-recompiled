@@ -5,13 +5,13 @@
 // The targets are a slab of boxed Targets with a BTreeMap from key to slot, the key
 // order kept for the walks that depend on it (the EDRAM clear idiom, the world
 // frame's count), and the last answer for colour and for depth by slot, forgotten
-// whenever an entry goes (the plan's §3.8). What the rest of the renderer does for them
+// whenever an entry goes. What the rest of the renderer does for them
 // -- the frame, the pass, the submission, the report's skips -- it is asked through
 // `Frame`, which renderer.rs implements over its own disjoint fields.
 //
 // Unsafe by nature: every image, view, set and pipeline is made on the renderer's device
 // and named by commands queued on the recorder, which run later; an image is destroyed
-// only after RetireBeforeDestroy has waited for every submission and the recorder.
+// only after retire_before_destroy has waited for every submission and the recorder.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use super::device::Vk;
@@ -100,7 +100,7 @@ pub fn record_transitions(list: [Option<(vk::Image, vk::ImageAspectFlags, Transi
     }
     recorder::command(move |c| {
         // SAFETY: the recorder's command buffer on the renderer's device; the images live
-        // until a RetireBeforeDestroy that waits for this call.
+        // until a retire_before_destroy that waits for this call.
         unsafe { transitions_now(c, list) }
     });
 }
@@ -200,7 +200,7 @@ impl Default for Target {
     }
 }
 
-/// The set-up command buffer, its fence and the queue (State::setup, setupFence, queue):
+/// The set-up command buffer, its fence and the queue:
 /// work that cannot go inside a frame, submitted and waited for at once.
 #[derive(Clone, Copy)]
 pub struct Setup {
@@ -210,8 +210,7 @@ pub struct Setup {
 }
 
 /// The present image a swap copies the frame into, the frame it last held, which the
-/// window must have taken before it is drawn over, and the present images' size
-/// (State::present[presentIndex], presentSerial[presentIndex], presentWidth/Height).
+/// window must have taken before it is drawn over, and the present images' size.
 #[derive(Clone, Copy)]
 pub struct Present {
     pub image: vk::Image,
@@ -232,15 +231,14 @@ pub enum DepthInto<'a> {
 /// read or set, which renderer.rs implements over its own fields -- none of them the
 /// targets or the resolves, so both can be borrowed beside it.
 pub trait Frame {
-    /// g.frames: presented frames so far.
+    /// Presented frames so far.
     fn frames(&self) -> u64;
-    /// g.drawsRecorded.
     fn draws_recorded(&self) -> u64;
-    /// g.recording: a frame's command buffer is open.
+    /// A frame's command buffer is open.
     fn recording(&self) -> bool;
     fn begin_frame(&mut self) -> bool;
     fn end_pass(&mut self);
-    /// Submit(), not waiting.
+    /// Submits, not waiting.
     fn submit(&mut self) -> bool;
     /// Before destroying an image the GPU may still use: submit and wait, drain the
     /// recorder, vkDeviceWaitIdle.
@@ -253,37 +251,35 @@ pub trait Frame {
         targets: &mut Targets,
         records: &mut super::renderer_state::ResolveRecords,
     );
-    /// Skip(why): counted by reason for the report, by the literal's address.
+    /// Counted by reason for the report, by the literal's address.
     fn skip(&mut self, why: &'static CStr);
-    /// g.currentScale, which open_guest_query reads.
+    /// The current scale, which open_guest_query reads.
     fn set_current_scale(&mut self, scale: u32);
     fn open_guest_query(&mut self);
-    /// The rendering instance just opened: g.currentColour, currentDepth, currentSamples,
-    /// currentWidth and currentHeight.
+    /// The rendering instance just opened: its colour, depth, samples, width and height.
     fn set_current(&mut self, colour: vk::ImageView, depth: vk::ImageView, samples: u32, width: u32, height: u32);
-    /// g.bound = {}: the pipeline, viewport and scissor are another draw's.
+    /// The pipeline, viewport and scissor are another draw's.
     fn reset_bound(&mut self);
-    /// g.arenaUsed and g.arenaSlotBytes.
     fn arena_used(&self) -> u32;
     fn arena_slot_bytes(&self) -> u32;
     fn setup(&self) -> Setup;
-    /// The draws' sets 1 and 2 and their layout: vk::textures::Set(), g.memorySet,
-    /// The shared pipeline layout (shaders/src/pipeline.rs).
+    /// The draws' sets 1 and 2 and their layout, the shared pipeline layout
+    /// (shaders/src/pipeline.rs).
     fn texture_set(&self) -> vk::DescriptorSet;
     fn memory_set(&self) -> vk::DescriptorSet;
     fn pipeline_layout(&self) -> vk::PipelineLayout;
-    /// The present image g.presentIndex names.
+    /// The present image the frame copies into.
     fn present(&self) -> Present;
     /// What the present image present() names was last used for.
     fn present_track(&mut self) -> &mut TrackedImage;
-    /// MW2_TIME_RENDER (Timing()).
+    /// MW2_TIME_RENDER.
     fn timing(&self) -> bool;
     fn pass_times_open(&mut self, colour: &Target, samples: u32);
     fn pass_times_between(&mut self);
-    /// PassTimesMark(format, ...): a mark by a name of its own.
+    /// A mark by a name of its own.
     fn pass_times_mark(&mut self, name: fmt::Arguments<'_>);
     /// The texture cache, whose texture_cache::forget_views a resolve image's replacement
-    /// calls (vk::textures::ForgetViews).
+    /// calls.
     fn textures(&mut self) -> &mut TextureCache;
 }
 
@@ -295,7 +291,7 @@ pub trait Frame {
 pub struct MultisampleQuery {
     /// MW2_NO_MSAA.
     pub off: bool,
-    /// MW2_MSAA, as uint32_t(env::Number).
+    /// MW2_MSAA.
     pub forced: u32,
     /// MW2_FORCE_INSTANCE_DEPTH_RESOLVE (diagnostics).
     pub instance_depth_resolve: bool,
@@ -467,7 +463,7 @@ pub fn say_multisampling(m: &Multisampling, forced: u32) {
 
 // ---- pure mappings ------------------------------------------------------------------------
 
-/// The host format of a colour surface of RB_COLOR_INFO's format (ColourFormatFor).
+/// The host format of a colour surface of RB_COLOR_INFO's format.
 pub fn colour_format_for(format: u32) -> vk::Format {
     match format {
         0 | 1 | 10 => vk::Format::R8G8B8A8_UNORM, // 8_8_8_8 and gamma
@@ -539,7 +535,7 @@ const NONE: u32 = u32::MAX;
 const NO_LAST: LastTarget =
     LastTarget { key: TargetKey { base_tile: 0, pitch: 0, format: 0, samples: 0, depth: false, scale: 0 }, id: NONE };
 
-// PassScale's statics: whether the shadow maps' surfaces are known yet, and the last
+// pass_scale's memo: whether the shadow maps' surfaces are known yet, and the last
 // question and its answer.
 #[derive(Clone, Copy)]
 struct PassScaleCache {
@@ -571,7 +567,7 @@ impl DrawnResolve {
     }
 }
 
-/// The EDRAM surfaces as images (State::targets and lastTargets).
+/// The EDRAM surfaces as images.
 pub struct Targets {
     slab: Vec<Option<Box<Target>>>,
     free: Vec<u32>,
@@ -580,7 +576,7 @@ pub struct Targets {
     drawn: DrawnResolve,
     pass: PassScaleCache,
     pub settings: TargetSettings,
-    /// The clears after a resolve, by what Xenia's rectangle came to (S14d).
+    /// The clears after a resolve, by what Xenia's rectangle came to.
     pub clears: ResolveClears,
 }
 
@@ -632,7 +628,7 @@ impl Targets {
 
     /// The scale a pass is drawn at, and its surfaces and their copies made at: the shadow
     /// maps' for a pass whose depth registers name the surface the title made for them,
-    /// the frame's for any other (PassScale).
+    /// the frame's for any other.
     #[inline]
     pub fn pass_scale(&mut self, depth_info: u32, samples: u32) -> u32 {
         let s = &self.settings;
@@ -705,7 +701,7 @@ impl Targets {
 
     /// The target `key` names, at least `width` by `height` of the title's pixels: the
     /// last answer, the map's, or a new image -- one that grew is made again at the
-    /// larger of the two sizes, after RetireBeforeDestroy. None, with the reason
+    /// larger of the two sizes, after retire_before_destroy. None, with the reason
     /// skipped, when the format has no host one or the image cannot be made.
     ///
     /// # Safety
@@ -867,7 +863,7 @@ impl Targets {
         let area = scaled_extent(vk::Extent2D { width, height }, colour.scale);
         recorder::command(move |c| {
             // SAFETY: the recorder's command buffer on the renderer's device; the images and
-            // views live until a RetireBeforeDestroy that waits for this call.
+            // views live until a retire_before_destroy that waits for this call.
             unsafe {
                 transitions_now(c, [into_colour, into_depth]);
                 // LOAD, not CLEAR: a frame is many rendering instances -- one per change
@@ -1203,7 +1199,7 @@ impl Targets {
         let leaving = self.track_of(id, &mut into).enter(after, true).map(|t| (into_image, DEPTH_ASPECTS, t));
         recorder::command(move |c| {
             // SAFETY: the recorder's command buffer on the renderer's device; the images,
-            // the views and `into` live until a RetireBeforeDestroy that waits for this call.
+            // the views and `into` live until a retire_before_destroy that waits for this call.
             unsafe {
                 transitions_now(c, [from, entering]);
                 let depth = vk::RenderingAttachmentInfo {
@@ -1297,7 +1293,7 @@ impl Targets {
         let main_sets = [f.texture_set(), f.memory_set()];
         recorder::command(move |c| {
             // SAFETY: the recorder's command buffer on the renderer's device; the surface,
-            // `into`, the set and both layouts live until a RetireBeforeDestroy that waits
+            // `into`, the set and both layouts live until a retire_before_destroy that waits
             // for this call (the drawn resolve's objects until shutdown).
             unsafe {
                 transitions_now(c, [fetched, entering]);
@@ -1373,7 +1369,7 @@ impl Targets {
         unsafe { self.destroy_drawn_resolve(vk) };
     }
 
-    /// The drawn resolve's pipelines, pool and layouts (DestroyDrawnResolve): after every
+    /// The drawn resolve's pipelines, pool and layouts: after every
     /// target's forget_sampled_depth.
     ///
     /// # Safety
@@ -1401,7 +1397,7 @@ impl Targets {
 }
 
 /// The target's image at its size and scale, its memory and, when `aspect` asks for one,
-/// its view (MakeImage). False at the first failure, with what was made left in the
+/// its view. False at the first failure, with what was made left in the
 /// target.
 ///
 /// # Safety
@@ -1463,7 +1459,7 @@ pub unsafe fn make_image(
     true
 }
 
-/// The single-sampled twin's objects (DestroySingle).
+/// The single-sampled twin's objects.
 ///
 /// # Safety
 /// `vk` is the device that made them; nothing uses them any more.
@@ -1485,7 +1481,7 @@ unsafe fn destroy_single(vk: &Vk, target: &mut Target) {
     target.single_memory = vk::DeviceMemory::null();
 }
 
-/// A target's objects, its sampled view and set first (DestroyTarget).
+/// A target's objects, its sampled view and set first.
 ///
 /// # Safety
 /// `vk` is the device that made them; nothing uses them any more.
@@ -1506,7 +1502,7 @@ unsafe fn destroy_target(vk: &Vk, drawn: &mut DrawnResolve, target: &mut Target)
     }
 }
 
-/// The single-sampled twin of a multisampled target, made on first use (EnsureSingle). A
+/// The single-sampled twin of a multisampled target, made on first use. A
 /// colour twin is a transfer destination the resolve fills; a depth twin is an
 /// attachment, because a depth resolve only happens inside a render pass.
 ///
@@ -1551,7 +1547,7 @@ unsafe fn ensure_single(vk: &Vk, memory: &vk::PhysicalDeviceMemoryProperties, ta
 }
 
 /// The rectangle of a multisampled colour target resolved into `into`, an image of its
-/// format in TRANSFER_DST, at the same place (ResolveColourInto): by vkCmdResolveImage,
+/// format in TRANSFER_DST, at the same place: by vkCmdResolveImage,
 /// the target an attachment again afterwards. Outside any render pass.
 pub fn resolve_colour_into(target: &mut Target, at: vk::Offset2D, width: u32, height: u32, into: vk::Image) {
     record_use(target.image, vk::ImageAspectFlags::COLOR, &mut target.track, tracked::COPIED_FROM, true);
@@ -1583,7 +1579,7 @@ pub fn resolve_colour_into(target: &mut Target, at: vk::Offset2D, width: u32, he
     });
 }
 
-/// The clears after a resolve, counted for the report (S14d).
+/// The clears after a resolve, counted for the report.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct ResolveClears {
     /// A target cleared whole: the rectangle covers the image.
@@ -1823,7 +1819,7 @@ fn clear_area(target: &mut Target, area: vk::Rect2D, value: vk::ClearValue) {
     let depth = target.depth;
     recorder::command(move |c| {
         // SAFETY: the recorder's command buffer on the renderer's device; the image and its
-        // view live until a RetireBeforeDestroy that waits for this call.
+        // view live until a retire_before_destroy that waits for this call.
         unsafe {
             transitions_now(c, [into, None]);
             let attachment = vk::RenderingAttachmentInfo {
@@ -1856,7 +1852,7 @@ fn clear_area(target: &mut Target, area: vk::Rect2D, value: vk::ClearValue) {
 /// before any frame's render pass loads it -- depth to 0 and stencil 0 (a level tests
 /// GEQUAL, and RB_DEPTH_CLEAR is zero), colour to (0.06, 0.07, 0.10, 1), not black, so a
 /// target the title has not drawn into reads apart from an empty resolve. Submitted and
-/// waited for under the queue lock (ClearNewTarget). Left in TRANSFER_DST: the first
+/// waited for under the queue lock. Left in TRANSFER_DST: the first
 /// rendering instance over it brings it on (tracked.rs).
 ///
 /// # Safety
@@ -1908,9 +1904,8 @@ unsafe fn clear_new_target<F: Frame>(vk: &Vk, f: &mut F, target: &mut Target) {
 
 // ---- the depth resolve as a draw: its layouts, pool, pipelines and sets ----------------
 
-/// The set and pipeline layouts and the pool of sets, once; a failure remembered
-/// (MakeDrawnLayout). A set per multisampled depth target: 64, or MW2_DRAWN_RESOLVE_SETS
-/// in a diagnostics build, to run the pool dry.
+/// The set and pipeline layouts and the pool of sets, once; a failure remembered. A set
+/// per multisampled depth target: 64.
 ///
 /// # Safety
 /// `vk` is the renderer's live device.
@@ -1944,15 +1939,12 @@ unsafe fn make_drawn_layout(vk: &Vk, drawn: &mut DrawnResolve) -> bool {
             return false;
         }
     }
+    // MW2_DUMP_SHADERS: the draw's two shaders.
     #[cfg(feature = "diagnostics")]
-    let sets = {
-        let forced = super::trace::forcing().drawn_resolve_sets;
-        // MW2_DUMP_SHADERS: the draw's two shaders.
+    {
         super::trace::dump_builtin("drawn_resolve_cover_vertex", &cover_vertex_shader());
         super::trace::dump_builtin("drawn_resolve_fetch_depth", &fetch_depth_shader());
-        if forced != 0 { forced } else { 64 }
-    };
-    #[cfg(not(feature = "diagnostics"))]
+    }
     let sets = 64u32;
     let size = vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLED_IMAGE, descriptor_count: sets };
     let pool_info = vk::DescriptorPoolCreateInfo {
@@ -1983,7 +1975,7 @@ unsafe fn shader_module(vk: &Vk, words: &[u32]) -> vk::ShaderModule {
 }
 
 /// The drawn resolve's pipeline for depth `format`, made with the first target of it and
-/// kept, a failure (null) too (DrawnPipeline).
+/// kept, a failure (null) too.
 ///
 /// # Safety
 /// `vk` is the renderer's live device; make_drawn_layout has run.
@@ -2077,7 +2069,7 @@ unsafe fn drawn_pipeline(vk: &Vk, drawn: &mut DrawnResolve, format: vk::Format) 
 
 /// A multisampled depth target's depth-only view and the set naming it, in
 /// DEPTH_STENCIL_READ_ONLY; the pipeline made too, while the level loads rather than at
-/// its first frame (MakeSampledDepth). Without a set -- the pool of 64 dry -- the target
+/// its first frame. Without a set -- the pool of 64 dry -- the target
 /// is resolved by a rendering instance.
 ///
 /// # Safety
@@ -2130,7 +2122,7 @@ unsafe fn make_sampled_depth(vk: &Vk, drawn: &mut DrawnResolve, target: &mut Tar
     }
 }
 
-/// The target's set back to the pool and its sampled view gone (ForgetSampledDepth).
+/// The target's set back to the pool and its sampled view gone.
 ///
 /// # Safety
 /// `vk` is the device that made them; nothing uses them any more.
@@ -2148,14 +2140,14 @@ unsafe fn forget_sampled_depth(vk: &Vk, drawn: &DrawnResolve, target: &mut Targe
     target.sampled_view = vk::ImageView::null();
 }
 
-// What the frame's diagnostics walk (S9e: renderer_diagnostics.rs's DumpTargets).
+// What the frame's diagnostics walk (renderer_diagnostics.rs's dump_targets).
 impl Targets {
     /// Every target's key and slot, in key order.
     pub fn ids(&self) -> Vec<(TargetKey, u32)> {
         self.map.iter().map(|(key, &id)| (*key, id)).collect()
     }
 
-    /// The EDRAM clear idiom's pair (renderer_draw.rs's draw, S9e): of the colour targets
+    /// The EDRAM clear idiom's pair (renderer_draw.rs's draw): of the colour targets
     /// at `base_tile` in host `format` over EDRAM row `row` with fewer samples than
     /// `use_samples` and drawn at the pass scale, the last in key order with
     /// fewer samples than the one before; the pass scale asked of a key only when its

@@ -41,9 +41,9 @@
 use crate::env;
 use crate::guest::{Memory, PPCContext, Register, guest_hook, preserving};
 use crate::log::{log_info, log_warn};
-use crate::runtime::install::arena::{self, Map};
 use crate::runtime::kernel;
 use crate::title::*;
+use mw2_install::arena::{self, Map};
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
@@ -118,7 +118,7 @@ fn plural(n: u32) -> &'static CStr {
     if n == 1 { c"" } else { c"s" }
 }
 
-// A text for the log, as printf shows a std::string's c_str(): up to its first zero.
+// A text for the log, as printf shows a C string: up to its first zero.
 fn shown(bytes: &[u8]) -> CString {
     let end = bytes.iter().position(|&byte| byte == 0).unwrap_or(bytes.len());
     CString::new(&bytes[..end]).unwrap_or_default()

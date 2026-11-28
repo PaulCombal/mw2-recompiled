@@ -20,7 +20,7 @@
 //   float format of as many channels: Xenia's choice of precision over filtering. 4_4_4_4
 //   is R4G4B4A4, optional, where it can be sampled and filtered, else Xenia's B4G4R4A4,
 //   which every device has, with red and blue swapped on upload. Any other format that
-//   cannot be sampled is refused, as before ("device cannot sample this format").
+//   cannot be sampled is refused ("device cannot sample this format").
 // - A sampler asks for linear filtering only of an image whose format can be filtered:
 //   otherwise its minification, magnification and mip filters are point and it has no
 //   anisotropy (texture_cache.rs's point_only). Resolve copies the same.
@@ -29,7 +29,7 @@
 //   colour target (resolves copy out of it). A resolve copy, which textures sample, is
 //   made only of a format that can be sampled, and its sRGB view only where the sRGB
 //   format can be.
-// - A blit (Swap's, into the present image, and the presenter's, into the swapchain)
+// - A blit (the swap's, into the present image, and the presenter's, into the swapchain)
 //   filters linearly where its source format can be filtered, else takes the nearest
 //   texel; a source that cannot be a blit source is not blitted.
 // - The swapchain: Xenia's choice of surface format (B8G8R8A8_UNORM, then R8G8B8A8_UNORM,

@@ -268,7 +268,7 @@ struct Avatar {
     side: u32,
 }
 
-/// A link WatchLinks follows.
+/// A link watch_links follows.
 #[derive(Default)]
 struct Link {
     state: i32,
@@ -798,7 +798,7 @@ impl Inner {
         self.start_hunt_locked(state);
     }
 
-    // The friends running this game, by the key Start sets, and how many others there
+    // The friends running this game, by the key start sets, and how many others there
     // are. Steam has all of it at hand: nothing here waits on the network.
     fn build_friends(&self, watching: &mut Watching) {
         let mut list = FriendList::default();

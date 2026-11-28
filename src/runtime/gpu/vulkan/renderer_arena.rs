@@ -2,8 +2,8 @@
 // guest memory and the register file into the frame arena.
 //
 // Unsafe by nature: the arena is a mapping of device memory, write-combined, that nothing
-// here may read back or take a slice of (§3.5): it is written through raw copies and plain
-// stores at offsets Allocate has just checked against the slot's share, and the guest's
+// here may read back or take a slice of: it is written through raw copies and plain
+// stores at offsets allocate has just checked against the slot's share, and the guest's
 // memory, which guest threads write concurrently, is read through raw copies at addresses
 // the fetch constants name.
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -48,9 +48,9 @@ impl DrawNotes for NoNotes {
     fn indices(&mut self, _: *const u8, _: usize) {}
 }
 
-/// What the memory watch's Serve is asked with for a vertex window the shadow may hold:
-/// the submission being recorded (g.submissionSerial + 1), the last one the GPU has
-/// finished (CompletedSerial) and the frame (g.frames).
+/// What the memory watch's serve is asked with for a vertex window the shadow may hold:
+/// the submission being recorded (one past the last submitted), the last one the GPU has
+/// finished and the frame.
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct ServeClock {
@@ -66,8 +66,7 @@ pub type Swap16 = unsafe fn(*const u8, *mut u16, u32) -> (u16, u16);
 pub type Swap32 = unsafe fn(*const u8, *mut u32, u32) -> (u32, u32);
 
 /// One host-visible buffer holding everything a draw reads that is not a texture, split
-/// into a share per frame slot, and the caches of what this slot's share already holds
-/// (State's arena fields).
+/// into a share per frame slot, and the caches of what this slot's share already holds.
 ///
 /// What the writes below write lies inside the mapping by construction: the mapping, the
 /// shares and the current slot are set by `new` and `begin_frame` alone and every write
@@ -114,7 +113,7 @@ pub struct Arena {
     swap32: Swap32,
 }
 
-// SAFETY: the arena is the ring consumer's, moved into its thread with the renderer (§3.6);
+// SAFETY: the arena is the ring consumer's, moved into its thread with the renderer;
 // the mapping it points at lives until the renderer's shutdown unmaps it, after the worker
 // has been joined.
 unsafe impl Send for Arena {}
@@ -179,7 +178,7 @@ pub fn swaps(avx2: bool) -> (Swap16, Swap32) {
 
 impl Arena {
     /// The arena over `bytes` of mapped device memory, its shares a whole number of
-    /// `uniform_alignment`s, the current slot the last (BeginFrame moves on before it
+    /// `uniform_alignment`s, the current slot the last (begin_frame moves on before it
     /// records), the swaps picked for this CPU.
     ///
     /// # Safety
@@ -219,7 +218,7 @@ impl Arena {
         }
     }
 
-    /// BeginFrame's part: slot `slot`'s share from its start, and nothing it held cached.
+    /// A frame's start: slot `slot`'s share from its start, and nothing it held cached.
     pub fn begin_frame(&mut self, slot: u32) {
         // Nothing still to be copied into the share being left (a submission settled it
         // already; this holds even without one).
@@ -959,13 +958,13 @@ struct Made {
     dwords: u32,
 }
 
-// What the rest of the renderer reads of the arena (S9e: renderer_frame.rs, renderer.rs).
+// What the rest of the renderer reads of the arena (renderer_frame.rs, renderer.rs).
 impl Arena {
     /// No arena: the renderer before its start and after its end. Every allocation fails
     /// (the share is empty) and nothing is written.
     pub fn empty() -> Arena {
         // SAFETY: no bytes, and nothing writes through it: the renderer allocates from its
-        // arena only while it has a device (Draw returns first without one), and its start
+        // arena only while it has a device (draw returns first without one), and its start
         // replaces this with the real one.
         unsafe { Arena::new(ptr::null_mut(), 0, 256, 0) }
     }
@@ -977,13 +976,13 @@ impl Arena {
         self.slot_bytes = 0;
     }
 
-    /// How much of the current slot's share is spent (State::arenaUsed).
+    /// How much of the current slot's share is spent.
     #[inline]
     pub fn used(&self) -> u32 {
         self.used
     }
 
-    /// One slot's share (State::arenaSlotBytes).
+    /// One slot's share.
     #[inline]
     pub fn slot_bytes(&self) -> u32 {
         self.slot_bytes

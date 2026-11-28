@@ -78,8 +78,8 @@ fn numbers(tag: &str) -> Vec<u64> {
         return Vec::new();
     }
     let mut numbers = Vec::new();
-    // Each part is digits, the parts joined by dots; a dot at the end ends it as the
-    // C++ did, with nothing after it.
+    // Each part is digits, the parts joined by dots; a dot at the end ends it,
+    // with nothing after it.
     let mut parts = digits.split('.').peekable();
     while let Some(part) = parts.next() {
         if part.is_empty() {

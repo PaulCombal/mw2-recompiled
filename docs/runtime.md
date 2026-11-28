@@ -346,9 +346,8 @@ divide never raises `SIGFPE`: it gives 0 where the host's would trap
 ([security.md](security.md)).
 An indirect call to an address outside the code section is reported, and ends
 the process, instead of reading past the function table
-([security.md](security.md)). With `MW2_TRACE_INDIRECT`, which `build.rs` always defines, so is
-one to an address inside it with no recompiled function, instead of jumping to
-null.
+([security.md](security.md)), and so is one to an address inside it with no
+recompiled function, instead of jumping to null.
 
 **The write watch** tells the GPU side which pages of physical memory the
 title has written. A page the GPU reads from is made read-only in both windows;

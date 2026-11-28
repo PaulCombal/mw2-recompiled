@@ -147,8 +147,8 @@ const CONSTANT_WINDOWS: [u32; 5] = [
 // indirect buffer, so a batch's work is bounded, far above a real frame (~50k dwords).
 const BATCH_WORK_LIMIT: u64 = 8 << 20;
 
-/// A statistic for the reports: single writer, relaxed load and store (counter.h), or
-/// nothing in a release build (diag::Stat). Nothing the game does reads one.
+/// A statistic for the reports: single writer, relaxed load and store, or nothing in a
+/// release build. Nothing the game does reads one.
 pub(super) struct Stat(#[cfg(feature = "diagnostics")] AtomicU64);
 
 impl Stat {
@@ -182,7 +182,7 @@ impl Stat {
 }
 
 // What the report prints, read after the consumer has stopped or, on a fault, at any
-// time: atomics in statics (D13). A release has no report.
+// time: atomics in statics. A release has no report.
 #[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
 struct Stats {
     packets: Stat,
@@ -295,7 +295,7 @@ static UNKNOWN_OPCODES: AtomicU32 = AtomicU32::new(0);
 static SWAPS_PARSED: AtomicU64 = AtomicU64::new(0);
 // A WAIT_FOR_IDLE with no draw after it: the GPU has finished every draw so far, so
 // whatever the command processor writes or raises now tells the title they are done
-// (vk::renderer::BeforeCompletion). The consumer's; an atomic so that write_physical,
+// (renderer::before_completion). The consumer's; an atomic so that write_physical,
 // which the arena calls in the middle of a batch, needs no command processor.
 static IDLE_SINCE_DRAW: AtomicBool = AtomicBool::new(false);
 
@@ -526,7 +526,7 @@ impl Source {
 
 /// False under MW2_RENDER=0: the stream is executed and counted, nothing drawn.
 pub fn rendering() -> bool {
-    // A release build reads no debug switch (diag::Text).
+    // A release build reads no debug switch.
     if !cfg!(feature = "diagnostics") {
         return true;
     }

@@ -48,7 +48,7 @@ pub fn table_bytes(wanted: &[u32; 256]) -> [u8; 256 * 4] {
 }
 
 pub struct DisplayTable {
-    // Initialise has run with a device: Shutdown has work.
+    // initialise has run with a device: shutdown has work.
     started: bool,
     set_layout: vk::DescriptorSetLayout,
     layout: vk::PipelineLayout,
@@ -559,7 +559,7 @@ impl DisplayTable {
     }
 }
 
-// What the renderer's report keeps of it after the shutdown (S9e).
+// What the renderer's report keeps of it after the shutdown.
 impl DisplayTable {
     /// The frames the table was applied to and the table's changes.
     pub fn counts(&self) -> (u64, u64, u64) {

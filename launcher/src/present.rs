@@ -1,8 +1,7 @@
 // The window's triangles (draw.rs) drawn with SDL's renderer, as Dear ImGui's SDL
 // renderer backend drew them: the font atlas a picture of white pixels with its coverage
 // as alpha, sampled smoothly, and each run of triangles drawn inside its rectangle, made
-// whole pixels, with its colours as SDL's floats. tools/draw_diff.py holds the two to the
-// same pixels on SDL's software renderer.
+// whole pixels, with its colours as SDL's floats.
 //
 // Dear ImGui is Copyright (c) 2014-2025 Omar Cornut, under the MIT licence, whose text is
 // in launcher/NOTICE.md.

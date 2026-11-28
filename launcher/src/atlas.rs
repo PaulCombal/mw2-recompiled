@@ -1,9 +1,9 @@
 // The launcher's fonts, rasterised once into one picture the window's text is drawn from
-// (draw.rs), as Dear ImGui 1.91.9b built its atlas, which drew the launcher's window
-// before: each font's glyphs from U+0020 to U+00FF, three samples a pixel across, packed
-// with stb_rect_pack's skyline, beside the pixels every shape takes its colour from and
-// the bands its smoothed lines are drawn with. Every glyph is where Dear ImGui put it,
-// so the window is drawn to the same pixels; tools/draw_diff.py holds the two together.
+// (draw.rs), as Dear ImGui 1.91.9b builds its atlas: each font's glyphs from U+0020 to
+// U+00FF, three samples a pixel across, packed with stb_rect_pack's skyline, beside the
+// pixels every shape takes its colour from and the bands its smoothed lines are drawn
+// with. Every glyph is where Dear ImGui puts it, so the window is drawn to the same
+// pixels.
 //
 // stb_rect_pack is Sean Barrett's, in the public domain (or, at the user's choice, under
 // the MIT licence), and taken here under the former; Dear ImGui is Copyright (c) 2014-2025
@@ -33,12 +33,6 @@ pub struct Glyph {
 pub struct Font {
     /// The size it was rasterised at: its line's height, in pixels.
     pub size: f32,
-    // Dear ImGui's font has them; the window draws without, and tools/draw_diff.rs holds
-    // them to Dear ImGui's.
-    #[allow(dead_code)]
-    pub ascent: f32,
-    #[allow(dead_code)]
-    pub descent: f32,
     glyphs: Vec<Glyph>,
     // By codepoint: the glyph's place in `glyphs` (u16::MAX for none) and its advance.
     lookup: Vec<u16>,
@@ -179,9 +173,8 @@ impl Atlas {
         for font in &pending {
             let mut glyphs = Vec::with_capacity(font.glyphs.len() + 1);
             let scale = font.face.scale_for_pixel_height(font.size)?;
-            let (ascent, descent) = font.face.v_metrics()?;
+            let (ascent, _) = font.face.v_metrics()?;
             let ascent = (ascent as f32 * scale).ceil();
-            let descent = (descent as f32 * scale).floor();
             let top = 0.0 + (ascent + 0.5) as i32 as f32;
             for ((&codepoint, &glyph), rect) in font.codepoints.iter().zip(&font.glyphs).zip(&font.rects) {
                 let packed = font.face.render_packed(
@@ -221,7 +214,7 @@ impl Atlas {
                     advance,
                 });
             }
-            fonts.push(Font::finish(font.size, ascent, descent, glyphs));
+            fonts.push(Font::finish(font.size, glyphs));
         }
 
         // The white pixels: a square of four, its first sampled at its middle.
@@ -260,7 +253,7 @@ impl Font {
     // ImFont::BuildLookupTable: the index by codepoint, a tab four spaces wide, spaces and
     // tabs not drawn, and '?' for what the font does not have (U+FFFD, the first choice,
     // is past what was rasterised).
-    fn finish(size: f32, ascent: f32, descent: f32, mut glyphs: Vec<Glyph>) -> Font {
+    fn finish(size: f32, mut glyphs: Vec<Glyph>) -> Font {
         let highest = glyphs.iter().map(|g| g.codepoint).max().unwrap_or(0) as usize;
         let mut lookup = vec![u16::MAX; highest + 1];
         let mut advances = vec![-1.0f32; highest + 1];
@@ -292,7 +285,7 @@ impl Font {
                 *advance = fallback_advance;
             }
         }
-        Font { size, ascent, descent, glyphs, lookup, advances, fallback, fallback_advance }
+        Font { size, glyphs, lookup, advances, fallback, fallback_advance }
     }
 }
 

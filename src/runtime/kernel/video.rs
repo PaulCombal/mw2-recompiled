@@ -130,8 +130,8 @@ kernel_import!(VdSetDisplayMode, |ctx, _memory| {
 // The first argument is 64 dwords D3D9 reserved in its own command stream for the
 // kernel's commands, between the frame's last resolve and the flip handshake. Left
 // unwritten they hold whatever the arena held on its previous lap: zeros at first, then
-// stale packets once it wraps, which the command processor walks straight into -- it
-// swallowed the handshake and the title stopped a second into a level. Filled as Xenia
+// stale packets once it wraps, which the command processor walks straight into,
+// swallowing the handshake and stopping the title a second into a level. Filled as Xenia
 // fills them: a swap packet naming the front buffer, then type-2 no-ops. Xenia also
 // writes the front buffer's fetch constant to slot 0 first; not here, where the renderer
 // would take it for a texture binding.

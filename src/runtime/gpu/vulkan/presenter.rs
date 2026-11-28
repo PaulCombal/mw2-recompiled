@@ -271,12 +271,11 @@ impl Display {
     /// more to fall behind on. Returns the guest's blank period and its time, when the
     /// display is followed.
     ///
-    /// The display's period comes from its mode where the mode says it exactly.
-    /// Measured from these completions it read 17.1 ms against the panel's 16.67 in a
-    /// run where frames were often late -- late completions pull an average up -- and
-    /// the guest's blank followed it down to 58.5 Hz. On the console the blank the title
-    /// counts is the display's own; a timer of ours beside it drifts, and every so often
-    /// a frame is shown twice or waits a frame longer.
+    /// The display's period comes from its mode where the mode says it exactly: measured
+    /// from these completions it reads long when frames are often late, since late
+    /// completions pull an average up, and the guest's blank would follow it down. On the
+    /// console the blank the title counts is the display's own; a timer of ours beside it
+    /// drifts, and every so often a frame is shown twice or waits a frame longer.
     pub fn saw_displayed(
         &mut self,
         id: u64,
@@ -358,9 +357,8 @@ pub struct Queued {
 }
 
 /// The frames the renderer has finished and the window has not shown yet, oldest
-/// first. Each is shown once, in order: the window used to show whichever frame was
-/// newest when the title asked for a present, and a frame finishing about then was
-/// shown twice or never.
+/// first. Each is shown once, in order: showing whichever frame is newest when the title
+/// asks for a present would show a frame finishing about then twice or never.
 #[derive(Default)]
 pub struct FrameQueue {
     pub frames: VecDeque<Queued>,
@@ -576,7 +574,7 @@ impl Default for Shared {
 /// The window's steps of a frame that touch Vulkan, kept apart from draw_one_frame's
 /// order and decisions.
 pub trait Steps {
-    /// RemakeSwapchain: the presenter's fences waited for, and whether a swapchain was
+    /// The presenter's fences waited for and the swapchain remade, and whether one was
     /// made.
     fn remake_swapchain(&mut self) -> bool;
     fn has_swapchain(&self) -> bool;
@@ -589,7 +587,7 @@ pub trait Steps {
     fn present(&mut self, frame: u32, image_index: u32, id: Option<u64>) -> vk::Result;
     /// The shared pipeline's failed on a present's result that is not out of date.
     fn present_failed(&mut self, result: vk::Result);
-    /// stutters::Shown.
+    /// stutters::shown.
     fn shown(&mut self, serial: u64);
 }
 
@@ -697,7 +695,7 @@ fn nanoseconds() -> i64 {
     clock::nanoseconds() as i64
 }
 
-// frame_rate::Console(): frames retired at the blank, one a blank, as on the console.
+// As frame_rate::console(): frames retired at the blank, one a blank, as on the console.
 fn console_rate() -> bool {
     static CONSOLE: LazyLock<bool> = LazyLock::new(|| frame_rate::limit() == 60);
     *CONSOLE
@@ -2074,7 +2072,7 @@ fn waiter(wait: ash::khr::present_wait::Device) {
     }
 }
 
-// stutters::Displayed: a frame `extra` blanks late, `gap_ms` after the one before.
+// stutters::displayed: a frame `extra` blanks late, `gap_ms` after the one before.
 #[cfg(feature = "diagnostics")]
 fn stutter(serial: u64, extra: u32, gap_ms: f64) {
     use crate::runtime::{pacing_trace, stutters};

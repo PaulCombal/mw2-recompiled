@@ -5,8 +5,6 @@
 // A run given an image and a game folder on the command line is a development run and
 // skips all of this.
 
-// The custom maps' (src/hooks/custom_map_list.rs), which only the update's multiplayer has.
-pub use mw2_install::arena;
 #[allow(unsafe_code)]
 pub mod spawn;
 

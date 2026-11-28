@@ -973,11 +973,9 @@ first draw with no workers and no optimised links, every doomed texture is
 destroyed at once, and neither `gpu_time` nor the pass timing runs.
 
 **Forced fallbacks**, read once when the renderer starts: the depth resolve by
-a rendering instance, every multisampled resolve through the surface's twin, a
-small pool for the drawn resolve's sets, every resolve image made again every
-n frames, one call a draw, every texture upload submitted alone, a small least
-staging buffer, and a device lost after n seconds. The report's `renderer:
-forced paths taken:` line counts the ones that count.
+a rendering instance, one call a draw, pipeline libraries refused as by the
+driver, and formats without the features the device gives them
+([switches.md](switches.md#checking-the-renderer)).
 
 **The capture.** `MW2_CAPTURE_GPU=<dir>:<after presents>:<presents>`
 (`runtime/gpu/stream_capture.h`) records what the command processor reads,

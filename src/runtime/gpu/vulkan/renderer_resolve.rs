@@ -1,5 +1,5 @@
-// Resolves: EDRAM copied out to a texture the
-// title reads back, or the finished frame copied out for the window.
+// Resolves: EDRAM copied out to a texture the title reads back, or the finished frame
+// copied out for the window.
 //
 // A resolve that is not the frame is the title handing itself a texture: the pixels never
 // go through guest memory, the destination address names one of a ring of images, a copy
@@ -9,9 +9,9 @@
 // of the present images and run through the display's colour table.
 //
 // Unsafe by nature: the images are the renderer's device's and named by commands queued
-// on the recorder; an image is replaced only after RetireBeforeDestroy has waited for
+// on the recorder; an image is replaced only after retire_before_destroy has waited for
 // every submission and the recorder, and after the texture cache has forgotten every view
-// of it (ForgetViews).
+// of it (forget_views).
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use super::device::Vk;
@@ -34,10 +34,6 @@ use crate::runtime::gpu::registers::{
 use crate::runtime::gpu::texture::texture_format_of;
 use ash::vk;
 use std::collections::BTreeMap;
-#[cfg(feature = "diagnostics")]
-use std::collections::HashSet;
-#[cfg(feature = "diagnostics")]
-use std::sync::atomic::Ordering;
 
 use super::presenter::wait_until_taken;
 use super::texture_cache::forget_views;
@@ -65,17 +61,11 @@ pub struct Resolves {
     pub depth_resolves: u64,
     pub resolve_images_made: u64,
     pub resolve_nanoseconds: u64,
-    /// Depth resolves whose rectangle starts past its surface: empty, and refused (S14b).
+    /// Depth resolves whose rectangle starts past its surface: empty, and refused.
     pub depth_resolve_wraps: u64,
-    /// Those of them starting short of its right edge, past its height: a refusal of the renderer's
-    /// own, as Xenia clamps only x (S14b).
+    /// Those of them starting short of its right edge, past its height: a refusal of the
+    /// renderer's own, as Xenia clamps only x.
     pub depth_resolve_wraps_below: u64,
-    // MW2_FORCE_RESOLVE_REMAKE: the images to make again at their next resolve, and the
-    // frame they were marked at.
-    #[cfg(feature = "diagnostics")]
-    remake: HashSet<vk::Image>,
-    #[cfg(feature = "diagnostics")]
-    remake_marked: u64,
 }
 
 impl Resolves {
@@ -91,10 +81,6 @@ impl Resolves {
             resolve_nanoseconds: 0,
             depth_resolve_wraps: 0,
             depth_resolve_wraps_below: 0,
-            #[cfg(feature = "diagnostics")]
-            remake: HashSet::new(),
-            #[cfg(feature = "diagnostics")]
-            remake_marked: 0,
         }
     }
 
@@ -131,7 +117,7 @@ impl Resolves {
     /// The resolve the registers describe: RB_COPY_CONTROL's source, colour or depth, out
     /// of the surface the registers name into the destination's copy for this frame, at
     /// the place Xenia's copy_dest_coordinate_info puts it, then the clears the copy
-    /// control asks for (vk::renderer::Resolve).
+    /// control asks for.
     ///
     /// # Safety
     /// `vk` is the renderer's live device and the recorder's; `targets` and `f` are the
@@ -223,10 +209,6 @@ impl Resolves {
         let resolve_images_made = &mut self.resolve_images_made;
         let into = resolve_copy_for(&mut self.records, destination, frames);
         let first_this_frame = into.written_frame != frames;
-        #[cfg(feature = "diagnostics")]
-        let remake = &mut self.remake;
-        #[cfg(not(feature = "diagnostics"))]
-        let remake = &mut ();
         if destination == 0
             || width == 0
             || height == 0
@@ -238,7 +220,6 @@ impl Resolves {
                     &targets.settings.memory,
                     targets.settings.physical,
                     resolve_images_made,
-                    remake,
                     into,
                     surface_width,
                     surface_height,
@@ -264,18 +245,7 @@ impl Resolves {
         // multisampled surface is resolved straight into it, and a single-sampled one
         // copied.
         let at = vk::Offset2D { x: dest_x as i32, y: dest_y as i32 };
-        // MW2_FORCE_RESOLVE_TWIN: resolved into the surface's twin and copied from there.
-        #[cfg(feature = "diagnostics")]
-        let twin = {
-            let twin = source_samples != vk::SampleCountFlags::TYPE_1 && super::trace::forcing().resolve_twin;
-            if twin {
-                super::trace::counts().twin_resolves.fetch_add(1, Ordering::Relaxed);
-            }
-            twin
-        };
-        #[cfg(not(feature = "diagnostics"))]
-        let twin = false;
-        if source_samples != vk::SampleCountFlags::TYPE_1 && !twin {
+        if source_samples != vk::SampleCountFlags::TYPE_1 {
             resolve_colour_into(targets.get_mut(source), at, width, height, into_image);
         } else {
             // SAFETY: the caller's.
@@ -434,18 +404,9 @@ impl Resolves {
         // sits at the surface's first row, the copy an attachment for it, and one that is
         // not is made again only at the frame's first resolve into it; a copy landing
         // further down, or into such an image, goes through the surface's twin.
-        #[cfg(feature = "diagnostics")]
-        let forced_twin = super::trace::forcing().resolve_twin; // MW2_FORCE_RESOLVE_TWIN
-        #[cfg(not(feature = "diagnostics"))]
-        let forced_twin = false;
         let direct = from_samples != vk::SampleCountFlags::TYPE_1
             && row == 0
-            && (first_this_frame || into.attachment_view != vk::ImageView::null())
-            && !forced_twin;
-        #[cfg(feature = "diagnostics")]
-        let remake = &mut self.remake;
-        #[cfg(not(feature = "diagnostics"))]
-        let remake = &mut ();
+            && (first_this_frame || into.attachment_view != vk::ImageView::null());
         if destination == 0
             || width == 0
             || height == 0
@@ -457,7 +418,6 @@ impl Resolves {
                     &targets.settings.memory,
                     targets.settings.physical,
                     resolve_images_made,
-                    remake,
                     into,
                     image_width,
                     image_height,
@@ -498,10 +458,6 @@ impl Resolves {
                 )
             };
         } else {
-            #[cfg(feature = "diagnostics")]
-            if from_samples != vk::SampleCountFlags::TYPE_1 && forced_twin {
-                super::trace::counts().twin_resolves.fetch_add(1, Ordering::Relaxed);
-            }
             // SAFETY: the caller's.
             let from_image = unsafe { targets.begin_reading_depth(vk, f, from, rect.offset, width, height) };
             if from_image == vk::Image::null() {
@@ -562,36 +518,15 @@ impl Resolves {
         }
     }
 
-    /// MW2_FORCE_RESOLVE_REMAKE=<frames>: the resolve images there were at every nth
-    /// frame's end, each made again at its next resolve as one that has to grow is.
-    #[cfg(feature = "diagnostics")]
-    fn mark_resolves_for_remake(&mut self, frames: u64) {
-        let every = u64::from(super::trace::forcing().resolve_remake);
-        if every == 0 || frames == 0 || !frames.is_multiple_of(every) || frames == self.remake_marked {
-            return;
-        }
-        self.remake_marked = frames;
-        for ring in self.records.resolved_to.values() {
-            for copy in &ring.copies {
-                if copy.image != vk::Image::null() {
-                    self.remake.insert(copy.image);
-                }
-            }
-        }
-    }
-
     /// The frame the title swaps to: the front buffer the swap packet names, which a
     /// resolve filled like any other destination, blitted (LINEAR) into the present image
     /// once the window has taken what it last held, run through the display's colour
-    /// table, left in TRANSFER_SRC for the window, and the frame finished
-    /// (vk::renderer::Swap).
+    /// table, left in TRANSFER_SRC for the window, and the frame finished.
     ///
     /// # Safety
     /// `vk` is the renderer's live device and the recorder's, of the physical device new
     /// was given; `targets` and `f` are the renderer's.
     pub unsafe fn swap<F: Frame>(&mut self, vk: &Vk, targets: &mut Targets, f: &mut F, front_buffer: u32) {
-        #[cfg(feature = "diagnostics")]
-        self.mark_resolves_for_remake(f.frames());
         let front = front_buffer & !0xFFF;
         let Some(ring) = self.records.resolved_to.get(&front) else { return };
         let newest = ring.newest as usize;
@@ -687,7 +622,7 @@ fn copy_track(records: &mut ResolveRecords, front: u32, newest: usize) -> &mut T
 
 /// A resolve is a copy in the command stream and nothing more, so it does not end the
 /// submission; only a slot whose arena share is more than half used goes early, so the
-/// rest of the frame has room (SubmitIfFilling).
+/// rest of the frame has room (submit_if_filling).
 /// A resolve whose copy is refused here still clears what it asks to: Xenia's Resolve
 /// (vulkan_render_target_cache.cc) clears after the copy whether or not the copy was made,
 /// on every path past GetResolveInfo, its empty region and IssueCopy's BeginSubmission --
@@ -721,7 +656,7 @@ fn colour_layers() -> vk::ImageSubresourceLayers {
 
 /// The copy this frame's resolves write and this frame's draws read: the first resolve
 /// of a frame moves on to the next one, the rest of the frame -- the second shadow
-/// cascade, the draws that sample it -- get that same one back (ResolveCopyFor).
+/// cascade, the draws that sample it -- get that same one back.
 fn resolve_copy_for(records: &mut ResolveRecords, destination: u32, frames: u64) -> &mut Resolved {
     let ring = records.resolved_to.entry(destination).or_default();
     if ring.frame != frames {
@@ -757,17 +692,11 @@ unsafe fn destroy_resolved(vk: &Vk, into: &mut Resolved) {
     *into = Resolved::default();
 }
 
-// MW2_FORCE_RESOLVE_REMAKE's set, in a diagnostics build; nothing in a release.
-#[cfg(feature = "diagnostics")]
-type Remake = HashSet<vk::Image>;
-#[cfg(not(feature = "diagnostics"))]
-type Remake = ();
-
-/// `into` made to hold a `width` by `height` copy at `scale` of `format` (MakeResolveImage):
+/// `into` made to hold a `width` by `height` copy at `scale` of `format`:
 /// kept when it already is that (`exact`, the frame's first resolve into it, sizes it to
 /// the surface exactly, as a fetch normalises its coordinates over the image), grown
 /// within a frame otherwise, so the second shadow cascade lands inside the surface the
-/// first one made. A replaced image goes after RetireBeforeDestroy and ForgetViews. A
+/// first one made. A replaced image goes after retire_before_destroy and forget_views. A
 /// colour image gets a mutable format list and an sRGB view where its format has one; a
 /// depth image a depth-only view, and with `attachment` a view of both aspects as well.
 /// A format the device cannot sample gets no image, and the one there goes, so that the
@@ -782,7 +711,6 @@ unsafe fn make_resolve_image<F: Frame>(
     memory: &vk::PhysicalDeviceMemoryProperties,
     physical: vk::PhysicalDevice,
     made: &mut u64,
-    remake: &mut Remake,
     into: &mut Resolved,
     mut width: u32,
     mut height: u32,
@@ -799,20 +727,8 @@ unsafe fn make_resolve_image<F: Frame>(
         && into.depth == depth
         && into.scale == scale
         && (into.attachment_view != vk::ImageView::null() || !attachment);
-    #[cfg(feature = "diagnostics")]
-    {
-        if same && fits && remake.remove(&into.image) {
-            super::trace::counts().remade_resolves.fetch_add(1, Ordering::Relaxed);
-        } else if same && fits {
-            return true;
-        }
-    }
-    #[cfg(not(feature = "diagnostics"))]
-    {
-        let _ = remake;
-        if same && fits {
-            return true;
-        }
+    if same && fits {
+        return true;
     }
     if !exact && same {
         width = width.max(into.width);
@@ -832,14 +748,11 @@ unsafe fn make_resolve_image<F: Frame>(
         f.retire_before_destroy();
     }
     // The texture cache's set holds these views; an entry on the freed image is a texture
-    // read of unbacked memory: the TCP page faults that hung the GPU in play and under
-    // capture. The cache's own check, the view behind an id changed, misses a replacement
-    // that gets the old handle back.
+    // read of unbacked memory, a GPU page fault that hangs the GPU. The cache's own check,
+    // the view behind an id changed, misses a replacement that gets the old handle back.
     if into.image != vk::Image::null() {
         forget_views(f.textures());
     }
-    #[cfg(feature = "diagnostics")]
-    remake.remove(&into.image);
     // SAFETY: the caller's; the GPU, the recorder and the texture cache are done with it.
     unsafe { destroy_resolved(vk, into) };
     if !sampled {
@@ -878,8 +791,7 @@ unsafe fn make_resolve_image<F: Frame>(
         info.p_next = (&list as *const vk::ImageFormatListCreateInfo).cast();
     }
     // What the image's format allows, set before anything can fail: a copy left half made
-    // (an image without its views) is still filtered and blitted as
-    // its format allows.
+    // (an image without its views) is still filtered and blitted as its format allows.
     into.filterable = format_support::filterable(usable);
     into.gamma_filterable = srgb == vk::Format::UNDEFINED || format_support::filterable(features(srgb));
     into.blit = format_support::blit_filter(usable);

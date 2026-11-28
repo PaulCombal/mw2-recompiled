@@ -30,17 +30,15 @@ const USAGE: &str = "usage: cargo xtask <prepare|recompile|build> [options]
   --windows              cross-compile for Windows with llvm-mingw
   --llvm-mingw <dir>     llvm-mingw's folder (or LLVM_MINGW in the environment)
   --build-dir <dir>      build there instead of build, build-mp, build-release, ...
-  --targets <names>      build only these (mw2, launcher, ...), space-separated
+  --targets <names>      build only these (mw2, launcher, translate-shader), space-separated
   --release-tag <tag>    the release the build is published as (v0.3.0)
   --keep-generated       keep the recompiled tree already there
-  --iso <path>           the retail disc image
+  --iso <path>           the retail disc image (or MW2_ISO in the environment)
   --tu <path>            title update 6's package, or a folder with its files
-  --cmake-extra <arg>    passed to CMake's configure step; may be repeated
 
-The game's options in a cargo build -- MW2_LOGGING, MW2_LTO, MW2_LTO_CACHE -- are taken
-from the environment; MW2_LTO_CACHE is the launcher's too.";
+The build's options -- MW2_LOGGING, MW2_LTO, MW2_LTO_CACHE -- are taken from the
+environment.";
 
-const ISO: &str = "/home/paul/Téléchargements/Call of Duty - Modern Warfare 2 (USA, Europe).iso";
 // The disc's executables, which the update patches, and the update's files.
 const DISC: &str = "mw2/tu0";
 const UPDATE: &str = "mw2/update";
@@ -65,9 +63,8 @@ struct Options {
     targets: Vec<String>,
     release_tag: String,
     keep_generated: bool,
-    iso: String,
+    iso: Option<String>,
     tu: Option<String>,
-    cmake_extra: Vec<String>,
 }
 
 fn parse() -> Result<Options> {
@@ -89,9 +86,8 @@ fn parse() -> Result<Options> {
         targets: Vec::new(),
         release_tag: String::new(),
         keep_generated: false,
-        iso: ISO.into(),
+        iso: std::env::var("MW2_ISO").ok().filter(|path| !path.is_empty()),
         tu: None,
-        cmake_extra: Vec::new(),
     };
     while let Some(arg) = args.next() {
         // --name value or --name=value.
@@ -110,9 +106,8 @@ fn parse() -> Result<Options> {
             "--targets" => options.targets.extend(value()?.split_whitespace().map(String::from)),
             "--release-tag" => options.release_tag = value()?,
             "--keep-generated" => options.keep_generated = true,
-            "--iso" => options.iso = value()?,
+            "--iso" => options.iso = Some(value()?),
             "--tu" => options.tu = Some(value()?),
-            "--cmake-extra" => options.cmake_extra.push(value()?),
             "-h" | "--help" => {
                 println!("{USAGE}");
                 std::process::exit(0);
@@ -126,18 +121,10 @@ fn parse() -> Result<Options> {
     if options.title != "sp" && options.title != "mp" {
         return Err(format!("--title must be sp or mp, not '{}'", options.title));
     }
-    // The game's options are build.rs's, from the environment: in CMake's
-    // arguments they would reach only the launcher and the tools.
-    const OPTIONS: [&str; 3] = ["LOGGING", "LTO", "LTO_CACHE"];
-    if options.cmake_extra.iter().any(|arg| {
-        OPTIONS.iter().any(|option| {
-            let name = format!("-DMW2_{option}");
-            arg.strip_prefix(&name).is_some_and(|rest| rest.starts_with([':', '=']))
-        })
-    }) {
-        return Err("a cargo build takes MW2_LOGGING, MW2_LTO and MW2_LTO_CACHE from the environment, \
-                    not --cmake-extra"
-            .into());
+    for target in &options.targets {
+        if !matches!(target.as_str(), "mw2" | "launcher" | "translate-shader") {
+            return Err(format!("--targets: no target {target}; mw2, launcher and translate-shader are"));
+        }
     }
     Ok(options)
 }
@@ -345,15 +332,15 @@ fn prepare(options: &Options, title: &Title) -> Result {
     xenon_build()?;
 
     println!("==> 3. extract the executables from the ISO (XDVDFS)");
-    let iso = Path::new(&options.iso);
+    let iso = match options.iso.as_deref().map(Path::new) {
+        Some(iso) if !iso.is_file() => return Err(format!("no ISO at {}", iso.display())),
+        iso => iso,
+    };
     fs::create_dir_all(DISC).map_err(|e| format!("{DISC}: {e}"))?;
     if !Path::new(DISC).join("default.xex").is_file() || !Path::new(DISC).join("default_mp.xex").is_file() {
-        if !iso.is_file() {
-            return Err(format!(
-                "no ISO at {}, and no {DISC}/default.xex + {DISC}/default_mp.xex: --iso <path>",
-                options.iso
-            ));
-        }
+        let Some(iso) = iso else {
+            return Err(format!("no {DISC}/default.xex + {DISC}/default_mp.xex: --iso <path> or MW2_ISO"));
+        };
         disc::extract_named(iso, Path::new(DISC), &["default.xex", "default_mp.xex"])?;
     }
 
@@ -364,7 +351,7 @@ fn prepare(options: &Options, title: &Title) -> Result {
     // picks its own map. The Bink movies come too (~1.3 GB): the logos, and each
     // level's briefing, which plays while it loads. Files already there are left alone.
     fs::create_dir_all("mw2/game").map_err(|e| format!("mw2/game: {e}"))?;
-    if iso.is_file() {
+    if let Some(iso) = iso {
         disc::extract_game(iso, Path::new("mw2/game"))?;
     } else {
         println!("    no ISO: building without the game data");
@@ -495,7 +482,9 @@ fn recompile(options: &Options, title: &Title) -> Result {
         println!("==> 5-6. keeping the recompiled tree in {rust}/");
     } else {
         if options.keep_generated && Path::new(&rust).join("Cargo.toml").exists() {
-            println!("    {rust}/ writes the return address at {kept_mode:?}, this build wants {lr_mode:?}: recompiling");
+            println!(
+                "    {rust}/ writes the return address at {kept_mode:?}, this build wants {lr_mode:?}: recompiling"
+            );
         }
         println!("==> 5. detect jump tables");
         run(Command::new(xenon_program("XenonAnalyse"))
@@ -522,10 +511,9 @@ fn recompile(options: &Options, title: &Title) -> Result {
         let count = |text: &str| log.lines().filter(|line| line.contains(text)).count();
         println!("    unrecognized instructions: {}", count("Unrecognized instruction"));
         println!("    switch-case errors:        {}", count("trying to jump outside function"));
-        for line in log
-            .lines()
-            .filter(|line| line.starts_with("Registers stay in the context") || line.starts_with("The return address is set"))
-        {
+        for line in log.lines().filter(|line| {
+            line.starts_with("Registers stay in the context") || line.starts_with("The return address is set")
+        }) {
             println!("    {line}");
         }
         fs::write(&lr_marker, lr_mode).map_err(|e| format!("{}: {e}", lr_marker.display()))?;
@@ -601,36 +589,11 @@ fn build(options: &Options, title: &Title) -> Result {
     let build = options.build_dir.clone().unwrap_or(build);
     let build_path = root().join(&build);
     let exe = if windows { "mw2.exe" } else { "mw2" };
-    let portable = if options.release { "ON" } else { "OFF" };
     let llvm_mingw = options.llvm_mingw.as_deref().unwrap_or_default();
-    let toolchain: Vec<String> = if windows {
-        vec![
-            format!("-DCMAKE_TOOLCHAIN_FILE={}/cmake/mingw-w64.cmake", root().display()),
-            format!("-DLLVM_MINGW={llvm_mingw}"),
-        ]
-    } else {
-        vec!["-DCMAKE_C_COMPILER=clang-18".into(), "-DCMAKE_CXX_COMPILER=clang++-18".into()]
-    };
 
     println!("==> 8. build the runtime + recompiled game");
-    let configure = || {
-        let mut command = Command::new("cmake");
-        command.args(["-B", &build, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release"]);
-        command
-            .arg(format!("-DMW2_VERSION={}", title.version))
-            .arg(format!("-DMW2_PORTABLE={portable}"))
-            .args(&options.cmake_extra)
-            .args(&toolchain);
-        // The game's ThinLTO cache is the launcher's too.
-        if let Some(cache) = std::env::var_os("MW2_LTO_CACHE") {
-            let mut define = std::ffi::OsString::from("-DMW2_LTO_CACHE=");
-            define.push(cache);
-            command.arg(define);
-        }
-        command
-    };
-
-    let features = if options.release { "portable" } else { "diagnostics" };
+    // A player's build has no diagnostics.
+    let features: &[&str] = if options.release { &["--no-default-features"] } else { &[] };
     // rustup's cargo, which takes the compiler rust-toolchain.toml pins: not the one
     // `cargo +<toolchain> xtask` would hand down.
     let cargo_command = || {
@@ -697,7 +660,7 @@ fn build(options: &Options, title: &Title) -> Result {
         }
         fs::hard_link(rust_dir.join(name), &built).map_err(|e| format!("{}: {e}", built.display()))
     };
-    let mut cargo = cargo_for(&["--no-default-features", "--features", features])?;
+    let mut cargo = cargo_for(features)?;
     // The build itself is offline, and sdl3-sys and SDL's source come from the
     // registry, at the versions Cargo.lock holds: a build that would change it
     // stops.
@@ -713,29 +676,13 @@ fn build(options: &Options, title: &Title) -> Result {
         .map_err(|e| format!("out_dir.txt: {e}"))?;
     place(exe)?;
     check_hooks::check(&build_path)?;
-    // The launcher and translate-shader are cargo's too; the rest is CMake's: what
-    // --targets names besides them (everything when it names nothing), and on Linux the
-    // zlib tools/inflate_diff.py holds the Rust's gunzip to.
     let every = options.targets.is_empty();
     let named = |name: &str| options.targets.iter().any(|target| target == name);
     let launcher = every || named("launcher");
     let translator = (every && !windows) || named("translate-shader");
-    let mut rest: Vec<String> = if every { vec!["all".into()] } else { options.targets.clone() };
-    rest.retain(|target| !matches!(target.as_str(), "mw2" | "launcher" | "translate-shader"));
-    if !windows {
-        rest.push("zlibstatic".into());
-    }
-    if !rest.is_empty() || launcher {
-        quiet(&mut configure())?;
-    }
-    if !rest.is_empty() {
-        run(Command::new("cmake").args(["--build", &build, "-j", &jobs(), "--target"]).args(&rest))?;
-    }
-    // The launcher: its build.rs reads the folder just configured (and on Windows has CMake
-    // make the Vulkan import library there).
     if launcher {
         let launcher_exe = if windows { "mw2-launcher.exe" } else { "mw2-launcher" };
-        run(&mut cargo_for(&["-p", "mw2-launcher", "--no-default-features", "--features", features])?)?;
+        run(&mut cargo_for(&[&["-p", "mw2-launcher"], features].concat())?)?;
         place(launcher_exe)?;
     }
     // The translator on its own (shaders/translate_shader.rs).

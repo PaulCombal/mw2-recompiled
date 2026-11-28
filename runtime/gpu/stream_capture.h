@@ -114,7 +114,7 @@ namespace gpu::stream
 
     // A register read from the aperture because the stream never wrote it.
     void ApertureRead(uint32_t index, uint32_t value);
-    // The arena's progress block, as ArenaProgress finds it.
+    // The arena's progress block, as gpu/arena.rs's arena_progress finds it.
     void ArenaBlockSeen(uint32_t block);
     // WAIT_REG_MEM, as it went: `value` is the dword the last poll read, as the
     // guest holds it, or the register.

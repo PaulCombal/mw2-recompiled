@@ -1,51 +1,25 @@
 #pragma once
-#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include "diagnostics.h"
-// Minimal logging. LOGK is for the lines that trace what the title asked of the
-// kernel or the GPU, "[k]" so they can be told from the rest.
+// The C++'s log lines, into the Rust's log (src/log.rs). LOGK is for the lines that
+// trace what the title asked of the kernel or the GPU, "[k]" so they can be told from
+// the rest.
 //
-// A whole run emits a few hundred lines, so this is not a hot path. Configure
-// with -DMW2_LOGGING=OFF to compile every call below to nothing, warnings
-// included; MW2_DIAGNOSTICS=0 is what removes the traces and reports.
-//
-// The disabled form keeps the arguments inside an `if (false)`, so they are
-// still type-checked and still count as used, and no expression in a log call
-// may have a side effect the program needs.
-//
-// MW2_LOG_TIME=1 starts every line with the seconds since the first one, so a
-// line can be matched with something somebody saw on screen at that moment.
-#ifdef MW2_RUST
-// src/log.rs's, so that the Rust's lines and these count from the same moment.
-extern "C" const char* mw2_log_stamp();
-#endif
+// MW2_LOGGING=OFF compiles every call below to nothing, warnings included. The disabled
+// form keeps the arguments inside an `if (false)`, so they are still type-checked and
+// still count as used, and no expression in a log call may have a side effect the
+// program needs.
 
-namespace mw2log
-{
-    inline const char* Stamp()
-    {
-#ifdef MW2_RUST
-        return mw2_log_stamp();
-#else
-        static const bool on = diag::Flag("MW2_LOG_TIME");
-        if (!on) return "";
-        static const auto start = std::chrono::steady_clock::now();
-        thread_local char text[24];
-        const double seconds = std::chrono::duration<double>(
-                                   std::chrono::steady_clock::now() - start).count();
-        std::snprintf(text, sizeof text, "%9.3f ", seconds);
-        return text;
-#endif
-    }
-}
+// MW2_LOG_TIME's stamp, so that the Rust's lines and these count from the same moment.
+extern "C" const char* mw2_log_stamp();
 
 #ifdef MW2_NO_LOGGING
 #   define MW2_LOG(prefix, fmt, ...) \
         do { if (false) std::fprintf(stderr, prefix fmt "\n", ##__VA_ARGS__); } while (false)
 #else
 #   define MW2_LOG(prefix, fmt, ...) \
-        std::fprintf(stderr, "%s" prefix fmt "\n", mw2log::Stamp(), ##__VA_ARGS__)
+        std::fprintf(stderr, "%s" prefix fmt "\n", mw2_log_stamp(), ##__VA_ARGS__)
 #endif
 
 #define LOGI(fmt, ...) MW2_LOG("[i] ", fmt, ##__VA_ARGS__)

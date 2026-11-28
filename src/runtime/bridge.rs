@@ -198,7 +198,7 @@ pub mod renderer {
         Box::new(Renderer::new())
     }
 
-    /// vk::renderer::Initialise, on the run thread before the consumer starts: false when
+    /// Brings the renderer up, on the run thread before the consumer starts: false when
     /// it cannot draw.
     pub fn initialise(rd: &mut Renderer) -> bool {
         // SAFETY: the run thread records until it hands the renderer to the consumer (a
@@ -206,26 +206,26 @@ pub mod renderer {
         unsafe { rd.initialise() }
     }
 
-    /// vk::renderer::Shutdown, once the consumer is joined.
+    /// Destroys the renderer, once the consumer is joined.
     pub fn shutdown(rd: &mut Renderer) {
         // SAFETY: the consumer is joined, so this thread is the recorder's producer now.
         unsafe { rd.shutdown() }
     }
 
-    /// vk::textures::Shutdown, after the renderer's: the device tables go with it, and the
+    /// The texture cache's end, after the renderer's: the device tables go with it, and the
     /// cache is kept for the report written after it.
     pub fn textures_shutdown(rd: &mut Renderer) {
         rd.shutdown_textures();
     }
 
-    /// vk::renderer::Report: from what the shutdown kept and the counters in statics.
+    /// The renderer's report, from what the shutdown kept and the counters in statics.
     #[cfg(feature = "diagnostics")]
     pub fn report() {
         crate::runtime::gpu::vulkan::renderer_diagnostics::report();
     }
 
-    /// vk::textures::Report, from the cache the shutdown kept; nothing before it (the
-    /// fault path, which reads statics alone).
+    /// The texture cache's report, from the cache the shutdown kept; nothing before it
+    /// (the fault path, which reads statics alone).
     #[cfg(feature = "diagnostics")]
     pub fn textures_report() {
         crate::runtime::gpu::vulkan::texture_cache::report_after_shutdown();
@@ -322,20 +322,21 @@ pub mod renderer {
         crate::runtime::gpu::vulkan::copy_worker::settle();
     }
 
-    /// vk::textures::MemoryWritten, on the ring consumer.
+    /// Guest memory in the range was written: tells the texture cache, on the ring
+    /// consumer.
     pub fn textures_memory_written(rd: &mut Renderer, physical: u32, size: u32) {
         rd.core.textures.memory_written(physical, size);
     }
 
-    /// vk::textures::MemoryWritten from any other thread: queued for the consumer's next
+    /// The same from any other thread: queued for the consumer's next
     /// batch, so that no guest thread walks the cache while the consumer could be
     /// changing it.
     pub fn textures_memory_written_elsewhere(physical: u32, size: u32) {
         crate::runtime::gpu::vulkan::texture_cache::memory_written_elsewhere(physical, size);
     }
 
-    /// vk::renderer::PrepareShader: a shader the title loaded, to compile before its first
-    /// draw (hooks/shader_preload.rs). Any thread.
+    /// A shader the title loaded, to compile before its first draw
+    /// (hooks/shader_preload.rs). Any thread.
     pub fn prepare_shader(pixel: bool, code: &[u32]) {
         crate::runtime::gpu::vulkan::renderer::prepare_shader(pixel, code);
     }

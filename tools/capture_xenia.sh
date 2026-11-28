@@ -16,10 +16,10 @@
 #   window says so. Close the window to finish.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ISO="${1:-/home/paul/Téléchargements/Call of Duty - Modern Warfare 2 (USA, Europe).iso}"
+ISO="${1:-${MW2_ISO:?the disc image: an argument or MW2_ISO}}"
 OUT="${2:-$ROOT/captures}"
-RD="${RENDERDOC:-/home/paul/git/renderdoc_1.46}"
-APPIMAGE="${XENIA_APPIMAGE:-/home/paul/Téléchargements/xenia_canary_linux.AppImage}"
+RD="${RENDERDOC:-$HOME/git/renderdoc_1.46}"
+APPIMAGE="${XENIA_APPIMAGE:-$HOME/Téléchargements/xenia_canary_linux.AppImage}"
 XENIA_DIR="${XENIA_DIR:-$HOME/xenia-rd/xenia}"
 XENIA="$XENIA_DIR/usr/bin/xenia_canary"
 

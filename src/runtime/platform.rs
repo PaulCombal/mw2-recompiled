@@ -39,8 +39,7 @@ pub fn path(text: &CStr) -> std::path::PathBuf {
 }
 
 /// A path the C library handed over from the system: the command line or the
-/// environment. The system's bytes elsewhere; on Windows text in its ANSI code page,
-/// which is how a C++ std::filesystem::path made of the same text reads it.
+/// environment. The system's bytes elsewhere; on Windows text in its ANSI code page.
 pub fn system_path(text: &CStr) -> std::path::PathBuf {
     #[cfg(not(windows))]
     {
@@ -223,7 +222,7 @@ mod system {
         }
     }
 
-    /// As std::thread::hardware_concurrency says, whatever this process may use.
+    /// The processor threads online, whatever this process may use.
     pub fn processor_threads() -> u32 {
         (unsafe { sysconf(SC_NPROCESSORS_ONLN) }).max(0) as u32
     }
@@ -337,7 +336,7 @@ mod system {
     /// Makes [address, address + len) read-only, or readable and writable again: what
     /// the GPU's memory watch asks (gpu/memory_watch.rs). Safe in a signal handler:
     /// mprotect is one system call, and this allocates nothing, logs nothing and takes
-    /// no lock. (At the module's end, so that no line above it moves.)
+    /// no lock.
     ///
     /// # Safety
     /// The range is page-aligned memory this process mapped, which nothing that

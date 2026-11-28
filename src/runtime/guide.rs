@@ -3,7 +3,7 @@
 // (presence.rs), the network and the friends on it, then Resume, Invite friends
 // (friends.rs) and Quit to desktop. The keyboard's Home key is that button. The first
 // controller drives it; the others wait until it shuts. At the other controllers the
-// button opens the sign-in screen (signin.rs), as before.
+// button opens the sign-in screen (signin.rs).
 
 use crate::log::log_info;
 use crate::runtime::online::{self, FriendList, Service};

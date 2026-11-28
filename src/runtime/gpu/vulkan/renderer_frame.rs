@@ -15,10 +15,10 @@
 // grow; a submission is the ended segments (each one's uploads, then its draws), then the
 // last segment's uploads, then its command buffer; the trace records the submission at
 // this call site, before gpu_time submits it; `bound` is forgotten at every command
-// buffer's start, where sets 1 and 2 are bound once; a waited Submit leaves no slot in
-// flight; the completed serial is sampled once per BeginFrame, and the fast links an
+// buffer's start, where sets 1 and 2 are bound once; a waited submit leaves no slot in
+// flight; the completed serial is sampled once per begin_frame, and the fast links an
 // optimised one replaced are freed there, after it, once their submission is done and
-// the recorder past their calls (Retiring, the plan's S12c).
+// the recorder past their calls (Retiring).
 //
 // Unsafe by nature: the command pools, buffers, fences and query pool are the renderer's
 // device's, named by calls queued on the recorder and waited for through their fences.
@@ -71,7 +71,7 @@ const REPORT_GPU_WAIT: usize = 2;
 
 /// A slot: the command buffers it records into, the fence that says when the GPU has
 /// finished with it, which submission it holds, and the recorder's queue just past that
-/// submission (State::Slot; its share of the arena is the arena's).
+/// submission (its share of the arena is the arena's).
 #[derive(Default)]
 pub struct Slot {
     pub commands: vk::CommandPool,
@@ -87,7 +87,7 @@ pub struct Slot {
 }
 
 /// What the command buffer was last told, so a draw that asks for the same thing does not
-/// say it again; reset per command buffer (State::Bound).
+/// say it again; reset per command buffer.
 #[derive(Clone, Copy)]
 pub struct Bound {
     pub pipeline: vk::Pipeline,
@@ -141,7 +141,7 @@ impl Default for Bound {
     }
 }
 
-/// A bracket submitted whose counts the GPU has not produced yet (State::PendingQuery).
+/// A bracket submitted whose counts the GPU has not produced yet.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct PendingQuery {
     pub first: u32,
@@ -154,7 +154,7 @@ pub struct PendingQuery {
     pub samples: u64,
 }
 
-/// The title's own occlusion queries (State's guest query fields).
+/// The title's own occlusion queries.
 pub struct Occlusion {
     pub pool: vk::QueryPool,
     pub first: u32, // the bracket in progress's first query
@@ -215,7 +215,7 @@ pub struct Core {
     pub shadow_scale: u32,
 
     pub slots: [Slot; FRAME_SLOTS as usize],
-    pub slot: u32, // BeginFrame moves on before it records
+    pub slot: u32, // begin_frame moves on before it records
     /// The current segment's command buffer, which commands go into through the recorder.
     pub command: vk::CommandBuffer,
     /// The submission so far, in the order the queue runs it: each ended segment's uploads
@@ -271,7 +271,7 @@ pub struct Core {
     pub draws_recorded: u64,
     pub world_frames: u64,
     pub world_streak: u64,
-    /// The steady clock's nanoseconds (std::chrono::steady_clock's).
+    /// The steady clock's nanoseconds.
     pub first_world_at: Option<u64>,
     pub last_world_at: Option<u64>,
     pub streak_from: Option<u64>,
@@ -281,7 +281,7 @@ pub struct Core {
     pub timing: bool,
     pub verts_traced: u64,
     pub verts_matched: u64,
-    /// By reason, the literal's address its key (State::skipped).
+    /// By reason, the literal's address its key.
     pub skipped: HashMap<usize, (&'static CStr, u64), MulBuild>,
 
     pub textures: TextureCache,
@@ -289,7 +289,7 @@ pub struct Core {
     pub diag: Diagnostics,
 }
 
-// SAFETY: the renderer is the ring consumer's, moved into its thread whole (§3.6); the
+// SAFETY: the renderer is the ring consumer's, moved into its thread whole; the
 // arena mapping it points at lives until shutdown unmaps it.
 unsafe impl Send for Core {}
 
@@ -632,15 +632,9 @@ impl Core {
                 let queue_submit = c.vk.device.fp_v1_0().queue_submit;
                 #[cfg(feature = "diagnostics")]
                 {
-                    // gpu_time submits it, untraced; MW2_FAKE_DEVICE_LOST fails it instead.
+                    // gpu_time submits it, untraced.
                     let mut submitted = vk::Result::ERROR_DEVICE_LOST;
-                    if ended && trace::device_lost_faked() {
-                        let lost = &trace::counts().lost_submissions;
-                        lost.store(
-                            lost.load(std::sync::atomic::Ordering::Relaxed) + 1,
-                            std::sync::atomic::Ordering::Relaxed,
-                        );
-                    } else if ended {
+                    if ended {
                         trace::submission(queue, &submit, fence);
                         submitted = gpu_time::submit(queue_submit, queue, &submit, fence);
                     }
@@ -813,7 +807,7 @@ impl Core {
     // ---- the title's occlusion queries ----------------------------------------------------
 
     /// Whether the GPU has finished the submission a bracket went out in: its slot has moved
-    /// on to a later one (BeginFrame waited for it first), or the slot's fence says so.
+    /// on to a later one (begin_frame waited for it first), or the slot's fence says so.
     fn finished(&mut self, vk: &Vk, query: &PendingQuery) -> bool {
         // Still in the command buffer being recorded.
         if query.serial > self.submission_serial {
@@ -971,7 +965,7 @@ impl Core {
     }
 
     /// The command stream is about to write [physical, physical + size), which a texture a
-    /// draw of this segment samples: the segment goes now (vk::renderer::BeforeStreamWrite).
+    /// draw of this segment samples: the segment goes now.
     pub fn before_stream_write(&mut self, vk: &Vk, physical: u32, size: u32) {
         if self.device == vk::Device::null() || !self.recording {
             return;
@@ -984,8 +978,7 @@ impl Core {
     }
 
     /// The command processor is about to tell the title that the work before this point has
-    /// finished: every read of guest memory owed to the draws so far is made now
-    /// (vk::renderer::BeforeCompletion).
+    /// finished: every read of guest memory owed to the draws so far is made now.
     pub fn before_completion(&mut self, vk: &Vk) {
         self.completions += 1;
         if self.device == vk::Device::null() || !self.recording || !self.segment_draws {
@@ -1024,7 +1017,8 @@ fn stutter_add(cost: usize, from: Option<u64>) {
     let _ = (cost, from);
 }
 
-// stutters::finished through its export (exports.rs), which starts the stall watcher once.
+// stutters::finished through its export (runtime/exports.rs), which starts the stall
+// watcher once.
 #[cfg(feature = "diagnostics")]
 unsafe extern "C" {
     fn mw2_stutters_finished(serial: u64, world: bool);
@@ -1053,7 +1047,7 @@ fn pacing_note(event: u8, value: u32) {
 
 #[cfg_attr(not(feature = "diagnostics"), allow(dead_code, reason = "the report and the diagnostic keys' alone"))]
 /// The recorder's queue position, drained and flushed through the calls this file makes:
-/// for the trace, the dumps and Idle.
+/// for the trace, the dumps and idle.
 pub fn recorder_position() -> u64 {
     position()
 }
@@ -1066,17 +1060,16 @@ pub fn flush_recorder() {
     flush();
 }
 
-/// completed_serial as the memory watch's Track is given it (vk::renderer::CompletedSubmission,
-/// a cached number): the texture cache and the command processor's shader memo read it
-/// without reaching into the renderer. Written by the ring consumer alone, where
-/// note_completed samples it.
+/// completed_serial as the memory watch's track is given it (a cached number): the
+/// texture cache and the command processor's shader memo read it without reaching into
+/// the renderer. Written by the ring consumer alone, where note_completed samples it.
 static COMPLETED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn completed_submission() -> u64 {
     COMPLETED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// steady_clock::now() as nanoseconds: the run's clock.
+/// The steady clock's nanoseconds: the run's clock.
 #[inline]
 fn steady_now() -> u64 {
     clock::nanoseconds()

@@ -5,7 +5,7 @@
 // loader thread inflates each material's programs into physical memory and makes a D3D
 // shader object over each one. The console's GPU runs that microcode as it stands, so the
 // shader is ready from then on; here it has to be translated and compiled, and done at the
-// first draw instead it was a stutter wherever something new came on screen.
+// first draw instead it would be a stutter wherever something new came on screen.
 //
 // D3D's shader object is made in place by one routine per stage, given the object and the
 // program -- the physical block the loader read the shader into. The object holds the

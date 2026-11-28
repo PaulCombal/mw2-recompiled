@@ -29,8 +29,8 @@ pub fn system_time() -> u64 {
 // The guest timebase, which every mftb in the recompiled code reads. It runs at the
 // console's 50 MHz, not at the host's cycle counter: the title only sometimes asks
 // KeQueryPerformanceFrequency, and MW2's server thread times its frames with a constant
-// 1/50000 ms per tick -- on a faster counter the game ran at the frame rate instead of
-// its own clock.
+// 1/50000 ms per tick -- on a faster counter the game would run at the frame rate
+// instead of its own clock.
 const TIMEBASE_HZ: u64 = 50_000_000;
 static TIMEBASE_START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
@@ -155,8 +155,8 @@ kernel_import!(XamGetSystemVersion, |ctx, _memory| {
 });
 
 // No system module is there to load or look into. The title's own wrappers take "not
-// found" as the answer to fall back from; a success that wrote no handle sent them into
-// whatever the stack held.
+// found" as the answer to fall back from; a success that wrote no handle would send
+// them into whatever the stack held.
 fn store_zero(memory: Memory, address: u32) {
     if address != 0 {
         memory.store_u32(address, 0);

@@ -165,11 +165,9 @@ fn dump_texture(fetch: &TextureFetch) {
         return;
     }
     let base = crate::runtime::guest_memory::base();
-    // MW2_DUMP_TEXTURES_RAW=1: the bytes as the guest holds them, before any untiling,
-    // so a layout can be tried offline instead of costing a run per guess. Always for a
-    // volume.
-    static RAW: LazyLock<bool> = LazyLock::new(|| crate::env::flag(c"MW2_DUMP_TEXTURES_RAW"));
-    if fetch.dimension() == DIMENSION_3D || *RAW {
+    // A volume: the bytes as the guest holds them, before any untiling, so a layout can be
+    // tried offline instead of costing a run per guess.
+    if fetch.dimension() == DIMENSION_3D {
         static SEQUENCE: AtomicU32 = AtomicU32::new(0);
         let sequence = SEQUENCE.fetch_add(1, Relaxed);
         let path = format_text!(
@@ -182,19 +180,10 @@ fn dump_texture(fetch: &TextureFetch) {
             fetch.base_address(),
             sequence
         );
-        let info = texture::texture_format_of(fetch.format());
-        let block_width = if info.block_width != 0 { info.block_width } else { 1 };
-        let block_height = if info.block_height != 0 { info.block_height } else { 1 };
-        let bytes = if fetch.dimension() == DIMENSION_3D {
-            (fetch.pitch() as usize)
-                .wrapping_mul((fetch.height().wrapping_add(31) & !31) as usize)
-                .wrapping_mul(fetch.depth() as usize)
-                .wrapping_mul(4)
-        } else {
-            ((fetch.pitch() / block_width).wrapping_add(31) & !31) as usize
-                * ((fetch.height().wrapping_add(block_height - 1) / block_height).wrapping_add(31) & !31) as usize
-                * (info.bits_per_block / 8) as usize
-        };
+        let bytes = (fetch.pitch() as usize)
+            .wrapping_mul((fetch.height().wrapping_add(31) & !31) as usize)
+            .wrapping_mul(fetch.depth() as usize)
+            .wrapping_mul(4);
         if let Some(mut file) = create(&path) {
             let mut copy = vec![0u8; bytes];
             // SAFETY: guest memory, mapped whole; copied out rather than viewed as a slice.

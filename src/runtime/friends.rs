@@ -5,7 +5,7 @@
 // the one chosen, B goes back.
 //
 // A service with no friends to pick from (online::Service::friends) gets a message
-// instead, and invites everyone it can as it did before: LAN's.
+// instead, and invites everyone it can: LAN's.
 
 use crate::log::log_info;
 use crate::runtime::online::{self, FriendList, Service};

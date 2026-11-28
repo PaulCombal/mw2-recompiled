@@ -45,11 +45,11 @@ fn save(kept: &BTreeMap<Vec<u8>, Vec<u8>>) {
         text.extend_from_slice(value);
         text.push(b'\n');
     }
-    // As an ofstream that cannot open: nothing is said.
+    // A file that cannot be written is passed over without a word.
     let _ = std::fs::write(FILE, text);
 }
 
-// The C's tests: set, and neither empty nor "0".
+// Set, and neither empty nor "0".
 fn on(name: &str) -> bool {
     get(name).is_some_and(|value| !value.is_empty() && value != b"0")
 }
@@ -189,7 +189,7 @@ fn kept_frame() -> (u32, u32) {
 
 pub fn aspect_ratio() -> Ratio {
     let (width, height) = kept_frame();
-    // unsigned arithmetic, wrapping as the C's did
+    // unsigned arithmetic, wrapping
     if width.wrapping_mul(10) == height.wrapping_mul(16) {
         Ratio::Wider
     } else if width.wrapping_mul(3) == height.wrapping_mul(4) {

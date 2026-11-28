@@ -7,8 +7,7 @@
 // terminal.rs); it reports its progress to the Progress they draw or print, and its
 // error as the text a player reads. The disc, the
 // package and the executables are read with the install crate (install/), as the game
-// and cargo xtask read them. What a player reads is word for word what the C++ install
-// said.
+// and cargo xtask read them.
 #![deny(unsafe_code)]
 
 #[cfg(not(mw2_version_tu0))]
@@ -266,8 +265,7 @@ fn absolute(path: &Path) -> PathBuf {
     std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-// The system's words for an error, without the number Rust adds: what the C++'s
-// std::error_code::message() said.
+// The system's words for an error, without the " (os error N)" Rust adds.
 pub(crate) fn message(error: &io::Error) -> String {
     let text = error.to_string();
     match text.rfind(" (os error ") {
@@ -575,7 +573,7 @@ fn run(disc_path: &Path, update: &Path, shown: Shown<'_>) -> Result<(), Stop> {
     Ok(())
 }
 
-// ---- free disk space, as std::filesystem::space told it ----------------------------
+// ---- free disk space ---------------------------------------------------------------
 
 #[allow(unsafe_code)]
 mod space {

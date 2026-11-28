@@ -1,9 +1,8 @@
-# The launcher (launcher/): what a player opens, mw2-launcher. It is Rust: its window, its
+# The launcher (launcher/): what a player opens, mw2-launcher: its window, its
 # compile pass, on the shaders crate the game builds its shaders with (shaders/), its
 # install, on the crate the game reads its executable with (install/), and its custom
-# maps, on the map converter (mapport/). cargo xtask build makes it, in the build folder it
-# configured (build.rs); it is not the workspace's default member, so a plain cargo build
-# makes the game alone.
+# maps, on the map converter (mapport/). cargo xtask build makes it; it is not the
+# workspace's default member, so a plain cargo build makes the game alone.
 [package]
 name = "mw2-launcher"
 version = "0.0.0"
@@ -27,9 +26,6 @@ test = false
 default = ["diagnostics"]
 # On Windows, the console window a terminal run prints to.
 diagnostics = []
-# A player's build, which cargo xtask build --release asks for: the launcher links no C++
-# library, so it is the same build as without.
-portable = []
 
 [dependencies]
 # SDL, the game's (sdl3-sys builds it, cmake/sdl.cmake).

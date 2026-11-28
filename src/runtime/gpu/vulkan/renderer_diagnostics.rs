@@ -108,7 +108,7 @@ unsafe extern "C" {
 }
 
 /// MW2_ONLY_SHADER=<hex>[,<hex>] keeps only draws whose vertex or pixel shader is named;
-/// MW2_SKIP_SHADER drops them (ShaderList).
+/// MW2_SKIP_SHADER drops them.
 pub struct ShaderList {
     pub hashes: Vec<u64>,
 }
@@ -175,7 +175,7 @@ impl FrameReadBacks {
 // ---- the flash hunt's draw list --------------------------------------------------------------
 
 /// Every draw of the last frames a flash hunt keeps, so a mark says which draw differed in
-/// the frame that flashed (DrawRecord).
+/// the frame that flashed.
 #[derive(Clone, Copy, Default)]
 pub struct DrawRecord {
     pub vertex_shader: u64,
@@ -230,7 +230,7 @@ struct Kept {
     texture_frame: u64,
 }
 
-/// F7, or Y on the pad: counted here, any thread (vk::renderer::FlashSeen).
+/// F7, or Y on the pad: counted here, any thread.
 static FLASHES_SEEN: AtomicU32 = AtomicU32::new(0);
 
 /// The diagnostics' state: the read-back buffer, the flash recorder and its draw list.
@@ -238,13 +238,13 @@ pub struct Diagnostics {
     pub read_back: vk::Buffer,
     pub read_back_memory: vk::DeviceMemory,
     pub read_back_mapped: *const u8,
-    // The flash recorder (FlashRecorder).
+    // The flash recorder.
     ring: Vec<Kept>,
     next: usize,
     width: u32,
     height: u32,
     marks: u32,
-    // The draw log (DrawLog), and the draw being recorded (g.drawRecord).
+    // The draw log, and the draw being recorded.
     open: DrawFrame,
     done: VecDeque<DrawFrame>,
     last_vertex_data: u64,
@@ -263,7 +263,7 @@ impl Default for Diagnostics {
     }
 }
 
-// Eight bytes at a time; a fingerprint, not a checksum anyone relies on (Mix).
+// Eight bytes at a time; a fingerprint, not a checksum anyone relies on.
 fn mix(mut hash: u64, bytes: &[u8]) -> u64 {
     hash ^= (bytes.len() as u64).wrapping_mul(0x9E3779B97F4A7C15);
     let mut words = bytes.chunks_exact(8);
@@ -278,7 +278,7 @@ fn mix(mut hash: u64, bytes: &[u8]) -> u64 {
     hash
 }
 
-// A long window by its ends and its length (Sample).
+// A long window by its ends and its length.
 fn sample(hash: u64, bytes: &[u8]) -> u64 {
     const END: usize = 256;
     let size = bytes.len();
@@ -360,8 +360,8 @@ impl Diagnostics {
         }
     }
 
-    /// The draw about to be made, recorded while a flash hunt keeps frames (BeginDrawRecord);
-    /// otherwise nothing.
+    /// The draw about to be made, recorded while a flash hunt keeps frames; otherwise
+    /// nothing.
     pub fn begin_draw_record(
         &mut self,
         r: &RegisterFile,
@@ -399,7 +399,7 @@ impl Diagnostics {
         self.record = Some(self.open.draws.len() - 1);
     }
 
-    /// A texture the draw being recorded binds (NoteDrawTexture). Its version is the
+    /// A texture the draw being recorded binds. Its version is the
     /// cache's, filled in by draw_texture_versions once the lookup is done.
     pub fn note_draw_texture(&mut self, slot: u32, fetch: &TextureFetch, id: u64, resolved: bool) {
         let Some(at) = self.record else { return };
@@ -416,7 +416,7 @@ impl Diagnostics {
         self.open.draws[at].texture_count += 1;
     }
 
-    /// The versions of the textures the draw being recorded bound: vk::textures::Version of
+    /// The versions of the textures the draw being recorded bound: the cache's version of
     /// each that is not a resolve's.
     pub fn draw_texture_versions(&mut self, textures: &TextureCache) {
         let Some(at) = self.record else { return };
@@ -429,7 +429,7 @@ impl Diagnostics {
         }
     }
 
-    /// The frame whose picture carries this renderer frame number is done (EndFrameDraws).
+    /// The frame whose picture carries this renderer frame number is done.
     pub fn end_frame_draws(&mut self, textures: &mut TextureCache, frame: u64, world_drawn: bool) {
         // The frame's late re-stages are taken every frame, kept or not.
         if !cfg!(feature = "diagnostics") || !recording_draws() {
@@ -467,7 +467,7 @@ impl Diagnostics {
         kept.texture_frame = textures.frame_number();
     }
 
-    /// On the render thread, the frame after the key (WriteFlashes): the frames kept before
+    /// On the render thread, the frame after the key: the frames kept before
     /// it, and their draw lists, written off this thread.
     fn write_flashes(&mut self, textures: &TextureCache, frames: u64) {
         let seen = FLASHES_SEEN.load(Ordering::Relaxed);
@@ -701,7 +701,7 @@ fn write_draw_frame(dir: &[u8], f: &DrawFrame) {
     }
 }
 
-/// The rectangle x0,y0 to x1,y1 of an RGBA image `width` wide, as a PNM (WritePnm).
+/// The rectangle x0,y0 to x1,y1 of an RGBA image `width` wide, as a PNM.
 #[allow(clippy::too_many_arguments)]
 fn write_pnm(dir: &[u8], name: &str, rgba: &[u8], width: u32, x0: u32, y0: u32, x1: u32, y1: u32) {
     let mut path = dir.to_vec();
@@ -718,7 +718,7 @@ fn write_pnm(dir: &[u8], name: &str, rgba: &[u8], width: u32, x0: u32, y0: u32, 
 }
 
 /// F7, or Y on the pad during a flash hunt: somebody saw a flash. Logged at once, any
-/// thread: a count and a line (vk::renderer::FlashSeen).
+/// thread: a count and a line.
 pub fn flash_seen(how: &CStr) {
     let n = FLASHES_SEEN.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
     log_warn!("FLASH MARK %u: %s pressed", n, how);
@@ -758,7 +758,7 @@ fn eight(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * 255.0) as u8
 }
 
-/// A 64-bit texel's channels as eight bits each, for a picture to look at (the fix's).
+/// A 64-bit texel's channels as eight bits each, for a picture to look at.
 fn as_rgba8(texels: &[u8], format: vk::Format, pixels: usize) -> Vec<u8> {
     let mut out = vec![255u8; pixels * 4];
     for (i, texel) in texels.chunks_exact(8).take(pixels).enumerate() {
@@ -787,7 +787,7 @@ fn as_rgba8(texels: &[u8], format: vk::Format, pixels: usize) -> Vec<u8> {
     out
 }
 
-/// RGBA pixels as a PNM in MW2_DUMP_FRAMES, saying how much of it is not black (WriteDump).
+/// RGBA pixels as a PNM in MW2_DUMP_FRAMES, saying how much of it is not black.
 fn write_dump(name: &[u8], rgba: &[u8], width: u32, height: u32) {
     let Some(dir) = frame_dump_directory() else { return };
     let mut path = dir.to_bytes().to_vec();
@@ -814,7 +814,7 @@ fn write_dump(name: &[u8], rgba: &[u8], width: u32, height: u32) {
 }
 
 /// Depth spends its whole range near one, so a linear ramp is a white page: the picture is
-/// what the image holds, stretched over the range it uses (DepthAsGrey).
+/// what the image holds, stretched over the range it uses.
 fn depth_as_grey(texels: &[u8], width: u32, height: u32, format: vk::Format, name: &CStr) -> Vec<u8> {
     let pixels = width as usize * height as usize;
     let packed = format == vk::Format::D24_UNORM_S8_UINT || format == vk::Format::X8_D24_UNORM_PACK32;
@@ -848,7 +848,7 @@ fn depth_as_grey(texels: &[u8], width: u32, height: u32, format: vk::Format, nam
 }
 
 impl Core {
-    /// The buffer frames are read back into, made on first use (MakeReadBack).
+    /// The buffer frames are read back into, made on first use.
     fn make_read_back(&mut self, vk: &Vk) -> bool {
         let d = &mut self.diag;
         if d.read_back != vk::Buffer::null() {
@@ -886,7 +886,7 @@ impl Core {
         true
     }
 
-    /// Copies the finished frame out, inside its own command buffer (RecordReadBack).
+    /// Copies the finished frame out, inside its own command buffer.
     pub fn record_read_back(&mut self, vk: &Vk, present: vk::Image) {
         if !self.make_read_back(vk) {
             return;
@@ -935,8 +935,8 @@ impl Core {
         });
     }
 
-    /// Copies an image out and writes it, waiting for the copy, for the target dumps
-    /// (DumpImage). `track` is what the image was last used for; it is left in the copy's
+    /// Copies an image out and writes it, waiting for the copy, for the target dumps.
+    /// `track` is what the image was last used for; it is left in the copy's
     /// use, or brought back to `home` where its users cannot bring it on themselves
     /// (tracked.rs). `aspect` says which to read, `format` what it holds.
     #[allow(clippy::too_many_arguments)]
@@ -1039,7 +1039,7 @@ impl Core {
     }
 
     /// MW2_DUMP_TARGETS: every colour target, depth target and resolve destination beside
-    /// the frame (DumpTargets).
+    /// the frame.
     fn dump_targets(&mut self, vk: &Vk, targets: &mut Targets, records: &mut ResolveRecords) {
         let frames = self.frames;
         let name96 = |text: CString| -> Vec<u8> {
@@ -1186,8 +1186,7 @@ impl Core {
         }
     }
 
-    /// The dumps and the flash recorder, once the frame has been submitted and waited for
-    /// (ExamineFrame).
+    /// The dumps and the flash recorder, once the frame has been submitted and waited for.
     pub fn examine_frame(
         &mut self,
         vk: &Vk,
@@ -1240,7 +1239,7 @@ impl Core {
 
 // ---- the report ----------------------------------------------------------------------------
 
-/// What the report prints that the renderer held, taken at its shutdown (§3.6): the
+/// What the report prints that the renderer held, taken at its shutdown: the
 /// report is written after the shutdown, when the renderer is gone.
 #[cfg_attr(not(feature = "diagnostics"), allow(dead_code, reason = "the report and the diagnostic keys' alone"))]
 #[derive(Default)]
@@ -1295,7 +1294,7 @@ unsafe impl Send for RendererReport {}
 /// The renderer's report after its shutdown, moved here by Renderer::shutdown.
 pub static REPORT: std::sync::Mutex<Option<RendererReport>> = std::sync::Mutex::new(None);
 
-/// vk::renderer::Report: from REPORT and the counters kept in statics. Without a shutdown
+/// The renderer's report: from REPORT and the counters kept in statics. Without a shutdown
 /// (the fault path), or with REPORT held, only the statics' lines.
 #[cfg_attr(not(feature = "diagnostics"), allow(dead_code, reason = "the report and the diagnostic keys' alone"))]
 pub fn report() {
@@ -1306,21 +1305,6 @@ pub fn report() {
     {
         let forced = super::trace::counts();
         let load = |counter: &std::sync::atomic::AtomicU64| counter.load(Ordering::Relaxed);
-        let (twin, remade, lone, lost) = (
-            load(&forced.twin_resolves),
-            load(&forced.remade_resolves),
-            load(&forced.lone_uploads),
-            load(&forced.lost_submissions),
-        );
-        if twin != 0 || remade != 0 || lone != 0 || lost != 0 {
-            log_info!(
-                "renderer: forced paths taken: %llu resolves through the twin, %llu resolve images made again, %llu uploads submitted alone, %llu submissions failed as lost",
-                twin,
-                remade,
-                lone,
-                lost
-            );
-        }
         if super::trace::refused_libraries() != 0 {
             log_info!(
                 "renderer: MW2_FORCE_REFUSED_LIBRARIES: %llu libraries refused, %llu modules made again for a whole pipeline",

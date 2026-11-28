@@ -29,11 +29,6 @@ jobs:
     # The oldest supported runner, so the binaries ask for glibc 2.35 at most.
     runs-on: ubuntu-22.04
     timeout-minutes: 330
-    env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_BASEDIR: ${{ github.workspace }}
-      CCACHE_MAXSIZE: 6G
-      CCACHE_COMPILERCHECK: content
     steps:
       - uses: actions/checkout@v6
         with:
@@ -64,7 +59,7 @@ jobs:
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
           # SDL3's video, audio, input and dialog backends, and the Vulkan loader.
           sudo apt-get update
-          sudo apt-get install -y libstdc++-13-dev ninja-build ccache pkg-config \
+          sudo apt-get install -y libstdc++-13-dev ninja-build pkg-config \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev \
             libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev libdecor-0-dev \
             libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libdrm-dev libgbm-dev \
@@ -76,28 +71,15 @@ jobs:
         # The one rust-toolchain.toml pins, which runs the xtask.
         run: rustup toolchain install
 
-      - name: Restore the compiler cache
-        uses: actions/cache@v5
-        with:
-          # ThinLTO's results beside the compiler's (MW2_LTO_CACHE).
-          path: |
-            .ccache
-            .lto-cache
-          key: ccache-linux-${{ github.sha }}
-          restore-keys: ccache-linux-
-
       - name: Build
         run: |
-          extra=(--cmake-extra=-DCMAKE_C_COMPILER_LAUNCHER=ccache --cmake-extra=-DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-                 --cmake-extra=-DFETCHCONTENT_BASE_DIR=$PWD/out/_deps)
           # The launcher is the same for both titles, and the tools are not shipped:
           # the campaign's build makes the game and the launcher, the multiplayer's the game.
           for title in sp mp; do
             targets="mw2"; [ $title = sp ] && targets="mw2 launcher"
-            MW2_LTO_CACHE=$PWD/.lto-cache cargo xtask build --title $title --release --release-tag ${{ inputs.version }} --build-dir out/$title \
-              --targets "$targets" "${extra[@]}"
+            cargo xtask build --title $title --release --release-tag ${{ inputs.version }} --build-dir out/$title \
+              --targets "$targets"
           done
-          ccache --show-stats
 
       - name: Package
         run: |
@@ -121,14 +103,10 @@ jobs:
 
   windows:
     # Cross-compiled on Linux with llvm-mingw: the same compiler family and the
-    # same build as Linux, and the compiler cache of a Linux runner.
+    # same build as Linux.
     runs-on: ubuntu-24.04
     timeout-minutes: 330
     env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_BASEDIR: ${{ github.workspace }}
-      CCACHE_MAXSIZE: 6G
-      CCACHE_COMPILERCHECK: content
       LLVM_MINGW_RELEASE: "20260922"
     steps:
       - uses: actions/checkout@v6
@@ -153,50 +131,25 @@ jobs:
         run: |
           sudo apt-get update
           # clang-18 builds XenonRecomp, which runs here, and the xtask's link; llvm-mingw builds the game.
-          sudo apt-get install -y clang-18 lld-18 ninja-build ccache zip
+          sudo apt-get install -y clang-18 lld-18 ninja-build zip
           name=llvm-mingw-$LLVM_MINGW_RELEASE-ucrt-ubuntu-22.04-x86_64
           wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_RELEASE/$name.tar.xz
           tar xf $name.tar.xz -C $HOME && rm $name.tar.xz
           echo "LLVM_MINGW=$HOME/$name" >> "$GITHUB_ENV"
 
-      - name: Fetch the Vulkan headers
-        # The game's Windows build takes them from MW2_VULKAN_HEADERS: the archive
-        # and version cmake/vulkan-windows.cmake fetches for the launcher.
-        run: |
-          url=$(grep -o 'https://github.com/KhronosGroup/Vulkan-Headers/[^ ]*' cmake/vulkan-windows.cmake)
-          sum=$(grep -o 'SHA256=[0-9a-f]*' cmake/vulkan-windows.cmake | cut -d= -f2)
-          wget -q -O vulkan-headers.tar.gz "$url"
-          echo "$sum  vulkan-headers.tar.gz" | sha256sum -c -
-          mkdir -p $HOME/vulkan-headers
-          tar xzf vulkan-headers.tar.gz -C $HOME/vulkan-headers --strip-components=1 && rm vulkan-headers.tar.gz
-          echo "MW2_VULKAN_HEADERS=$HOME/vulkan-headers/include" >> "$GITHUB_ENV"
-
       - name: Install the Rust toolchain
         # The one rust-toolchain.toml pins, which runs the xtask.
         run: rustup toolchain install
 
-      - name: Restore the compiler cache
-        uses: actions/cache@v5
-        with:
-          # ThinLTO's results beside the compiler's (MW2_LTO_CACHE).
-          path: |
-            .ccache
-            .lto-cache
-          key: ccache-windows-${{ github.sha }}
-          restore-keys: ccache-windows-
-
       - name: Build
         run: |
-          extra=(--cmake-extra=-DCMAKE_C_COMPILER_LAUNCHER=ccache --cmake-extra=-DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-                 --cmake-extra=-DFETCHCONTENT_BASE_DIR=$PWD/out/_deps)
           # The launcher is the same for both titles, and the tools are not shipped:
           # the campaign's build makes the game and the launcher, the multiplayer's the game.
           for title in sp mp; do
             targets="mw2"; [ $title = sp ] && targets="mw2 launcher"
-            MW2_LTO_CACHE=$PWD/.lto-cache cargo xtask build --windows --title $title --release --release-tag ${{ inputs.version }} --build-dir out/$title \
-              --targets "$targets" "${extra[@]}"
+            cargo xtask build --windows --title $title --release --release-tag ${{ inputs.version }} --build-dir out/$title \
+              --targets "$targets"
           done
-          ccache --show-stats
 
       - name: Package
         run: |

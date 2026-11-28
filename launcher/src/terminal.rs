@@ -12,8 +12,7 @@
 //
 // With no <disc>, --install brings the install already in game/ up to date. The game
 // starts the launcher with --play when the shaders compiled for it no longer fit
-// (src/runtime/install/), naming the device it draws on. What a terminal mode prints is
-// word for word what main.cpp's did.
+// (src/runtime/install/), naming the device it draws on.
 #![allow(unsafe_code)]
 
 use crate::boundary::{path_of, utf8};
@@ -221,9 +220,9 @@ fn compile_in_terminal() -> i32 {
     0
 }
 
-// A path of the command line made whole against the folder the terminal is in, as
-// std::filesystem::absolute made it: the folder and the path, unchanged; an empty one is
-// none on Linux, the folder on Windows.
+// A path of the command line made whole against the folder the terminal is in: an
+// absolute one unchanged, else the folder and the path; an empty one is none on Linux,
+// the folder on Windows.
 fn absolute(path: &Path) -> PathBuf {
     if path.as_os_str().is_empty() && cfg!(not(windows)) {
         return PathBuf::new();

@@ -4,8 +4,8 @@
 //
 // What it is for is the shadow: a copy of physical memory the GPU can read, kept page by
 // page. A draw whose vertex data lies in pages nobody has written since they were copied
-// reads them there, where it used to copy its window of the buffer into the frame arena
-// on every draw -- 28 MB a frame, most of it world geometry that never changes.
+// reads them there instead of copying its window of the buffer into the frame arena on
+// every draw -- 28 MB a frame, most of it world geometry that never changes.
 //
 // A page's copy is only replaced once no submission still on the GPU can read it: those
 // were recorded against the bytes it holds, which is what the console would have drawn
@@ -22,15 +22,15 @@
 // Guest memory and the shadow are read and written through raw pointers only, never
 // through a slice: guest threads write the one, the GPU reads the other.
 //
-// A fault on a page that reads Loose makes the page writable again (the plan's D15). A
-// writer that loosens a page between the consumer's store of Arming and its protect
-// leaves the page Loose and read-only; a handler that answered every fault on it without
-// making it writable would have the writing thread fault for ever unless the consumer
-// happened to arm that page again. So the page is made
-// writable, and the state read again, as loosen does: a page armed again in between is
-// loosened properly. The faults this answers are counted (LOOSE_FAULTS) and reported;
-// the count also takes in two threads faulting on one page together, where the second
-// finds it Loose and protects it again, so it is not a count of stuck pages.
+// A fault on a page that reads Loose makes the page writable again. A writer that
+// loosens a page between the consumer's store of Arming and its protect leaves the page
+// Loose and read-only; a handler that answered every fault on it without making it
+// writable would have the writing thread fault for ever unless the consumer happened to
+// arm that page again. So the page is made writable, and the state read again, as loosen
+// does: a page armed again in between is loosened properly. The faults this answers are
+// counted (LOOSE_FAULTS) and reported; the count also takes in two threads faulting on one
+// page together, where the second finds it Loose and protects it again, so it is not a
+// count of stuck pages.
 // The same page can still be read-only when set_shadow(null) turns the handler off, and
 // loosen leaves a Loose page alone: there every run of Loose pages is made writable before
 // the switch goes off, uncounted and untimed.
@@ -130,7 +130,7 @@ static FAULTS: AtomicU64 = AtomicU64::new(0);
 static BULK_WRITES: AtomicU64 = AtomicU64::new(0);
 static PROTECTS: AtomicU64 = AtomicU64::new(0);
 static PROTECT_NANOSECONDS: AtomicU64 = AtomicU64::new(0);
-// Faults on a page that read Loose, made writable again (D15).
+// Faults on a page that read Loose, made writable again.
 static LOOSE_FAULTS: AtomicU64 = AtomicU64::new(0);
 // How often each page went from watched to written: MW2_CAPTURE_GPU stores a page the
 // title wrote with the bytes it held, so that the replay's write is seen too.
@@ -269,7 +269,7 @@ fn arm(c: &mut Consumer, first: u32, count: u32, frame: u64) -> bool {
     all
 }
 
-// The command trace's line for each page armed (vk::trace's, trace.rs).
+// The command trace's line for each page armed (trace.rs).
 #[cfg(feature = "diagnostics")]
 fn trace_arm(first: u32, count: u32, shadow: *const u8) {
     {
@@ -296,7 +296,7 @@ pub fn set_shadow(shadow: *mut u8, bytes: u32) {
         // Every page writable again before the handler stops answering for them, or the
         // title's next write to one is taken for a crash.
         SHADOW.store(ptr::null_mut(), Relaxed);
-        // A Loose page may be read-only (D15: loosened between an arm's store of Arming
+        // A Loose page may be read-only (loosened between an arm's store of Arming
         // and its protect, and not written since); loosen leaves a Loose page as it is.
         // Every run of them writable in one call, which is idempotent for the many that
         // are writable already.

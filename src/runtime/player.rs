@@ -192,14 +192,14 @@ static REACH: LazyLock<f32> = LazyLock::new(|| env::real(c"MW2_WALK_REACH", 0.0)
 // MW2_WALK_PAUSE=<seconds>: stand still at every corner. A still camera is the only one
 // a flash can be told apart from motion on.
 static PAUSE: LazyLock<f64> = LazyLock::new(|| env::real(c"MW2_WALK_PAUSE", 0.0));
-// A, and only ever A, is a safety property: see DismissMenus below. The one exception,
+// A, and only ever A, is a safety property: see dismiss_menus below. The one exception,
 // asked for by name: MW2_TEAM_UP=<1 or 2> taps Up that many times on the team selection.
 static TEAM_UPS: LazyLock<u32> = LazyLock::new(|| env::number(c"MW2_TEAM_UP", 0).min(2) as u32);
 
 // The guard on the menu presses, whose cost when wrong is quitting the user's match:
 // ground covered is the one test that separates "a menu is up" from "the player is
-// walking", and past it nothing is pressed. A walk that wedged itself against a rock froze
-// just like a menu, and was taken for one.
+// walking", and past it nothing is pressed: a walk wedged against a rock freezes just
+// like a menu.
 const PLAYING_AFTER: f32 = 300.0;
 // A jump no one could have walked is a spawn or a respawn, not a step.
 const TELEPORT: f32 = 1500.0;
@@ -1021,7 +1021,7 @@ pub fn steer(now: u64, axes: &mut [i16; 4], press: &mut Press) -> bool {
     goal = goal_of(g);
     if !g.alive {
         // The team selection shows the map's camera, which reads like a player standing
-        // somewhere: steering then ran the selection up the list.
+        // somewhere: steering would run the selection up the list.
         *axes = [0; 4];
         return true;
     }

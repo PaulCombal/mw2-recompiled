@@ -11,7 +11,7 @@
 // fastfile.rs), on the game's XMA decoder, starting the game (play.rs, spawn.rs) and the
 // custom maps (maps.rs), on the map converter (mapport/, the mw2-mapport crate).
 //
-// `main` is the C runtime's, as the C++ launcher's was: the arguments it hands over
+// `main` is the C runtime's: the arguments it hands over
 // (Windows' in the code page, which terminal.rs reads the wide command line instead of),
 // and nothing of Rust's start-up -- no SIGPIPE ignored, which the game the launcher
 // starts would inherit, no file descriptors opened in place of closed ones.

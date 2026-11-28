@@ -12,8 +12,8 @@
 // destination's physical address in dwords. Our shaders drop memory exports, so the
 // copy is made on the CPU instead, but at that draw: every draw the title queued before
 // it still sees the old bytes, every one after it the new. Made when the pool asks, it
-// ran up to two frames ahead of draws still naming the block, and they drew whatever the
-// pool laid on it next. The pool says what to copy; the draw says when.
+// would run up to two frames ahead of draws still naming the block, which would draw
+// whatever the pool laid on it next. The pool says what to copy; the draw says when.
 //
 // The queue is taken only while copies wait (COPIES_WAITING, which the command
 // processor reads at every draw); the statistics are single-writer atomics. The copy

@@ -1,8 +1,7 @@
 // What a field of view looks like: a street drawn by hand, from where a player stands,
 // with the game's own projection -- the angle is the width of a 4:3 picture and a wider
 // one, 16:9 or 16:10, is as tall. It is a drawing, not the game's picture: it shows what
-// an angle does, more to the sides and everything ahead smaller. tools/ui_diff.py holds
-// it to the C++ it replaced, preview.cpp, which drew it with Dear ImGui.
+// an angle does, more to the sides and everything ahead smaller.
 
 use crate::draw::{DrawList, Point, int, point, rgba};
 use crate::ui::{std_clamp, std_max, std_min};
@@ -202,7 +201,7 @@ impl Preview {
 
     /// Draws the street in the rectangle, at the angle, `delta_time` seconds after the
     /// last frame.
-    #[allow(clippy::needless_range_loop)] // as preview.cpp counts the corners
+    #[allow(clippy::needless_range_loop)] // the corners counted by index
     pub fn draw(&mut self, draw: &mut DrawList, min: Point, max: Point, fov: f32, aspect: f32, delta_time: f32) {
         let shown = self.shown.get_or_insert(fov);
         *shown += (fov - *shown) * std_min(1.0, delta_time * 9.0);

@@ -1,5 +1,9 @@
-// MW2_REPORT=1: see runtime/report.h. What a run did is worked out here from the times
-// and readings the caller gives; exports.rs gives it the clock and the System below.
+// MW2_REPORT=1: what a bug report needs to say about a run, in every build. The launcher's
+// REPORT A BUG starts the game with it. The log then names the graphics driver, and ends
+// -- at exit or at a fault -- with how the run went: the frame rate, how the frame times
+// spread, where the renderer's thread spent play, and what the renderer compiled in the
+// middle of it. What a run did is worked out here from the times and readings the caller
+// gives: clock times, and the machine through System below.
 
 use crate::env;
 use crate::log::{c_string, format_text, log_info};
@@ -140,7 +144,7 @@ static SPENT: [AtomicU64; TIMES] = [const { AtomicU64::new(0) }; TIMES];
 // When the ring batch being executed began, 0 when none is. A frame ends in the middle
 // of one, so its part up to there is counted with the frame.
 static EXECUTING_SINCE: AtomicU64 = AtomicU64::new(0);
-// By ShaderBuilt's from_cache, plus one.
+// By shader_built's from_cache, plus one.
 static SHADERS: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
 
 const NOT_USED: &[u8] = b"not used: a development run";

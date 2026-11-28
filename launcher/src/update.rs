@@ -11,9 +11,8 @@
 // (play.rs, single.rs).
 //
 // The window and the terminal mode call it (window.rs, terminal.rs), the install from a
-// thread of its own, reporting to the same Progress an install does (setup.rs); what a
-// player reads is word for word what the C++ said. All of it works in the launcher's
-// folder, which main.rs makes the current one first.
+// thread of its own, reporting to the same Progress an install does (setup.rs). All of it
+// works in the launcher's folder, which main.rs makes the current one first.
 #![deny(unsafe_code)]
 
 use crate::download::download;
@@ -225,7 +224,7 @@ fn swap_in(release: &Release, shown: Shown<'_>, fresh: &Path, old: &Path, archiv
 // that launcher took: "steam" or "lan" until v0.7.x, which were built with one each, and
 // empty since.
 fn finish() -> (String, String) {
-    // The first word of the file, as the C++ read it.
+    // The first word of the file.
     let version = fs::read(done_file())
         .map(|bytes| String::from_utf8_lossy(&bytes).split_whitespace().next().unwrap_or("").to_string())
         .unwrap_or_default();
@@ -249,7 +248,7 @@ fn finish() -> (String, String) {
 
 // ---- what the window and the terminal mode call --------------------------------
 
-/// Looks for a newer release. As the C++ did, a description that could not be had changes
+/// Looks for a newer release. A description that could not be had changes
 /// nothing in `release`, and one without this system's archive only the version. The
 /// error is the text a player reads.
 pub fn look_for(release: &mut Release) -> Result<Check, String> {

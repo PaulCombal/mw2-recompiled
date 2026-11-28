@@ -339,7 +339,8 @@ fn open_file(guest_path: &[u8], desired_access: u32, disposition: u32, options: 
     };
 
     let (file, information) = if options & FILE_DIRECTORY_FILE != 0 || (existed && resolved.is_dir()) {
-        // As create_directories, which makes nothing of a folder already there.
+        // A new folder is refused when something is at its path already, or it cannot
+        // be made.
         if !existed && (resolved.exists() || fs::create_dir_all(&resolved).is_err()) {
             return Err(STATUS_OBJECT_NAME_NOT_FOUND);
         }

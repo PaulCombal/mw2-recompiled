@@ -1,7 +1,7 @@
 // FFmpeg's inverse MDCT (libavutil/tx_template.c, mdct_inv over the split-radix fftN_ns
 // codelets), as its C code does it: the same tables from the same libm calls, the same
-// permutation, the same operations in the same order, so the same floats come out. This
-// build of FFmpeg has no assembly, so its C is what the decoder ran.
+// permutation, the same operations in the same order, so the same floats come out: the C
+// path, not FFmpeg's assembly.
 //
 // Copyright (c) Lynne
 // Copyright (c) 2008 Loren Merritt

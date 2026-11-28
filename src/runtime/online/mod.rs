@@ -343,8 +343,8 @@ const SYSTEM_LINK_MENU: [&CStr; 6] = [
 ];
 const USE_LIVE_STATS: &CStr = c"set useonlinestats 1";
 
-/// Whether a line a service hands over is the one a host advertises (kernel's
-/// AdvertiseHosted): "connect", the XNADDR, key and session id in hex, the two slot
+/// Whether a line a service hands over is the one a host advertises (kernel/xam.rs's
+/// publish_hosted): "connect", the XNADDR, key and session id in hex, the two slot
 /// counts, the nonce in hex, a space between each and nothing else. The line goes to
 /// the title's console, which runs whatever follows a ';' or a newline as a command of
 /// its own, and on Steam it is lobby data the lobby's owner wrote: anything of another

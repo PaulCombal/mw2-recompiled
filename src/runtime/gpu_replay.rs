@@ -206,7 +206,7 @@ pub fn run(dir: &CStr) -> i32 {
         events as u64
     );
 
-    // Steps 1 to 3: no title; memory, the physical heap's top, the renderer, the window.
+    // No title; memory, the physical heap's top, the renderer, the window.
     // The ring's address is checked first: past gpu_initialise a failure leaves by
     // exit_now, as the renderer's threads would make a return's exit abort.
     let ring = from_physical(&capture, capture.ring_base);
@@ -223,7 +223,7 @@ pub fn run(dir: &CStr) -> i32 {
     renderer::gpu_initialise();
     renderer::show_window();
 
-    // Step 4: the snapshot, and the command processor as the capture found it.
+    // The snapshot, and the command processor as the capture found it.
     let memory = guest_memory::memory();
     let blob = |id: u32| &capture.blobs[id as usize * PAGE..id as usize * PAGE + PAGE];
     for &(page, id) in &capture.snapshot {
@@ -235,14 +235,14 @@ pub fn run(dir: &CStr) -> i32 {
     }
     replay::begin();
 
-    // Step 5: the ring, read from its first dword.
+    // The ring, read from its first dword.
     memory.store_u32(WRITE_POINTER, 0);
     if capture.write_back != 0 {
         bridge::gpu_set_read_pointer_write_back(capture.write_back, 0);
     }
     bridge::gpu_set_ring_buffer(capture.ring_base, (capture.ring_dwords * 4).trailing_zeros() - 3);
 
-    // Step 6: batch by batch.
+    // Batch by batch.
     let mask = capture.ring_dwords - 1;
     let mut written = 0u32;
     let mut timeouts = 0u64;
@@ -312,7 +312,7 @@ pub fn run(dir: &CStr) -> i32 {
     }
     log_info!("replay: %llu batches fed in %.1f s", capture.batches.len() as u64, began.elapsed().as_secs_f64());
 
-    // Step 8: two blanks for the last frame to reach the window, then the reports.
+    // Two blanks for the last frame to reach the window, then the reports.
     thread::sleep(Duration::from_micros(33_334));
     replay::finished(timeouts);
     crate::runtime::run::request_exit(c"replay finished");

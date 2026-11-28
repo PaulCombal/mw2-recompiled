@@ -38,7 +38,6 @@ them as unset whatever the environment says, and also drops the keys `F5`, `F7`,
 | `MW2_CONSOLE="30:map af_caves;45:god"` | R | queues commands into the title's console command buffer at the given wall-clock seconds; see [gameplay.md](gameplay.md) |
 | `MW2_CUSTOM_MAPS=1` | R | the multiplayer loads fastfiles nobody signed: a map converted from the PC game. Off, it refuses them as the console does, and the launcher's shader pass reads only the game's own fastfiles ([gameplay.md](gameplay.md)) |
 | `MW2_NET_LINK=0\|1` | R | whether the Ethernet link is reported up. Default down for the campaign, up for the multiplayer, which starts no match without one |
-| `MW2_NO_AUTO_SAVE_DEVICE=1` | R | leaves the save-device choice to the title's prompt instead of choosing the hard disk ([saves.md](saves.md)) |
 | `MW2_NO_AUDIO=1` | R | opens no playback device; the mixer and decoder still run ([audio.md](audio.md)) |
 | `MW2_RUN_SECONDS=<n>` | | reports and exits after n seconds |
 | `MW2_WATCHDOG=<seconds>` | | when it fires: the `MW2_DUMP` blocks, what every guest thread is blocked on (handle and caller) or spinning on, and every thread's backtrace, which is the guest call stack; then exits |
@@ -106,7 +105,6 @@ the title writes the height twice a frame and a read from outside sees both valu
 
 | switch | effect |
 |---|---|
-| `MW2_TRACE_INDIRECT` | always defined by `build.rs` for the guest code (not a run-time switch): reports an indirect call with no recompiled target instead of jumping to null (one outside the code section is reported in every build) |
 | `MW2_ENGINE_LOG=1` | the title's own `Com_Printf` output in the log |
 | `MW2_TRACE_ERRORS=1` | the guest call stack under every `Com_Error`; one wrapper raises every error, so the message alone does not say where it came from |
 | `MW2_TRACE_CBUF=1` | every command queued to the title's console, which shows what a menu runs |
@@ -120,7 +118,7 @@ the title writes the height twice a frame and a read from outside sees both valu
 | switch | effect |
 |---|---|
 | `MW2_DUMP_SHADERS=<dir>` | every distinct shader's microcode, for `tools/xenos_shader.py` and `translate-shader`; and the built-in shaders as SPIR-V, for `spirv-val`: the window's backdrop (`builtin_backdrop_vertex.spv`, `builtin_backdrop_pixel.spv`), the display's colour table (`builtin_display_table.spv`) and the drawn depth resolve's (`builtin_drawn_resolve_cover_vertex.spv`, `builtin_drawn_resolve_fetch_depth.spv`), each when it is first made |
-| `MW2_DUMP_TEXTURES=<dir>` | every distinct bound texture, untiled, as PNM with each mip level, its fetch constant logged. `MW2_DUMP_TEXTURES_RAW=1` also writes the guest bytes; `MW2_DUMP_TEXTURES_AFTER=<seconds>` starts later, since a streamed texture is empty at its first bind |
+| `MW2_DUMP_TEXTURES=<dir>` | every distinct bound texture, untiled, as PNM with each mip level, its fetch constant logged. A volume's guest bytes are written too; `MW2_DUMP_TEXTURES_AFTER=<seconds>` starts later, since a streamed texture is empty at its first bind |
 | `MW2_CHECK_TEXTURE_WATCH=1` | every answer the texture cache's memo of the write watch gives without walking the texture's pages ([textures.md](textures.md)) is followed by the walk, and a disagreement whose groups' counts have not moved is logged |
 | `MW2_CHECK_TEXTURE_PARTS=1` | every re-read in parts ([textures.md](textures.md#read-again-in-parts)) is followed by a whole read: the report counts the parts whose bytes differ with none of their pages written since (missed by the watch; each logged), those written after their read, and the bytes the copy's regions put elsewhere than the parts' bytes say, worked out from the regions as the Vulkan specification addresses a copy |
 | `MW2_COUNT_PAST_ROWS=1` | the report counts the texture changes caught only past each level's whole rows (a tiled slice under 4 KB, a 1D tail): bytes the reader reads that whole rows' extents leave out, which the write watch and signature cover ([textures.md](textures.md)), zero included, so a run shows the switch was on; off by default, as it signs most new textures a second time while they are read |
@@ -171,16 +169,10 @@ What makes one build's renderer a reference for another's ([rendering.md](render
 | `MW2_HASH_FRAMES=1` | reads every present image back and logs `renderer: frame <n> hash <fnv64>` |
 | `MW2_DETERMINISTIC=1` | none of the renderer's decisions taken by the clock: every submission waited for before it counts as done, no shader workers or optimised links, every doomed texture destroyed at once, no GPU timing |
 | `MW2_FORCE_INSTANCE_DEPTH_RESOLVE=1` | resolves a multisampled depth surface by a rendering instance where a draw would |
-| `MW2_FORCE_RESOLVE_TWIN=1` | resolves every multisampled surface into its single-sampled twin and copies from there |
-| `MW2_DRAWN_RESOLVE_SETS=<n>` | n descriptor sets for the drawn depth resolve (64), so the pool runs dry |
-| `MW2_FORCE_RESOLVE_REMAKE=<frames>` | makes every resolve image again at its first resolve after every nth frame |
 | `MW2_NO_MULTI_DRAW=1` | one call a draw, without `VK_EXT_multi_draw` |
-| `MW2_FORCE_LONE_UPLOADS=1` | submits every texture upload on its own, waited for |
-| `MW2_STAGING_LEAST_KB=<kb>` | the least an upload slot's staging buffer is (8 MB), so uploads overflow it |
 | `MW2_FORCE_REFUSED_LIBRARIES=vertex\|pixel\|all` | treats the pipeline library of every vertex, pixel or every shader as refused by the driver, so that pipelines are built whole, a library's module made again for them |
 | `MW2_FAKE_FORMAT_UNSUPPORTED=<VkFormat>[:<hex>],...` | the listed formats (VkFormat numbers) lose every feature, or with `:<hex>` those VkFormatFeatureFlags bits (`37:1000`: R8G8B8A8 not filterable), to the renderer's checks and fallbacks (docs/textures.md, docs/rendering.md); not to the depth format's choice (`shaders/src/shader_build.rs`, hashed into the shader build's id) |
 | `MW2_SUBGROUP_CHECK=1\|2` | at the renderer's start, draws 10^6 one-to-three-pixel triangles, each its own draw, and says whether a subgroup of pixel invocations ever held two draws, which the pixel shaders' record relies on (docs/shaders.md), then runs its control, every triangle in one draw, and passes only where the control shows the device puts several triangles in one subgroup (else no verdict: the check could not fail there); `2` runs the control alone |
-| `MW2_FAKE_DEVICE_LOST=<seconds>` | fails every submission from then on as a lost device, which ends the run |
 | `MW2_CAPTURE_GPU=<dir>:<after presents>:<presents>` | records the GPU's input into `<dir>`, from the batch where the command processor has met that many swap packets for that many more: a snapshot of memory and of the command processor, the ring, every page the GPU side read as the title had written it, image-pool moves and waits, each at its position (batch, packet) |
 | `MW2_REPLAY_GPU=<dir>` | runs that capture with no title: the command processor and renderer take it as the title gave it, the window shows, and the run ends with the reports and `replay: <n> divergences, <m> wait timeouts`. `tools/replay_diff.py <dir> <exe A> <exe B>` replays one capture on two executables and compares what they did |
 

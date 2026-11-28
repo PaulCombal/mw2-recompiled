@@ -5,8 +5,7 @@
 //
 // The screen is a description (Frame) the window fills each frame (window.rs), drawn
 // with the draw list (draw.rs) in the fonts of the atlas (atlas.rs), over the backdrop,
-// which is SDL's textures drawn first. tools/ui_diff.py holds it to the C++ it replaced,
-// which drew it with Dear ImGui, as triangles and as pixels.
+// which is SDL's textures drawn first.
 #![allow(unsafe_code)]
 
 use crate::atlas::{Atlas, Font, Source};
@@ -25,7 +24,8 @@ const FONT_MENU: &[u8] = include_bytes!("../../assets/fonts/BarlowCondensed-Regu
 const FONT_HEADING: &[u8] = include_bytes!("../../assets/fonts/BarlowCondensed-Medium.ttf");
 const FONT_BODY: &[u8] = include_bytes!("../../assets/fonts/BarlowSemiCondensed-Regular.ttf");
 
-// C++'s std::max, std::min and std::clamp, which answer otherwise than f32's at NaN.
+// Max, min and clamp by comparison alone, as std::max, std::min and std::clamp: at NaN
+// they answer otherwise than f32's (a NaN `a` or `v` is returned, a NaN `b` is not).
 pub fn std_max(a: f32, b: f32) -> f32 {
     if a < b { b } else { a }
 }
@@ -51,7 +51,7 @@ pub struct Fonts {
 }
 
 /// The embedded fonts, at sizes for a window `scale` times the design's 1280x720, in one
-/// atlas: the body first, as Dear ImGui's default font was.
+/// atlas: the body first, as Dear ImGui's default font.
 pub fn load_fonts(scale: f32) -> Result<(Atlas, Fonts), Malformed> {
     let size = |pixels: f32| (pixels * scale).round();
     let atlas = Atlas::build(
@@ -175,7 +175,7 @@ impl Default for Frame {
     }
 }
 
-/// What ui::Draw reads of the pointer and the clock, as Dear ImGui's IO had them.
+/// What ui::Draw reads of the pointer and the clock, as Dear ImGui's IO has them.
 #[derive(Clone, Copy, Default)]
 pub struct Pointer {
     pub pos: Point,
@@ -762,7 +762,7 @@ pub fn draw(
         let at = point(s(1210.0) - width, s(560.0));
         for ring in (1..=3).rev() {
             for k in 0..8 {
-                #[allow(clippy::approx_constant)] // the C++'s 0.785398f, which is not f32's pi/4
+                #[allow(clippy::approx_constant)] // the design's 0.785398, which is not f32's pi/4
                 let angle = k as f32 * 0.785398;
                 let ring = ring as f32;
                 let to = point(at.x + angle.cos() * ring * s(1.6), at.y + angle.sin() * ring * s(1.6));

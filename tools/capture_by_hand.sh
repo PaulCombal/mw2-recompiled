@@ -24,7 +24,7 @@ case "$TITLE" in
 esac
 MAP="${1:-$MAP_DEFAULT}"
 OUT="${2:-$PWD/captures}"
-RD="${RENDERDOC:-/home/paul/git/renderdoc_1.46}"
+RD="${RENDERDOC:-$HOME/git/renderdoc_1.46}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 if [ ! -x "$RD/bin/renderdoccmd" ]; then

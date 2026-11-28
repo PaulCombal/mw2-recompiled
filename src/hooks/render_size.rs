@@ -22,8 +22,8 @@
 //
 // The menus lay some things out over the screen's width in their own units, which
 // they take as 640 + 213.333 * dvarbool(widescreen): 640 for 4:3 and 853.33 for 16:9,
-// the console's two shapes -- the experience bar's width, for one, which ran off a
-// 16:10 screen. A constant a menu expression multiplies dvarbool(widescreen) by is
+// the console's two shapes -- the experience bar's width, for one, which would run off
+// a 16:10 screen. A constant a menu expression multiplies dvarbool(widescreen) by is
 // scaled by the share of the way from 4:3 to 16:9 the picture's shape is
 // (UI_EvaluateStatement): 0.6 at 16:10, which makes that width 768, the 16:10
 // screen's. dvarbool(widescreen) itself stays 1: the menus also test it, the loading

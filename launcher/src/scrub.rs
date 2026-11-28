@@ -4,11 +4,10 @@
 // in. And the two addresses a report opens, written as a page and a file browser take
 // them.
 //
-// The patterns were C++'s std::regex, in its ECMAScript grammar; each is matched here by
-// hand as that grammar matches it -- the leftmost match first, the next one searched
-// from the end of the last, \b a change between a word character ([A-Za-z0-9_]) and any
-// other or an end, \d an ASCII digit -- over the log's bytes, whatever they are.
-// tools/launcher_diff.py holds them to std::regex.
+// Each pattern is matched by hand as std::regex's ECMAScript grammar matches it -- the
+// leftmost match first, the next one searched from the end of the last, \b a change
+// between a word character ([A-Za-z0-9_]) and any other or an end, \d an ASCII digit --
+// over the log's bytes, whatever they are.
 #![deny(unsafe_code)]
 
 fn word(byte: u8) -> bool {
@@ -191,17 +190,22 @@ pub fn scrub(log: &[u8], folders: &Folders) -> Vec<u8> {
                 }
             }
             if let Some(at) = find(&line, b" invites you", 0) {
-                // (where "online: " is not there, the C++ took the line from its start)
-                let head = find(&line, b"online: ", 0).map_or(7, |at| at + 8);
-                let mut kept = line[..head.min(line.len())].to_vec();
+                // Kept: the line up to "online: ", or up to "] online:" (which `online` found)
+                // when no space follows it; never past the inviter's name.
+                let before = &line[..at];
+                let head = find(before, b"online: ", 0)
+                    .map(|at| at + 8)
+                    .or_else(|| find(before, b"] online:", 0).map(|at| at + 9))
+                    .unwrap_or(0);
+                let mut kept = line[..head].to_vec();
                 kept.extend_from_slice(b"<removed>");
                 kept.extend_from_slice(&line[at..]);
                 line = kept;
             }
         }
         // The graphics line names the device and its driver, nothing of the player's, and
-        // a driver's version can be four short numbers between dots: AMD's on Windows read
-        // as an address and went (issue #50).
+        // a driver's version can be four short numbers between dots: AMD's on Windows would
+        // read as an address.
         if find(&line, b"] report: graphics ", 0).is_none() {
             line = addresses(&line);
         }

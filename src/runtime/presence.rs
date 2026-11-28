@@ -18,7 +18,7 @@ use std::sync::Mutex;
 
 const USERS: usize = 4;
 const X_CONTEXT_PRESENCE: u32 = 0x00008001;
-// std::string::npos, which the searches below add to and compare with.
+// What find() gives for "not found", which the searches below add to and compare with.
 const NONE: usize = usize::MAX;
 
 // What the XLAST says, in English.
@@ -50,7 +50,7 @@ fn find(text: &[u8], what: &[u8], from: usize) -> usize {
     text[from..].windows(what.len()).position(|part| part == what).map_or(NONE, |at| at + from)
 }
 
-// substr(), which takes a count that may be npos.
+// `count` bytes from `from`, as many as there are: a count may be NONE.
 fn part(text: &[u8], from: usize, count: usize) -> &[u8] {
     &text[from..from.saturating_add(count).min(text.len())]
 }

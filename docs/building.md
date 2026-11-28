@@ -13,13 +13,12 @@ or a patch.
 
 ## Requirements
 
-- `cmake`, `ninja-build`, `clang-18`, `lld-18`, `llvm-18` (`llvm-nm-18` and
-  `llvm-objdump-18` for the hook check), `git`,
+- `cmake` and `ninja-build` (XenonRecomp's build and SDL's), `clang-18`, `lld-18`,
+  `llvm-18` (`llvm-nm-18` and `llvm-objdump-18` for the hook check), `git`,
   and rustup, which installs the compiler and the Windows target
   `rust-toolchain.toml` names. `python3` for the tools only.
-- The Vulkan loader's development files (`libvulkan-dev`): the game and the launcher
-  link the loader, and a Windows build makes its import library from the headers.
-  Neither builds without them.
+- The Vulkan loader's development files (`libvulkan-dev`) for a Linux build: the game
+  and the launcher link the loader.
 - SDL3 is linked statically, built from the `sdl3-src` crate's copy by `sdl3-sys`
   for the game and the launcher alike.
   On Linux it needs the usual development packages for its video, audio and input
@@ -56,7 +55,7 @@ or a patch.
    the `generated` link at it;
 7. writes the kernel import stubs (`kernel_stubs.rs`) into that tree
    (`xtask/src/generate.rs`);
-8. builds the game with cargo, then the launcher (cargo) and the tools
+8. builds the game with cargo, then the launcher and `translate-shader`
    ([Cargo](#cargo)).
 
 `cargo xtask prepare` stops after step 4, `cargo xtask recompile` after step 7. A
@@ -70,15 +69,14 @@ before the guest code it depends on is generated.
 | `--title sp\|mp` | `sp` (default): `default.xex`, the campaign and special ops. `mp`: `default_mp.xex`, the multiplayer. Each has its own recompiled tree, switch tables, recompiler config and build directory |
 | `--tu <path>` | the title update: its package, or a folder holding its files. Needed until `mw2/update/` has them |
 | `--tu0` | builds the disc's own executables, without the update; see [The disc version](#the-disc-version) |
-| `--release` | builds without diagnostics (the `diagnostics` feature off, `portable` on); the release game and the launcher compile no C++, and on Linux link no C++ library; adds `-release` to the build directory; the guest code writes the return address only where a hook or a kernel import can read it (XenonRecomp's `--minimal-lr`, from the functions of the title's table in `runtime/title.h`), where a diagnostics build writes it at every call for the pacing trace's walk of guest frames |
+| `--release` | builds without diagnostics (the `diagnostics` feature off); the release game and the launcher compile no C++, and on Linux link no C++ library; adds `-release` to the build directory; the guest code writes the return address only where a hook or a kernel import can read it (XenonRecomp's `--minimal-lr`, from the functions of the title's table in `runtime/title.h`), where a diagnostics build writes it at every call for the pacing trace's walk of guest frames |
 | `--windows` | cross-compiles for Windows with llvm-mingw; the build directory becomes `build-win...` and the executable `mw2.exe` |
 | `--llvm-mingw <dir>` | the unpacked [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) release, required by `--windows`; `LLVM_MINGW` in the environment names it too |
-| `--iso <path>` | the disc image. Without one, `mw2/tu0/default.xex` and `mw2/tu0/default_mp.xex` are enough to build, and no game data is extracted |
+| `--iso <path>` | the disc image; `MW2_ISO` in the environment names it too. Without one, `mw2/tu0/default.xex` and `mw2/tu0/default_mp.xex` are enough to build, and no game data is extracted |
 | `--build-dir <dir>` | builds there instead of the default directory |
-| `--targets "<target> ..."` | builds the game and only those targets instead of all of them: `launcher` and `translate-shader`, which cargo builds, or CMake's |
+| `--targets "<target> ..."` | builds the game and only those of `launcher` and `translate-shader` instead of both (`mw2`, the game, is always built) |
 | `--keep-generated` | keeps the recompiled tree already there (skips steps 5-6; the stubs are written again), for a second build of the same title; a tree recompiled for the other kind of build (`ppc_rs/lr-mode`) is recompiled anyway |
 | `--release-tag <tag>` | the release the build is published as (`v0.3.0`): the launcher looks for a newer one than it. Without it the launcher does not |
-| `--cmake-extra <arg>` | one argument for CMake's configure step (a compiler launcher, `-DFETCHCONTENT_BASE_DIR=...`), passed as it is, not split at spaces; repeated for more |
 
 Build directories:
 
@@ -109,37 +107,30 @@ again, into `target/`.
 | `generated`, `generated.title` | the link to the guest code in use, and its title and version (gitignored) |
 | `xtask/` | the build from the disc to the executables ([cargo xtask](#cargo-xtask)) |
 | `xtask/src/check_hooks.rs` | after the link, that every hook won it |
-| `tools/inflate_diff.py`, `tools/inflate_diff.rs` | the `install` crate's inflate against zlib's: the game's gunzip on every image's XLAST, the launcher's unzlib on the game's fastfiles' zones, made streams and damaged copies of each |
-| `tools/launcher_diff.py`, `tools/launcher_diff.rs`, `tools/launcher_diff.cpp` | the launcher's Rust against the C++ it replaced, compiled from git: its settings, profile screen, a bug report's scrubbing and its menu sounds' finding |
-| `tools/font_diff.py`, `tools/font_diff.rs`, `tools/font_diff.cpp` | the screens' font rasteriser against stb_truetype |
-| `tools/draw_diff.py`, `tools/draw_diff.rs`, `tools/draw_diff.cpp` | the launcher's drawing against Dear ImGui: the font atlas, the glyphs, the triangles of random frames and their pixels |
-| `tools/ui_diff.py`, `tools/ui_diff.rs`, `tools/ui_diff.cpp` | the launcher's window against the C++ it replaced, compiled from git with Dear ImGui: its screens as triangles and pixels, the backdrop under them, and what it reads of SDL's events |
-| `tools/zone_diff.py`, `tools/zone_diff.rs`, `tools/zone_diff.cpp` | the zone crate against the C++ reader it replaced, compiled from git with zlib: the definitions and rules as read, expressions, the executables' tables and shaders, every fastfile's zone, walk and shaders, and damaged zones |
+| `tools/inflate_diff.py`, `tools/inflate_diff.rs` | the `install` crate's inflate against the system's zlib: the game's gunzip on every image's XLAST, the launcher's unzlib on the game's fastfiles' zones, made streams and damaged copies of each |
 | `rustfmt.toml` | the width for `cargo fmt`; `rustfmt` and `clippy` come with the pinned toolchain |
 
 Generating has to come first: cargo reads the crates before any `build.rs` runs,
 so a `build.rs` cannot make them. `build.rs` compiles the game's C++, in this link
 order: the GPU capture (`runtime/gpu/stream_capture.cpp`) and `runtime/rust_calls.cpp`,
 through which the Rust calls it, both diagnostics only; a player's build compiles none.
-It compiles them as CMake compiles the launcher: clang-18
-(llvm-mingw's for Windows) run with the same flags and nothing from the environment,
+It compiles them with clang-18
+(llvm-mingw's for Windows) run with fixed flags and nothing from the environment,
 `-O3`, `gnu++20`, `-march` and ThinLTO, and the definitions and
 include folders these files use. A file is compiled again only when it, a header it
 includes (clang's depfile) or its flags changed, as many at a time as cargo gives
 jobs; clang's warnings come out as cargo's. A Linux build links the loader by name
 (`-lvulkan`), and `build.rs` first links an empty program against it, so that a machine
-without `libvulkan.so` stops with the package to install. A Windows build makes the
-loader's import library from the Vulkan headers of the build machine (`libvulkan-dev`,
-or the folder `MW2_VULKAN_HEADERS` names), which must be the version
-`cmake/vulkan-windows.cmake` fetches for the launcher's import library. `build.rs`
+without `libvulkan.so` stops with the package to install. A Windows build links
+`vulkan-1.dll`, whose import library `shaders/build.rs` makes with llvm-mingw's
+`dlltool` for every crate that links the shaders crate: ash links only
+`vkGetInstanceProcAddr`, so that one entry is all it lists. `build.rs`
 writes `link.rsp`, which rustc passes to the linker, and `build.txt`, the title,
 version and diagnostics the hook check reads. Cargo keeps a build-script run for each
 feature set, so `cargo xtask` copies the two into the build folder from the run cargo
 used, with that run's OUT_DIR in `out_dir.txt`. Cargo then builds the launcher
-([The launcher](#the-launcher)), whose C++ CMake builds with zlib,
-and `translate-shader`; CMake builds the other tools, and on Linux
-zlib's static library for `tools/inflate_diff.py`. A build directory holds CMake's
-files, cargo's in `<build>/rust/`, and the executables as `<build>/mw2`,
+([The launcher](#the-launcher)) and `translate-shader`. A build directory holds cargo's
+files in `<build>/rust/`, and the executables as `<build>/mw2`,
 `<build>/mw2-launcher` and so on.
 
 Three things hold this together:
@@ -233,8 +224,7 @@ kernel stubs are Rust.
   both named in `.cargo/config.toml`): clang, only the static library, and the options
   the game needs. The launcher depends on the same `sdl3-sys`, so one SDL is built
   for both in a build folder's target folder. The C++ `build.rs` compiles takes its
-  headers from that build, as the launcher's C++ does (its `build.rs` hands CMake the
-  folder as `MW2_SDL_DIR`), and rustc links it, with what it asks for. Unlike the rest of the C, it is compiled
+  headers from that build, and rustc links it, with what it asks for. Unlike the rest of the C, it is compiled
   without ThinLTO. `sdl3-sys` builds it once in a target folder and
   never again, so `build.rs` stops a build whose toolchain files or llvm-mingw
   changed since.
@@ -243,15 +233,11 @@ kernel stubs are Rust.
   `src/runtime/windows.rs`. The game links no zlib and no FFmpeg: the title's XLAST
   is gunzipped by the `install` crate's `inflate.rs`, which `tools/inflate_diff.py` holds to
   zlib, and XMA frames are decoded by the `wmapro` crate (`wmapro/`). The system's screens
-  draw their letters with the `mw2-truetype` crate (`truetype/`), the part of stb_truetype (the
-  copy that comes with Dear ImGui) that bakes a font into an atlas, step for step.
-  `tools/font_diff.py` holds it to the C bit for bit -- the atlas, the glyphs' boxes
-  and the ascent -- on the launcher's three fonts at every size the screens can ask
-  for and every atlas side, on the machine's own fonts, CFF ones among them, on fonts
-  it makes to reach every branch, and on damaged copies, where the Rust refuses a
-  font wherever the C would read outside it. The launcher's atlas (`launcher/src/atlas.rs`)
+  draw their letters with the `mw2-truetype` crate (`truetype/`), the part of stb_truetype
+  that bakes a font into an atlas, step for step, refusing a damaged font wherever the C
+  would read outside it. The launcher's atlas (`launcher/src/atlas.rs`)
   takes glyphs from it one at a time, sampled three times a pixel across and box filtered
-  back as stb_truetype's packer does (`Face`), which `tools/draw_diff.py` holds to the C.
+  back as stb_truetype's packer does (`Face`).
 - The game's side of the relay protocol, `src/runtime/online/relay_wire.rs`, names
   every number and place it reads, and the relay's `cargo test`
   (`relay/tests/game_wire.rs`) holds it to `relay/src/protocol.rs`.
@@ -265,18 +251,14 @@ kernel stubs are Rust.
 
 Rust code that builds these crates needs `panic = "abort"` and
 `-Ctarget-cpu=x86-64-v2`, set here in the top workspace; the generated workspace's
-own settings do not apply. `cargo build --features` chooses `diagnostics` (on by
-default) and `portable`. `diagnostics` is the traces, dumps, statistics, end-of-run
+own settings do not apply. The one feature is `diagnostics` (on by default): the traces, dumps, statistics, end-of-run
 reports, the stutter detector and pacing timeline, the flash hunt, the write
 watchpoint and the headless harness (walker, input script, run deadlines,
-watchdog); without it every diagnostic switch is off whatever the environment says.
-`portable` links the launcher's libstdc++ and libgcc statically (Linux); the game
-links a C++ library only with `diagnostics`, and then takes `libstdc++.a` for it. `MW2_BUILD_DIR` and
+watchdog); without it every diagnostic switch is off whatever the environment says,
+and the game links no C++ library. `MW2_BUILD_DIR`, `MW2_VERSION` and
 `MW2_RELEASE_TAG` pass the rest of what `cargo xtask` decides, and `MW2_LOGGING`,
 `MW2_LTO` and `MW2_LTO_CACHE` in the environment are
-the options below, as `ON` or `OFF`; `cargo xtask` refuses them in `--cmake-extra`,
-which only CMake's part reads, and hands `MW2_LTO_CACHE` to CMake too, so that the
-launcher's link keeps its results in the same folder.
+the build's options ([Build options](#build-options)).
 `cargo xtask` also passes `--remap-path-prefix`, mapping the toolchain's
 `lib/rustlib/src/rust` to `/rustc/<commit>`: with rustup's `rust-src` component
 installed (an IDE adds it) rustc would otherwise write the local path, home folder
@@ -300,8 +282,8 @@ through `runtime/rust_calls.cpp` (`src/runtime/bridge.rs`, `gpu` and `stream`) a
 which calls back through `src/runtime/gpu/exports.rs`.
 
 The renderer uses `ash` for Vulkan, linked to the loader by name (`vulkan`, or
-`vulkan-1` on Windows, whose import library `build.rs` makes). `build.rs` stops when
-the Vulkan development files are missing. `cargo xtask` clears `VULKAN_SDK`, which
+`vulkan-1` on Windows, whose import library `shaders/build.rs` makes). `build.rs` stops
+when the Linux loader's development files are missing. `cargo xtask` clears `VULKAN_SDK`, which
 ash's build script would add to the link, so the game links the system's loader.
 
 Whatever decides the shaders' SPIR-V is part of the shader build's hash
@@ -338,7 +320,7 @@ carries the version: the image and a game folder in `mw2/tu0/`, the configs
 `config/MW2.tu0.toml` and `config/MW2MP.tu0.toml`, the trees `ppc_tu0_rs/` and
 `ppc_mp_tu0_rs/`, and `-tu0` on the build directory. `build.rs` takes the disc's
 blocks of `runtime/title.h` and sets the cfg `mw2_version_tu0`, and so does the
-launcher's `build.rs`, from CMake's `MW2_VERSION`.
+launcher's `build.rs`, from the `MW2_VERSION` that `cargo xtask` sets.
 
     cargo xtask build --title mp --tu0
     ./build-mp-tu0/mw2 mw2/tu0/default_mp.pe mw2/tu0/game
@@ -370,23 +352,19 @@ The multiplayer hosts a system-link match to reach a map:
 
 The switches are in [switches.md](switches.md).
 
-## CMake options
+## Build options
 
-CMake builds the tools, and on Windows the Vulkan import library the launcher links; its
-cache holds the version and the logging the launcher's `build.rs` reads.
+Environment variables the build scripts read, `ON` or `OFF` for a flag (off is also
+`0`, `FALSE`, `NO`, `N`, `IGNORE`, `NOTFOUND` or empty):
 
 | option | default | effect |
 |---|---|---|
-| `MW2_VERSION` | `tu6` | `tu6`, or `tu0` for the disc's: which executables in `mw2/` the launcher installs, by their SHA-256, which the launcher's `build.rs` reads from the cache; with `tu0` the launcher installs the disc as it is |
-| `MW2_LOGGING` | `ON` | `OFF` compiles out every log line, warnings included |
-| `MW2_PORTABLE` | `OFF` | `cargo xtask build --release` sets it; no target of CMake's links a C++ library |
-| `MW2_LTO` | `ON` | ThinLTO: every target, the fetched libraries included, optimised across files at the link, with `lld` ([Optimisation](#optimisation)) |
+| `MW2_LOGGING` | `ON` | `OFF` compiles out every log line of the game and the launcher, warnings included |
+| `MW2_LTO` | `ON` | ThinLTO for the C++ `build.rs` compiles ([Optimisation](#optimisation)) |
 | `MW2_LTO_CACHE` | `<build>/lto-cache` | where the linker keeps ThinLTO's results for the next link |
+| `MW2_VERSION` | `tu6` | set by `cargo xtask` (`tu0` with `--tu0`): which executables in `mw2/` the launcher installs, by their SHA-256; with `tu0` the launcher installs the disc as it is |
 
-The game's options are environment variables of the same names that `build.rs`
-reads (`MW2_LOGGING`, `MW2_LTO`, `MW2_LTO_CACHE`),
-with the same effect on the C++ it compiles; `MW2_LOGGING=OFF` compiles out the
-Rust's log lines too. The game is compiled for x86-64-v2 ([Optimisation](#optimisation)).
+The game is compiled for x86-64-v2 ([Optimisation](#optimisation)).
 
 The launcher's `build.rs` reads the SHA-256 of the images in `mw2/` and `mw2/tu0/`
 (the `.pe` files `cargo xtask prepare` writes, both titles' and the disc's whatever is built) and
@@ -401,8 +379,8 @@ build script, which any change to its sources runs again.
 
 ### Optimisation
 
-ThinLTO optimises the C++: what `build.rs` compiles into the game (the GPU capture and
-`rust_calls.cpp`, diagnostics only) and the launcher. Nothing is built with a profile.
+ThinLTO optimises the C++ `build.rs` compiles into the game (the GPU capture and
+`rust_calls.cpp`, diagnostics only). Nothing is built with a profile.
 
 - **ThinLTO** (`MW2_LTO`). Every file is compiled to LLVM bitcode, and the
   link optimises across them: a function inlined into another file's loop,
@@ -434,12 +412,10 @@ the game builds its shaders with (`shaders/`); for the custom maps, the map conv
 ([The map converter](#the-map-converter)).
 
 It is a cargo binary of the workspace (`launcher/Cargo.toml`), all Rust, which `cargo
-xtask build` builds with the build directory's features (`diagnostics`, or `portable` for
-`--release`, which changes nothing in it) and puts in the build directory as
-`mw2-launcher`. Its `build.rs` reads the version and the logging from the CMake cache of
-the build directory `cargo xtask` configured (`MW2_BUILD_DIR`), and on Windows has CMake
-make the Vulkan import library there. Without `MW2_BUILD_DIR` a `cargo check` of the
-workspace (an editor's) checks the Rust all the same. On Windows everything is linked
+xtask build` builds with the game's features (`diagnostics`, or none for `--release`) and
+puts in the build directory as `mw2-launcher`. Its `build.rs` reads the version and the
+logging from the environment, as the game's does. Without `MW2_BUILD_DIR`, which `cargo
+xtask` sets, a `cargo check` of the workspace (an editor's) checks the Rust all the same. On Windows everything is linked
 statically (`-static`), the icon is compiled by llvm-mingw's `windres`, and a release is a
 GUI program (`windows_subsystem`) where the diagnostics build keeps its console. `main` is the C runtime's (`#![no_main]`), so
 nothing of Rust's start-up runs: SIGPIPE is not ignored, which the game the launcher
@@ -607,8 +583,7 @@ PC game's, is the map converter's, which embeds it and reads it with this crate'
 
 prints each file's shader count, how long it took and how much of that was the
 inflate; `--hashes` writes each file's sorted `<pixel> <hash>` lines, `--dump` each
-shader's microcode, named as `MW2_DUMP_SHADERS` names what a run draws with. `tools/zone_diff.py` holds the crate
-to the C++ it replaced ([Cargo](#cargo)).
+shader's microcode, named as `MW2_DUMP_SHADERS` names what a run draws with.
 
 ### The map converter
 
@@ -769,14 +744,13 @@ report from it, NO deletes it.
 `cargo xtask build --windows --title mp --release --llvm-mingw <dir>` produces
 `build-win-mp-release/mw2.exe`: cargo builds for `x86_64-pc-windows-gnullvm`, with
 llvm-mingw's clang as `build.rs`'s compiler and the linker, against the UCRT, and
-CMake builds the tools with `cmake/mingw-w64.cmake`. XenonRecomp itself is built
+SDL built with `cmake/sdl-mingw-w64.cmake` as its toolchain. XenonRecomp itself is built
 with the host's clang-18. The executable needs nothing beside it:
 
 - the C++ runtime, Rust's and threads are linked statically;
-- `vulkan-1.dll` comes with the GPU driver, so `build.rs` makes the import library
-  from the build machine's Vulkan headers (`libvulkan-dev`'s) with llvm-mingw's
-  `dlltool`, and `cmake/vulkan-windows.cmake` fetches the headers and does the same
-  for the launcher, whose `build.rs` has CMake make it;
+- `vulkan-1.dll` comes with the GPU driver, so `shaders/build.rs` makes an import
+  library of the one entry ash links, `vkGetInstanceProcAddr`, with llvm-mingw's
+  `dlltool`, for the game, the launcher and `translate-shader`;
 - the executable asks for 16 MB thread stacks (Linux gives 8 MB), since the
   recompiled code nests deeply on the host stack;
 - a release build is a windowed program (`-mwindows`) that attaches to the
@@ -789,12 +763,9 @@ It needs Windows 10 1803 or later, for the placeholder mapping of guest memory.
 `.github/workflows/release.yml` runs by hand from the Actions tab with a version
 tag. It builds both titles of title update 6 for Linux (Ubuntu 22.04,
 so the binaries need glibc 2.35 at most) and for Windows (cross-compiled on
-Ubuntu with llvm-mingw, and the Vulkan headers from the archive
-`cmake/vulkan-windows.cmake` names, checked
-against its SHA-256, in `MW2_VULKAN_HEADERS`),
+Ubuntu with llvm-mingw),
 the campaign's build with the launcher and the multiplayer's with the game
-alone (`--targets`). ccache's and ThinLTO's caches (`.ccache`, `.lto-cache`) are
-kept between runs. It then packages `mw2-sp` and
+alone (`--targets`). It then packages `mw2-sp` and
 `mw2-mp` with the README per platform,
 and drafts a GitHub Release. A third job builds the relay's image
 ([relay.md](relay.md)) for amd64, pushes it to
@@ -817,9 +788,9 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `zone/` | the launcher's reader of the game's fastfiles, for the shaders it compiles ([The zone crate](#the-zone-crate)); the zone definitions (`defs/`, `defs_pc/`), GPL v3, see their `NOTICE.md` |
 | `mapport/` | the map converter, the launcher's custom maps' ([The map converter](#the-map-converter)); GPL v3, see its `NOTICE.md` |
 | `XenonRecomp-rs/` | the recompiler, a submodule |
-| `CMakeLists.txt`, `cmake/` | the tools' build; the Windows toolchain, the Vulkan import library and SDL's toolchain for `sdl3-sys` |
+| `cmake/` | SDL's toolchain files for `sdl3-sys`, Linux's and llvm-mingw's |
 | `config/MW2.toml`, `config/MW2MP.toml` | recompiler config, campaign and multiplayer; `*.tu0.toml` for the disc version |
-| `ppc_rs/`, `ppc_mp_rs/` | generated Rust and the kernel stubs (`kernel_stubs.rs`); its `cpp/ppc_fallback.cpp` has no functions, as `--no-cpp-fallback` holds it, and is not compiled (gitignored) |
+| `ppc_rs/`, `ppc_mp_rs/` | generated Rust and the kernel stubs (`kernel_stubs.rs`) (gitignored) |
 | `src/` | the host runtime ([The runtime](#the-runtime)) |
 | `runtime/` | the game's C++ beside the Rust (diagnostics), its headers, and the address table |
 | `tools/` | generators, reverse-engineering scripts, capture helpers |
@@ -859,8 +830,7 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `runtime/exports.list` | the symbols the Linux executable exports: the recompiled functions alone, so a backtrace names the guest call stack |
 | `runtime/rust_calls.cpp` | the Rust's calls into the GPU capture (`src/runtime/bridge.rs`), diagnostics only |
 | `runtime/gpu/stream_capture.*` | the GPU capture (diagnostics) |
-| `runtime/install/arena.h` | the `.arena` reader the launcher's map converter shares with the game (`src/runtime/install/arena.rs`) |
-| `runtime/*.h`, `gpu/*.h`, `kernel/*.h` | the headers those files and the launcher include: the Rust's functions they call (`crash.h`, `log.h`, `gpu/internal.h`, `gpu/memory_watch.h`, `image_move.h`), guest memory (`guest.h`, `guest_memory.h`, `kernel/physical.h`), the GPU capture's (`gpu/stream_capture.h`), and the launcher's share of the game's rules (`report.h`) |
+| `runtime/*.h`, `gpu/*.h`, `kernel/*.h` | the headers those files include: the Rust's functions they call (`crash.h`, `log.h`, `gpu/internal.h`, `gpu/memory_watch.h`, `image_move.h`), guest memory (`guest.h`, `guest_memory.h`, `kernel/physical.h`), the switches (`env.h`, `diagnostics.h`, `counter.h`) and the GPU capture's (`gpu/stream_capture.h`) |
 
 ### Tools
 
@@ -871,12 +841,8 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `fixbounds.py` | explicit function boundaries for leaf functions holding jump tables |
 | `extract_shaders.py` | every shader's microcode from the fastfiles |
 | `xenos_shader.py`, `xenos_isa.py` | Xenos microcode disassembler |
-| `inflate_diff.py`, `font_diff.py` | the game's and the launcher's inflate against zlib, the font rasteriser against stb_truetype ([Cargo](#cargo)) |
-| `launcher_diff.py` | the launcher's Rust against the C++ it replaced ([Cargo](#cargo)) |
-| `draw_diff.py` | the launcher's drawing (`launcher/src/atlas.rs`, `draw.rs`, `present.rs`) against Dear ImGui 1.91.9b: the atlas, every glyph, random frames' triangles bit for bit, and their pixels on SDL's software renderer |
-| `ui_diff.py` | the launcher's window (`launcher/src/ui.rs`, `preview.rs`, `input.rs`) against `ui.cpp` and `preview.cpp`, compiled from git at the script's `--old` commit, with Dear ImGui 1.91.9b and its SDL3 backend: random screens at every window scale as triangles bit for bit and as pixels with the backdrop, and random SDL events as the keys, pointer and time the window reads of them |
+| `inflate_diff.py` | the game's and the launcher's inflate against zlib ([Cargo](#cargo)) |
 | `replay_diff.py` | a GPU capture replayed on two executables and compared ([rendering.md](rendering.md)) |
-| `zone_diff.py` | the zone crate (`zone/src/`) against the C++ reader it replaced, compiled from git at the script's `--from` commit: both definition headers and folders as read, random expressions, the executables' binding tables and shaders, every fastfile's zone, walk event by event, and shaders code word by code word, and zones damaged at random |
 | `find_in_title.py` | finds the other executable's copy of a function by its code |
 | `analyze.py`, `callgraph.py`, `xref.py`, `strings_in.py` | questions about the guest image: indirect branches, the call graph, address references, strings |
 | `d3d_region.py`, `classify_d3d.py`, `resource_audit.py` | map the statically linked D3D9 ([d3d9-seam.md](d3d9-seam.md)) |

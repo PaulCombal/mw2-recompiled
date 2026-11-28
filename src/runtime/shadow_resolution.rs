@@ -13,7 +13,7 @@
 //
 // So a pass is a shadow map's when its depth registers name one of the two: the base
 // tile, the format and the sample count. Not the pitch, which a depth surface does
-// not have in the renderer (DepthKey).
+// not have in the renderer (depth_key).
 
 use crate::runtime::guest_memory;
 use crate::title::*;

@@ -170,8 +170,7 @@ fn build_function_table() -> u64 {
 
 // MW2_LOG_FILE=<path> sends the log there instead of the terminal. Every line this
 // runtime writes goes to stderr, so a plain `> file` redirection catches nothing. Its
-// folder is made first: a run started with a new folder named lost its whole log to
-// the terminal. A title the other one started (from its menus) carries on in the log
+// folder is made first, or a log in a new folder would go to the terminal. A title the other one started (from its menus) carries on in the log
 // of the run it belongs to (MW2_LOG_APPEND).
 fn send_log_to_file() {
     let Some(path) = env::text(c"MW2_LOG_FILE") else { return };

@@ -7,7 +7,7 @@ use std::ffi::CString;
 use std::fs;
 use std::path::Path;
 
-// What c_str() would give: the C library stops at the first zero.
+// Up to the first zero, where the C library stops.
 fn c_text(bytes: &[u8]) -> CString {
     let end = bytes.iter().position(|&byte| byte == 0).unwrap_or(bytes.len());
     CString::new(&bytes[..end]).unwrap_or_default()

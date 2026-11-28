@@ -1092,7 +1092,7 @@ impl Vk {
     }
 }
 
-/// A state library made by the launcher's shared MakeLibrary, which is not traced: the
+/// A state library made by the shaders crate's make_library, which is not traced: the
 /// create info and chain it was given, written field by field once it is named.
 ///
 /// # Safety

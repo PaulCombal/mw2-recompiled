@@ -1,9 +1,9 @@
 // Builds the game's C++ -- the GPU capture and the Rust's calls into it, diagnostics only:
 // a player's build has none -- and hands rustc what the link needs.
 //
-// The C++ is compiled as CMake compiles the launcher's: clang, -O3, the x86-64 level of the
-// rest and ThinLTO, and goes in as object files (link.rsp). A file is compiled again only
-// when it, a header it includes or its flags changed.
+// The C++ is compiled with clang, -O3, the x86-64 level of the rest and ThinLTO, and
+// goes in as object files (link.rsp). A file is compiled again only when it, a header it
+// includes or its flags changed.
 
 use std::collections::BTreeSet;
 use std::env;
@@ -27,8 +27,8 @@ fn rerun_if(variable: &str) -> Option<String> {
     env::var(variable).ok().filter(|value| !value.is_empty())
 }
 
-// An option given as MW2_<NAME>=ON/OFF in the environment, as CMake took it: off is
-// OFF, 0, FALSE, NO, N, IGNORE, NOTFOUND or empty.
+// An option given as MW2_<NAME>=ON/OFF in the environment: off is OFF, 0, FALSE, NO, N,
+// IGNORE, NOTFOUND or empty, in any case.
 fn option(variable: &str, default: bool) -> bool {
     println!("cargo:rerun-if-env-changed={variable}");
     match env::var(variable) {
@@ -124,53 +124,6 @@ fn write_title(root: &Path, out: &Path, title: &str, version: &str) {
     fs::write(out.join("title.rs"), code).unwrap();
 }
 
-// The Vulkan loader a Windows build links. vulkan-1.dll comes with every GPU driver, so
-// nothing is shipped: the import library is made from the build machine's headers
-// (libvulkan-dev's, or the folder MW2_VULKAN_HEADERS names), of the version CMake fetches
-// for the launcher's import library (cmake/vulkan-windows.cmake), so that the two are made
-// from the same list -- every vk* entry point the headers declare, of which the renderer
-// binds only the core and surface ones the loader exports.
-fn windows_vulkan(root: &Path, out: &Path, mingw: &Path) -> PathBuf {
-    let system = PathBuf::from(rerun_if("MW2_VULKAN_HEADERS").unwrap_or_else(|| "/usr/include".into()));
-    let include = system.join("vulkan");
-    assert!(include.is_dir(), "{} is missing: install the Vulkan headers (libvulkan-dev)", include.display());
-    let header = |name: &str| {
-        let path = include.join(name);
-        watch(&path);
-        fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
-    };
-    let fetched = fs::read_to_string(root.join("cmake/vulkan-windows.cmake")).unwrap();
-    let fetched = fetched.split("refs/tags/v").nth(1).and_then(|rest| rest.split(".tar").next()).unwrap().to_string();
-    let core = header("vulkan_core.h");
-    let patch = core.lines().find_map(|line| line.strip_prefix("#define VK_HEADER_VERSION ")).unwrap_or("none").trim();
-    assert!(
-        fetched.ends_with(&format!(".{patch}")),
-        "{} has the Vulkan headers 1.x.{patch}, and CMake fetches {fetched} for the launcher: MW2_VULKAN_HEADERS=<folder> names others",
-        system.display()
-    );
-    let mut names = Vec::new();
-    for text in [core, header("vulkan_win32.h")] {
-        for line in text.lines() {
-            let Some(at) = line.find("VKAPI_CALL vk") else { continue };
-            let name = &line[at + "VKAPI_CALL ".len()..];
-            let Some(end) = name.find('(') else { continue };
-            let name = &name[..end];
-            if name.chars().all(|c| c.is_ascii_alphanumeric()) && !names.iter().any(|known| known == name) {
-                names.push(name.to_string());
-            }
-        }
-    }
-    let definitions = out.join("vulkan-1.def");
-    fs::write(&definitions, format!("LIBRARY vulkan-1.dll\nEXPORTS\n    {}\n", names.join("\n    "))).unwrap();
-    let library = out.join("libvulkan-1.a");
-    run(Command::new(mingw.join("bin/x86_64-w64-mingw32-dlltool"))
-        .args(["-m", "i386:x86-64", "-d"])
-        .arg(&definitions)
-        .arg("-l")
-        .arg(&library));
-    library
-}
-
 // Whether the build machine has the loader's development library (libvulkan.so, from
 // libvulkan-dev), which the renderer links by name with -lvulkan: an empty program linked
 // against it. The game includes no Vulkan header on Linux, so the headers are not asked
@@ -240,9 +193,9 @@ fn up_to_date(folder: &Path, signature: &str) -> Option<PathBuf> {
     Some(object)
 }
 
-// Each unit's object, compiled again where needed, as many at a time as cargo
-// gives jobs. clang is run as CMake ran it, with these flags and nothing from the
-// environment, and what it says is passed on: an error in full, a warning as cargo's.
+// Each unit's object, compiled again where needed, as many at a time as cargo gives
+// jobs. clang is run with these flags and nothing from the environment, and what it
+// says is passed on: an error in full, a warning as cargo's.
 fn compile(units: &[Unit], compiler: &Path, root: &Path, objects: &Path) -> Vec<PathBuf> {
     let jobs = env::var("NUM_JOBS").ok().and_then(|jobs| jobs.parse().ok()).unwrap_or(1usize);
     let next = AtomicUsize::new(0);
@@ -327,7 +280,6 @@ fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let windows = env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows";
     let diagnostics = env::var_os("CARGO_FEATURE_DIAGNOSTICS").is_some();
-    let portable = env::var_os("CARGO_FEATURE_PORTABLE").is_some();
 
     // What cargo xtask last generated, as "<title> <version>".
     let stamp = root.join("generated.title");
@@ -410,23 +362,21 @@ fn main() {
     }
     let x86_level = "-march=x86-64-v2".to_string();
 
-    // The C++ and its glue. MW2_RUST routes the C++'s log through the Rust's
-    // (runtime/log.h).
     let mut runtime: Vec<String> = common;
     runtime.push(x86_level.clone());
     runtime.extend(definitions.iter().map(|definition| format!("-D{definition}")));
-    runtime.extend(
-        [format!("MW2_DIAGNOSTICS={}", u8::from(diagnostics)), "MW2_RUST=1".into()]
-            .map(|definition| format!("-D{definition}")),
-    );
+    runtime.push(format!("-DMW2_DIAGNOSTICS={}", u8::from(diagnostics)));
     for include in [root.join("runtime"), PathBuf::from(&sdl).join("include")] {
         runtime.push(format!("-I{}", include.display()));
     }
+    // The Windows import library is the shaders crate's (shaders/build.rs).
     let mut libraries = Vec::new();
-    match &mingw {
-        Some(mingw) => libraries.push(windows_vulkan(&root, &out, mingw).display().to_string()),
-        None if linux_vulkan(&compiler, &out) => libraries.push("-lvulkan".into()),
-        None => panic!("Vulkan's loader library (libvulkan.so) is missing: install libvulkan-dev"),
+    if mingw.is_none() {
+        assert!(
+            linux_vulkan(&compiler, &out),
+            "Vulkan's loader library (libvulkan.so) is missing: install libvulkan-dev"
+        );
+        libraries.push("-lvulkan".to_string());
     }
 
     let mut units = Vec::new();
@@ -456,10 +406,6 @@ fn main() {
     // rustc links with clang (.cargo/config.toml), which takes the link-time
     // optimisation's level from the link line, and rustc asks for -nodefaultlibs, so
     // the C++ library is named.
-    // ash links vulkan-1 by name: the import library made above is in OUT_DIR.
-    if windows {
-        println!("cargo:rustc-link-search=native={}", out.display());
-    }
     if windows {
         // One executable with nothing beside it: the C++ library and the threads linked
         // in. The recompiled code nests deep on the host stack, and a thread Windows
@@ -504,11 +450,8 @@ fn main() {
         link.extend(
             ["-l:libc++.a", "-l:libunwind.a", "-lws2_32", "-liphlpapi", "-lwinmm", "-lbcrypt"].map(String::from),
         );
-    } else if objects.is_empty() {
-        // No C++ to serve: only the diagnostics build compiles any.
-    } else if portable {
-        link.push("-l:libstdc++.a".into());
-    } else {
+    } else if !objects.is_empty() {
+        // Only a diagnostics build has C++ to serve.
         link.push("-lstdc++".into());
     }
     let response = out.join("link.rsp");

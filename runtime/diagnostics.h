@@ -1,11 +1,9 @@
 #pragma once
-// What the game does not need to run: traces, dumps, statistics, the end-of-run
-// reports, the stutter detector and the headless test harness.
-//
-// MW2_DIAGNOSTICS=0 (cargo xtask build --release) builds without it. The code is
-// still compiled in that build, behind a constant false, so it cannot rot
-// unnoticed; the optimiser removes it. Only what must not exist at all -- a hook
-// on a guest function, a whole file of dumps -- is behind #if MW2_DIAGNOSTICS.
+// The diagnostics switches and statistics, for the GPU capture's C++. build.rs
+// compiles that C++ only into a diagnostics build (a player's build, cargo xtask
+// build --release, compiles none), so MW2_DIAGNOSTICS is 1 wherever this is
+// included; kOn and Stat keep the form a build without it would take, the code
+// behind a constant false.
 #include <cstdint>
 #include <type_traits>
 #include "counter.h"

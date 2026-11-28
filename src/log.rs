@@ -32,7 +32,7 @@ fn standard_error() -> *mut c_void {
 
 /// MW2_LOG_TIME=1 starts every line with the seconds since the first stamped one, so
 /// a line can be matched with something seen on screen at that moment. For this
-/// thread, until its next line: runtime/log.h's Stamp() in the game (MW2_RUST).
+/// thread, until its next line: runtime/log.h's lines in the game.
 pub fn stamp() -> *const c_char {
     #[cfg(feature = "diagnostics")]
     {

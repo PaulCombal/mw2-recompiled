@@ -1,5 +1,6 @@
-// The game's fonts, rasterised for the system's screens (the game's src/runtime/screen.rs) as stb_truetype 1.26 does it in
-// the copy that comes with Dear ImGui (imstb_truetype.h), called as the screens call it:
+// The game's fonts, rasterised for the system's screens (the game's src/runtime/screen.rs)
+// as stb_truetype 1.26 does it in the copy that comes with Dear ImGui (imstb_truetype.h),
+// called as the screens call it:
 // stbtt_PackBegin with padding 1 and no oversampling, stbtt_PackFontRange for
 // glyphs 32 to 126, stbtt_PackEnd, then stbtt_InitFont, stbtt_GetFontVMetrics and
 // stbtt_ScaleForPixelHeight for the ascent. Only what those reach is here: the table
@@ -11,22 +12,20 @@
 //
 // The launcher's window (launcher/src/atlas.rs) takes glyphs one at a time (Face), as Dear
 // ImGui builds its atlas with stb_truetype: any codepoint, rasterised several times a pixel
-// across or down and box filtered back as stbtt_PackFontRangesRenderIntoRects does it;
-// tools/draw_diff.py holds that to the C.
+// across or down and box filtered back as stbtt_PackFontRangesRenderIntoRects does it.
 //
 // Each step is the C's, in the same order and precision: f32 where the C uses float
 // (sqrt, fabs and floor take float overloads in C++, so nothing is done in double),
 // a float's conversion to int as x86's cvttss2si gives it (the lowest int when out of
-// range or NaN), int sums and products wrapping as the machine did. tools/font_diff.py
-// holds the atlas, the glyphs, the result and the ascent to the C's, bit for bit.
+// range or NaN), int sums and products wrapping as the machine did.
 //
 // stb_truetype trusts the font: on damaged data it reads outside it, writes outside its
 // buffers, goes on with fields it never set or recurses until the stack is gone. Where the
 // C would do any of that, this refuses the whole font instead (Malformed), and bake leaves
 // an empty atlas and says nothing fitted; where the C stays inside, this gives what it gives.
-// A compound glyph whose transform takes a point or a curve's control point out of a short is
-// refused too, since the C's result is undefined
-// there and differs between its vectorised and scalar code. Compound glyphs nest at most
+// A compound glyph whose transform takes a point or a curve's control point out of a short
+// is refused too, since the C's result is undefined there and differs between its
+// vectorised and scalar code. Compound glyphs nest at most
 // MAX_COMPONENT_DEPTH deep, where the C has no limit but its stack.
 //
 // stb_truetype is Sean Barrett's and its contributors', released into the public domain
@@ -1948,7 +1947,7 @@ fn pack_font_range(
 
 // ---------------------------------------------------------------------------------------
 // One glyph at a time, as Dear ImGui's atlas builds with stb_truetype: the launcher's
-// fonts (launcher/src/draw.rs), any codepoint, oversampled across.
+// fonts (launcher/src/atlas.rs), any codepoint, oversampled across.
 
 /// A font read for one glyph at a time: stbtt_InitFont on the file's first font.
 pub struct Face<'a> {

@@ -1,7 +1,7 @@
 // Numbers read out of text as the C library reads them: atoi, strtol, strtoul and
-// strtoull, and scanf's %u, which the launcher's files were read with before it was
-// Rust, so that a file a player edited by hand reads the same. `long` is 64 bits on
-// Linux and 32 on Windows, which changes where a number too big saturates.
+// strtoull, and scanf's %u, so that a file a player edited by hand reads as it always
+// has. `long` is 64 bits on Linux and 32 on Windows, which changes where a number too big
+// saturates.
 #![deny(unsafe_code)]
 
 #[cfg(windows)]

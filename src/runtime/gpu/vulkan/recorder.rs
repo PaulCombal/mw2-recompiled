@@ -26,7 +26,7 @@
 //
 // Sleeping and waking are Dekker's: each side stores its own flag SeqCst and then loads
 // the other's SeqCst, so one of the two sees the other. Every park sits in a loop on its
-// own condition, which its waker sets before it unparks (the plan's park rule): the
+// own condition, which its waker sets before it unparks: the
 // recorder's sleep waits for `wakes` to move, which ring() moves before it unparks, and
 // a waiter for `made` to reach its position, which the recorder stores before it looks
 // for waiters. A stray unpark (another primitive's token on the same thread) costs one
@@ -69,7 +69,7 @@ pub struct Context<'a> {
 }
 
 /// Run before every call that was not queued as joining: what joining calls held back,
-/// it makes (the renderer's MakeGatheredDraws). Unsafe: it may own state that only the
+/// it makes (the renderer's make_gathered_draws). Unsafe: it may own state that only the
 /// thread making the calls touches, which only the recorder knows it is on.
 pub type Settle = unsafe fn(&Context);
 
@@ -99,8 +99,8 @@ struct Producer {
     reserved: u64,   // queued, not yet published
     made_seen: u64,  // `made` as last read, which only grows
     woken_from: u64, // the sleep (its slept_at) already woken for gathered calls
-    // What woken_from was before S14d, when a call due now set it too: the wakes for
-    // gathered calls that rule would not have made are counted.
+    // What woken_from would be if a call due now set it too: the wakes for gathered calls
+    // that such a call would have spent are counted (WAKES_KEPT).
     #[cfg(feature = "diagnostics")]
     woken_from_before: u64,
     threaded: bool,
@@ -178,8 +178,8 @@ static SIGNALS: Signals = Signals {
 static MADE: Made = Made { made: AtomicU64::new(0), waiters: AtomicU32::new(0) };
 static OWN: Own = Own { stopping: AtomicBool::new(false), calls: AtomicU64::new(0), sleeps: AtomicU64::new(0) };
 static WAITS: Waits = Waits { room_waits: AtomicU64::new(0), waits: AtomicU64::new(0) };
-// The producer's, diagnostics: wakes for gathered calls the rule before S14d would not have
-// made, a call due now having spent them.
+// The producer's, diagnostics: wakes for gathered calls that would not have been made had
+// a call due now spent the sleep's wake.
 #[cfg(feature = "diagnostics")]
 static WAKES_KEPT: AtomicU64 = AtomicU64::new(0);
 // Whether the thread runs, for the calls any thread may make (flush, position, done: the
@@ -501,7 +501,7 @@ pub fn host<F: FnOnce() + Send + 'static>(call: F) {
     push(move |_: &Context| call(), true, false);
 }
 
-/// At the renderer's start: Stop runs what is queued first. `settle`, when given, runs on
+/// At the renderer's start: stop runs what is queued first. `settle`, when given, runs on
 /// the recorder before every call that was not queued as joining; a start while threaded
 /// replaces it for the calls queued after it and for any queued before it that the
 /// recorder has not made yet (drain first to say which). `vk` is the recorder's from
@@ -556,7 +556,7 @@ pub unsafe fn start(vk: *const Vk, settle: Option<Settle>) {
         .stack_size(platform::default_thread_stack())
         .spawn(move || record_loop(handed))
         .unwrap_or_else(|_| {
-            // A std::thread that cannot start ends the program.
+            // A thread that cannot start ends the program.
             crate::log::log_error!("recorder: the recorder thread would not start");
             std::process::abort()
         });

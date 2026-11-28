@@ -444,7 +444,7 @@ whatever it held before, since the image is not streamed again.
 - **By eye.** A wrong tiling function produces a buffer of the right size full
   of plausible bytes, so only a picture confirms it. `MW2_DUMP_TEXTURES=<dir>`
   writes each distinct texture as PNM, each mip level beside it
-  (`texture::decode_to_rgba`, which exists only for this); `MW2_DUMP_TEXTURES_RAW=1`
-  also writes the guest bytes for offline layout experiments. A reimplemented
+  (`texture::decode_to_rgba`, which exists only for this), and a volume's guest
+  bytes for offline layout experiments. A reimplemented
   offline untiler must first reproduce a known-good texture before its output
   is trusted.

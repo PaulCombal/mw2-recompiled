@@ -10,14 +10,14 @@
 // renderer_diagnostics.rs (the switches that look at a frame, and the report) and
 // renderer_passtime.rs.
 //
-// One owner, the ring consumer (§3.6): no global renderer. Initialise makes every object
-// in a fixed order, so a command trace names each by the same ordinal; Shutdown destroys
-// them in a fixed order and moves what the report prints into
+// One owner, the ring consumer: no global renderer. initialise makes every object in a
+// fixed order, so a command trace names each by the same ordinal; shutdown destroys them
+// in a fixed order and moves what the report prints into
 // renderer_diagnostics::REPORT, which the report reads after it.
 //
 // Unsafe by nature: every handle is the device's that the shared pipeline made
-// (shaders/src/pipeline.rs), kept valid by the retire protocol (RetireBeforeDestroy,
-// ForgetViews, 600-frame id reuse) and destroyed at shutdown with the device idle and the
+// (shaders/src/pipeline.rs), kept valid by the retire protocol (retire_before_destroy,
+// forget_views, 600-frame id reuse) and destroyed at shutdown with the device idle and the
 // recorder stopped. The device tables (`vk`) are boxed and stay where they are from the
 // start to the end: the recorder and the pipeline optimiser hold a pointer to them, and
 // the ring consumer holds the renderer boxed (gpu.rs). tools/replay_diff.py holds two
@@ -93,7 +93,7 @@ fn device_info() -> Option<DeviceInfo> {
     })
 }
 
-// CheckCompiledShaders' note, and what Initialise found (g_compiled).
+// check_compiled_shaders' note, and what initialise found.
 struct Compiled {
     checked: bool,
     current: bool,
@@ -135,7 +135,7 @@ pub fn prepare_shader(pixel: bool, code: &[u32]) {
     super::renderer_libraries::prepare_shader(pixel, code);
 }
 
-/// The renderer: all its state, in the parts that are borrowed apart (§3.6).
+/// The renderer: all its state, in the parts that are borrowed apart.
 pub struct Renderer {
     pub vk: Option<Box<Vk>>,
     pub core: Core,
@@ -159,7 +159,7 @@ fn no_settings() -> TargetSettings {
     }
 }
 
-/// MW2_TIME_RENDER: where a frame's wall clock goes (Timing()).
+/// MW2_TIME_RENDER: where a frame's wall clock goes.
 fn timing() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| cfg!(feature = "diagnostics") && crate::env::flag(c"MW2_TIME_RENDER"))
@@ -183,8 +183,8 @@ impl Renderer {
         }
     }
 
-    /// vk::renderer::Initialise: the device the shared pipeline brought up, and everything the
-    /// renderer draws with made on it, in a fixed order. False when it cannot draw; what
+    /// The device the shared pipeline brought up, and everything the renderer draws with
+    /// made on it, in a fixed order. False when it cannot draw; what
     /// was made by then is kept for shutdown to destroy.
     ///
     /// # Safety
@@ -537,8 +537,8 @@ impl Renderer {
         true
     }
 
-    /// vk::renderer::Shutdown: everything destroyed in a fixed order, with the last frames
-    /// done and the recorder stopped first; what the report prints moved into REPORT.
+    /// Everything destroyed in a fixed order, with the last frames done and the recorder
+    /// stopped first; what the report prints moved into REPORT.
     ///
     /// # Safety
     /// The calling thread is the recorder's producer (the consumer, or the exit thread once
@@ -696,7 +696,7 @@ impl Renderer {
         }
     }
 
-    /// The texture cache's end (vk::textures::Shutdown), which the GPU's shutdown makes
+    /// The texture cache's end, which the GPU's shutdown makes
     /// after the renderer's; the device tables go with it.
     pub fn shutdown_textures(&mut self) {
         if let Some(vk) = self.vk.as_deref() {
@@ -707,7 +707,7 @@ impl Renderer {
     }
 
     /// A draw issued in copy mode: the colour or depth target copied where the copy
-    /// registers say it goes (vk::renderer::Resolve).
+    /// registers say it goes.
     ///
     /// # Safety
     /// As draw's.

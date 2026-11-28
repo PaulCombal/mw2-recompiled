@@ -20,7 +20,7 @@
 # order, numbered and labelled, so a flicker shows as one tile unlike its
 # neighbours.
 set -u
-RD="${RENDERDOC:-/home/paul/git/renderdoc_1.46}"
+RD="${RENDERDOC:-$HOME/git/renderdoc_1.46}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 OUT=""

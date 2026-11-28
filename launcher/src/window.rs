@@ -3,8 +3,7 @@
 // and the jobs it runs on a thread of their own (the install, the self-update, a map's
 // conversion, the compiled shaders brought up to date). Each frame it describes the
 // screen (ui::Frame), which ui.rs draws, and reads the keyboard, a controller and the
-// mouse as Dear ImGui read them (input.rs). It is the port of what main.cpp's App was,
-// saying what it said, word for word.
+// mouse as Dear ImGui read them (input.rs).
 #![allow(unsafe_code)]
 
 use crate::boundary::{path_of, utf8};
@@ -658,7 +657,7 @@ impl App {
         self.filters[1] = sdl::SDL_DialogFileFilter { name: c"All files".as_ptr(), pattern: c"*".as_ptr() };
         let data = Arc::into_raw(self.picked.clone()).cast_mut().cast();
         // SAFETY: the window, alive; the filters live in this App's box until the next
-        // dialog, as the C++'s static ones did; `data` is taken back by the answer.
+        // dialog; `data` is taken back by the answer.
         unsafe {
             sdl::SDL_ShowOpenFileDialog(
                 Some(answered_files),

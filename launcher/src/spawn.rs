@@ -51,18 +51,15 @@ pub fn last_error() -> String {
     unsafe { CStr::from_ptr(sdl::SDL_GetError()) }.to_string_lossy().into_owned()
 }
 
-/// The program beside the launcher, by its absolute path, started with these variables
-/// set; SDL's words when it cannot be.
 /// A thread of the launcher's own, for a job (thread_builder's).
 pub fn thread<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> std::thread::JoinHandle<T> {
     thread_builder().spawn(body).unwrap_or_else(|e| panic!("a thread for the launcher's job: {e}"))
 }
 
-/// How the launcher's threads are made: on Linux with the stack a C++ std::thread had,
-/// glibc's default, which RLIMIT_STACK sets (8 MiB as a rule), where Rust's default is
-/// 2 MiB -- the map converter the jobs call was written for it, and the shader compile
-/// pass's threads translate on it; on Windows with Rust's, which is more than the C++'s
-/// was.
+/// How the launcher's threads are made: on Linux with glibc's default stack, which
+/// RLIMIT_STACK sets (8 MiB as a rule), where Rust's default is 2 MiB -- the map converter
+/// the jobs call needs it, and the shader compile pass's threads translate on it; on
+/// Windows with Rust's.
 pub fn thread_builder() -> std::thread::Builder {
     let builder = std::thread::Builder::new();
     match default_stack() {
@@ -102,6 +99,8 @@ fn default_stack() -> Option<usize> {
     None
 }
 
+/// The program beside the launcher, by its absolute path, started with these variables
+/// set; SDL's words when it cannot be.
 pub fn start(program: &Path, set: &[(&str, &[u8])]) -> Result<(), String> {
     let path = std::path::absolute(program).unwrap_or_else(|_| program.to_path_buf());
     let path = CString::new(crate::boundary::utf8(&path)).map_err(|_| "a zero byte in the path".to_string())?;

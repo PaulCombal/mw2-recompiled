@@ -1,5 +1,5 @@
-// What each image was last used for, and the barrier from that use to the next (the
-// plan's S13b). Xenia keeps the same three things on each render target
+// What each image was last used for, and the barrier from that use to the next. Xenia
+// keeps the same three things on each render target
 // (VulkanRenderTargetCache::VulkanRenderTarget's current_stage_mask, current_access_mask
 // and current_layout) and asks for a barrier from them to the next use
 // (TransitionRenderTarget through VulkanCommandProcessor::PushImageMemoryBarrier), which

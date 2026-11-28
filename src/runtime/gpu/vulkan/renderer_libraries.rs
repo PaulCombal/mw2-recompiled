@@ -20,8 +20,8 @@
 //   - a draw links the four, which takes well under a millisecond, and the same four are
 //     linked again with link-time optimisation on a thread of its own, the result taking
 //     the fast link's place when it is ready.
-// A device without pipeline libraries gets whole pipelines, compiled at the first draw as
-// before (renderer_pipelines.rs).
+// A device without pipeline libraries gets whole pipelines, compiled at the first draw
+// (renderer_pipelines.rs).
 //
 // The preparation queue and the optimiser's are statics: the title's loader threads queue
 // shaders (prepare_shader) before the renderer exists.
@@ -93,7 +93,7 @@ pub mod time {
         (steady() / 1_000_000) as i64
     }
 
-    /// pacing::Microseconds(): the pacing trace's clock.
+    /// The pacing trace's clock (pacing_trace.rs).
     pub fn pacing() -> i64 {
         crate::runtime::pacing_trace::microseconds(crate::runtime::clock::nanoseconds())
     }
@@ -111,7 +111,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 // route draws -- and on a cold driver cache that is 17 s of CPU. Running into play, even at
 // idle priority, it slowed the title itself (47 frames it presented late in a minute; the
 // cores, their clocks and caches are shared). A shader wanted in play before a worker
-// reached it is compiled at the draw, as it was before; a warm cache makes the whole load's
+// reached it is compiled at the draw; a warm cache makes the whole load's
 // worth half a second.
 static LAST_WORLD_FRAME: AtomicI64 = AtomicI64::new(0);
 static WORLD_RUN: AtomicU32 = AtomicU32::new(0);
@@ -168,8 +168,8 @@ struct PrepState {
     wait_microseconds: u64,
     compiled_in_play: u64,
     drained_at: i64,
-    // What the workers build with (State's shadowScale > 1 and depthFormat), set when they
-    // start.
+    // What the workers build with (the renderer's scale above 1, and its depth format),
+    // set when they start.
     scaled: bool,
     depth_format: vk::Format,
 }
@@ -255,10 +255,10 @@ struct VkRef(*const Vk);
 unsafe impl Send for VkRef {}
 
 fn spawn(name: &str, body: impl FnOnce() + Send + 'static) -> JoinHandle<()> {
-    // The platform's default thread stack (§3.6), and the name stat4.sh and prof.sh find.
+    // The platform's default thread stack, and the name stat4.sh and prof.sh find.
     thread::Builder::new().name(name.into()).stack_size(platform::default_thread_stack()).spawn(body).unwrap_or_else(
         |_| {
-            // A std::thread that cannot start ends the program.
+            // A thread that cannot start ends the program.
             crate::log::log_error!("renderer: a shader thread would not start");
             std::process::abort()
         },
@@ -342,11 +342,10 @@ fn optimise(vk: VkRef) {
 ///
 /// Once the module and library are made, nothing reads the SPIR-V or the microcode again
 /// but the shader cache's write: the SPIR-V goes with the build's translation, and the
-/// microcode is kept only under MW2_SHADER_CACHE (the plan's S12a). Nor is the module read
-/// once its library exists -- pipelines are
-/// linked from the library, and the library keeps what an optimised link needs
-/// (RETAIN_LINK_TIME_OPTIMIZATION_INFO) -- so it is destroyed here and left null, and
-/// `usable` says whether one was made (the plan's S12b). A shader without a library, on a
+/// microcode is kept only under MW2_SHADER_CACHE. Nor is the module read once its library
+/// exists -- pipelines are linked from the library, and the library keeps what an
+/// optimised link needs (RETAIN_LINK_TIME_OPTIMIZATION_INFO) -- so it is destroyed here
+/// and left null, and `usable` says whether one was made. A shader without a library, on a
 /// device without pipeline libraries or one whose library the driver refused, keeps its
 /// module for the whole pipelines built from it; its partner in such a pipeline, if that
 /// has a library, has its module made again for the build (remake_module).
@@ -355,7 +354,7 @@ pub fn build_shader(vk: &Vk, pixel: bool, code: &[u32], scaled: bool, depth_form
     #[cfg(feature = "diagnostics")]
     if built.library != vk::Pipeline::null() && trace::refused_libraries() & (1 << u8::from(pixel)) != 0 {
         // MW2_FORCE_REFUSED_LIBRARIES: as if the driver had refused this library, which
-        // Build answers with no library and fromCache -1, the module kept.
+        // build answers with no library and from_cache -1, the module kept.
         // SAFETY: made by this build and handed to nothing yet.
         unsafe { vk.destroy_pipeline(built.library) };
         built.library = vk::Pipeline::null();
@@ -366,7 +365,7 @@ pub fn build_shader(vk: &Vk, pixel: bool, code: &[u32], scaled: bool, depth_form
         FROM_CACHE[(built.from_cache.clamp(-1, 1) + 1) as usize].fetch_add(1, Ordering::Relaxed);
         report::shader_built(built.from_cache);
     }
-    // Made by the launcher's shared Build: named by the shader's hash (trace.rs).
+    // Made by the shared build: named by the shader's hash (trace.rs).
     #[cfg(feature = "diagnostics")]
     if trace::on() {
         let hash = shader_hash(code);
@@ -398,9 +397,9 @@ pub fn build_shader(vk: &Vk, pixel: bool, code: &[u32], scaled: bool, depth_form
 /// The module of a shader whose own build_shader destroyed once its library existed, made
 /// again from its microcode for a whole pipeline: the pair of that shader and one whose
 /// library the driver refused cannot be linked, and is built whole from the two
-/// (renderer_pipelines.rs's new_pipeline). Made by the same
-/// shared Build, so the module is the one destroyed; the library Build makes with it again
-/// (from the pipeline cache) is destroyed here. Null if Build made no module this time.
+/// (renderer_pipelines.rs's new_pipeline). Made by the same shared build, so the module is
+/// the one destroyed; the library the build makes with it again (from the pipeline cache)
+/// is destroyed here. Null if the build made no module this time.
 /// The caller destroys the module once the pipeline is built.
 pub fn remake_module(vk: &Vk, pixel: bool, code: &[u32], scaled: bool, depth_format: vk::Format) -> vk::ShaderModule {
     let built = build(pixel, code, scaled, depth_format);

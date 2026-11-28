@@ -7,13 +7,12 @@
 // (PipelineState). The mappings are pure functions; PipelineState holds pointers into
 // itself, and so lives pinned in a box.
 //
-// Pipelines holds the renderer's shaders and pipelines: ShaderFor's slab with the last
-// shader of each stage, EnsurePipeline's map with its last key, the state-only libraries,
+// Pipelines holds the renderer's shaders and pipelines: shader_for's slab with the last
+// shader of each stage, ensure_pipeline's map with its last key, the state-only libraries,
 // the optimised links finished for no pipeline, and the shader cache's record. The fast
 // links an optimised one replaced go to Retiring, which the frame holds and frees each one
-// from at BeginFrame once the frames that may draw with it are done (the plan's S12c). The
-// threads that compile shaders and optimise
-// links, and the libraries, are renderer_libraries.rs's.
+// from at begin_frame once the frames that may draw with it are done. The threads that
+// compile shaders and optimise links, and the libraries, are renderer_libraries.rs's.
 //
 // Unsafe by nature: it calls Vulkan (device.rs's contract). Handles stay valid by the
 // renderer's order: a pipeline or library goes only at shutdown, after the optimiser that
@@ -273,11 +272,11 @@ impl PipelineState {
     }
 }
 
-// ---- shaders and pipelines (ShaderFor, BuildPipeline, EnsurePipeline) ----
+// ---- shaders and pipelines ----
 
 /// A shader made ready for the GPU: the translation the draw
-/// reads (its metadata; whether it worked, and why not, with its SPIR-V's length for
-/// Describe), the module and, where the device has pipeline libraries, the shader compiled
+/// reads (its metadata; whether it worked, and why not, with its SPIR-V's length), the
+/// module and, where the device has pipeline libraries, the shader compiled
 /// on its own as its stage's library (renderer_libraries.rs); null on a device without
 /// them. The module is kept only where there is no library: once the library exists it is
 /// destroyed (build_shader), so `usable`, not the module, says whether the shader was
@@ -372,7 +371,7 @@ impl Recorded {
     }
 }
 
-/// The last usable shader of a stage ShaderFor answered with (State::lastShader): draws
+/// The last usable shader of a stage shader_for answered with: draws
 /// come in runs with the same pair, and an entry stays where it is in the slab until the
 /// slab is cleared. `valid` says there is one.
 #[derive(Clone, Copy, Default)]
@@ -393,8 +392,8 @@ pub struct Retired {
 }
 
 /// The fast links optimised ones replaced, oldest first, until the frames that may draw
-/// with them are done (the plan's S12c). The frame holds
-/// it (Core::retiring) and frees from it at BeginFrame, once the completed serial has been
+/// with them are done. The frame holds it (Core::retiring) and frees from it at
+/// begin_frame, once the completed serial has been
 /// sampled; a fresh command buffer forgets its bound pipeline (Bound), so a handle the
 /// driver hands out again after a free is never taken for the one destroyed.
 pub struct Retiring {
@@ -420,7 +419,7 @@ impl Retiring {
     }
 
     /// Destroys, oldest first, each one whose submission the GPU has finished
-    /// (`completed`, sampled by NoteCompleted) and whose calls the recorder has made. The
+    /// (`completed`, sampled by note_completed) and whose calls the recorder has made. The
     /// serials and positions only grow along the queue, so the first that must wait
     /// stops it.
     ///
@@ -448,24 +447,24 @@ impl Retiring {
     }
 }
 
-/// The renderer's shaders and pipelines (State's shaders, pipelines and libraries).
+/// The renderer's shaders and pipelines.
 pub struct Pipelines {
     pub(super) map: PipelineMap,
-    // The last pipeline EnsurePipeline answered, while no optimised one has replaced an
+    // The last pipeline ensure_pipeline answered, while no optimised one has replaced an
     // entry since (pipelines_optimised): draws come in runs with one pipeline, and the
     // key's hash was a few percent of a draw.
     pub(super) last_key: PipelineKey,
     pub(super) last: vk::Pipeline,
     pub(super) last_swaps: u64,
     // Every shader asked for, usable or not (a failure is remembered), in the order they
-    // came; `by_hash` names each one's place. Boxed (§3.8): a Shader is ~1 KB, and an entry
+    // came; `by_hash` names each one's place. Boxed: a Shader is ~1 KB, and an entry
     // stays where it is while the slab grows.
     #[allow(clippy::vec_box, reason = "stable entries, cheap growth: the plan's slab (§3.8)")]
     pub(super) shaders: Vec<Box<Shader>>,
     pub(super) by_hash: HashMap<u64, u32, MulBuild>,
     pub(super) last_shader: [LastShader; 2],
     // The state-only libraries: the input assembly for each topology, and the output stage
-    // for each OutputKey (std::map's order).
+    // for each OutputKey, in key order.
     pub(super) input_libraries: BTreeMap<u32, vk::Pipeline>,
     pub(super) output_libraries: BTreeMap<OutputKey, vk::Pipeline>,
     // Optimised links finished for a key with no pipeline, or one that failed, and those
@@ -483,8 +482,8 @@ pub struct Pipelines {
     pub prewarm_microseconds: u64,
     pub prewarmed: u32,
     pub prewarm_wanted: u32,
-    /// What a shader is built with (State's shadowScale > 1 and depthFormat), set at the
-    /// renderer's initialise, before start_preparing.
+    /// What a shader is built with (a shadow scale above 1, and the depth format), set at
+    /// the renderer's initialise, before start_preparing.
     pub scaled: bool,
     pub depth_format: vk::Format,
     pub(super) threads: Threads,
@@ -559,7 +558,7 @@ impl Pipelines {
         &self.shaders[index as usize]
     }
 
-    /// How many shaders and pipelines there are (State's shaderCount, pipelineCount).
+    /// How many shaders and pipelines there are.
     pub fn counts(&self) -> (usize, usize) {
         (self.shaders.len(), self.map.len())
     }
@@ -738,7 +737,7 @@ impl Pipelines {
         }
     }
 
-    /// Everything this holds destroyed, as the renderer's Shutdown has it: the pipelines,
+    /// Everything this holds destroyed, as the renderer's shutdown has it: the pipelines,
     /// the optimised links never placed and the fast links still retiring (which the
     /// shutdown hands over), the state-only libraries and the shaders.
     /// Only once the optimiser, which links from the libraries, has been joined (`Joined`,
@@ -822,7 +821,7 @@ fn build_pipeline(vk: &Vk, key: &PipelineKey, vertex: vk::ShaderModule, pixel: v
     built[0]
 }
 
-// ---- the shader cache (WriteShaderCache, PrewarmFromCache) ----
+// ---- the shader cache ----
 
 /// MW2_SHADER_CACHE=<file> records every pipeline a run needed and rebuilds them at
 /// start-up on the next -- the "compiling shaders" pass the console never needed. It

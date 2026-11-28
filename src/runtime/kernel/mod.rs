@@ -371,7 +371,6 @@ pub fn queue_user_apc(routine: u32, context: u32, io_status_block: u32, work: Op
 /// routine that waits alertably itself delivers what is still queued, as NT does.
 pub fn deliver_user_apcs(caller: &PPCContext, memory: Memory) -> bool {
     let queued = APCS.with_borrow(VecDeque::len);
-    // One at a time, so that nothing is held across the guest call.
     for _ in 0..queued {
         let Some(apc) = APCS.with_borrow_mut(VecDeque::pop_front) else { break };
         if let Some(work) = apc.work {

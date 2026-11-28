@@ -1,6 +1,6 @@
-// What the window reads of the keyboard, the mouse and a controller, as it read them
-// through Dear ImGui 1.91.9b's IO, fed by its SDL3 backend (imgui_impl_sdl3.cpp), so
-// that a press does the same: SDL's events become a queue of Dear ImGui's events, the
+// What the window reads of the keyboard, the mouse and a controller, as Dear ImGui
+// 1.91.9b's IO reads them, fed by its SDL3 backend (imgui_impl_sdl3.cpp), so that a
+// press does the same: SDL's events become a queue of Dear ImGui's events, the
 // same ones filtered out as repeats, and each frame takes from the queue as Dear ImGui
 // did with its queue trickled (io.ConfigInputTrickleEventQueue) -- a key or a button
 // that changes twice is left for the next frame, so a press and its release in one frame

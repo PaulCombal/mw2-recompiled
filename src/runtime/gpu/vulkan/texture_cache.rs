@@ -49,8 +49,7 @@ pub const UPLOAD_SLOTS: u32 = 4;
 // Sixteen frames is a quarter of a second at sixty: long enough to be cheap, short enough
 // that a texture that starts moving is caught before it shows.
 const SIGN_PERIOD_MAX: u64 = 16;
-// What a submission's staging starts at and grows to (MW2_STAGING_LEAST_KB lowers the
-// least in a diagnostics build).
+// What a submission's staging starts at and grows to.
 const STAGING_LEAST: u64 = 8 << 20;
 const STAGING_MOST: u64 = 256 << 20;
 // How long an image goes unbound before it may be let go: ten seconds from the start of
@@ -61,11 +60,11 @@ const STAGING_MOST: u64 = 256 << 20;
 // CompletedSubmissionUpdated lets it go once last_usage_submission_index <= the completed
 // submission and last_usage_time + the lifetime <= current_time), by time rather than
 // frames, so the frame rate does not change it. Xenia's lifetime is 30 s and applies past a
-// memory limit; this one is the plan's 10 s.
+// memory limit; here it is 10 s.
 const UNUSED_NANOSECONDS: u64 = 10_000_000_000;
 // MW2_DETERMINISTIC's clock for that: a frame is 1/60 s, a submission begun in frame n
 // begins at n/60 s and the sweep after frame n looks at (n + 1)/60 s, so an image goes after
-// 600 frames, as it did by frames.
+// 600 frames.
 #[cfg(feature = "diagnostics")]
 const DETERMINISTIC_FRAME_NANOSECONDS: u64 = 16_666_667;
 // The cache is looked over once in this many frames, the images a slice a frame.
@@ -85,7 +84,7 @@ const STUTTER_NEW_TEXTURES: usize = 2;
 const STUTTER_REFRESHED_TEXTURES: usize = 3;
 const REPORT_TEXTURES: usize = 3;
 
-/// gpu::TextureData: what read_texture gives, its bytes with it.
+/// What read_texture gives, its bytes with it.
 #[derive(Clone)]
 pub struct TextureData {
     pub header: TextureHeader,
@@ -398,8 +397,6 @@ struct Uploads {
     batched: u64,
     alone: u64,
     overflows: u64,
-    // MW2_STAGING_LEAST_KB lowers it (initialise), and it stays lowered.
-    staging_least: u64,
     // Where each slot's staging was filled up to at its last segment's end (the trace).
     staging_hashed: [u64; UPLOAD_SLOTS as usize],
 }
@@ -415,7 +412,6 @@ impl Default for Uploads {
             batched: 0,
             alone: 0,
             overflows: 0,
-            staging_least: STAGING_LEAST,
             staging_hashed: [0; UPLOAD_SLOTS as usize],
         }
     }
@@ -429,8 +425,8 @@ struct Bindless {
     written: u64, // descriptors written
 }
 
-/// The frame and segment count and the re-read lists (State's frame, segment, epoch and
-/// what is read again at a segment's end).
+/// The frame and segment count, the epoch, and the re-read lists (what is read again at
+/// a segment's end).
 #[derive(Default)]
 struct Tracking {
     frame: u64,
@@ -489,7 +485,7 @@ pub struct TextureCache {
     magenta: u64,
     marked_empty: u64,
     linearised_refused: u64, // no sRGB form of the format to linearise with
-    // S13a's fallbacks taken (format_support.rs): images converted for a format the device
+    // Fallbacks taken (format_support.rs): images converted for a format the device
     // cannot sample, and images given point samplers for one it cannot filter.
     converted: u64,
     point_only: u64,
@@ -535,7 +531,7 @@ pub struct TextureCache {
     // Re-reads in parts (texture_parts.rs): the scratch they read into and stage from, and
     // what they came to.
     parts: PartsWork,
-    // Diagnostics: the idle images let go, and the youngest of them (S14d's measure).
+    // Diagnostics: the idle images let go, and the youngest of them.
     #[cfg(feature = "diagnostics")]
     let_go: LetGo,
 }
@@ -616,7 +612,7 @@ fn written_elsewhere() -> std::sync::MutexGuard<'static, Vec<(u32, u32)>> {
     WRITTEN_ELSEWHERE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// vk::textures::MemoryWritten from any thread but the consumer: queued for it.
+/// memory_written from any thread but the consumer: queued for it.
 pub fn memory_written_elsewhere(physical: u32, size: u32) {
     use std::sync::atomic::Ordering;
     let mut list = written_elsewhere();
@@ -653,8 +649,7 @@ impl TextureCache {
 }
 
 /// The cache after its shutdown, kept for the report written after it. None before (the
-/// fault path's report, which
-/// reads statics alone, prints no texture lines).
+/// fault path's report, which reads statics alone, prints no texture lines).
 static AFTER_SHUTDOWN: std::sync::Mutex<Option<TextureCache>> = std::sync::Mutex::new(None);
 
 /// The renderer's shutdown hands its cache over, its device's objects destroyed.
@@ -663,7 +658,7 @@ pub fn keep_for_report(cache: TextureCache) {
 }
 
 #[cfg_attr(not(feature = "diagnostics"), allow(dead_code, reason = "the report and the diagnostic keys' alone"))]
-/// vk::textures::Report after the shutdown. Never waits: the fault path can reach here
+/// The cache's report after the shutdown. Never waits: the fault path can reach here
 /// from a signal handler on the thread that holds the lock.
 pub fn report_after_shutdown() {
     use std::sync::atomic::Ordering;
@@ -1586,23 +1581,8 @@ impl Uploads {
     ) -> bool {
         image.staged = image.staged.wrapping_add(1);
         if let Some(open) = self.open {
-            // MW2_FORCE_LONE_UPLOADS: each submitted on its own, as before the frame's uploads.
-            #[cfg(feature = "diagnostics")]
-            let lone = super::trace::forcing().lone_uploads;
-            #[cfg(not(feature = "diagnostics"))]
-            let lone = false;
-            if !lone {
-                // SAFETY: the caller's.
-                return unsafe { self.record_upload(vk, dev, fails, open, image, bytes, size, error) };
-            }
-            #[cfg(feature = "diagnostics")]
-            {
-                let counts = super::trace::counts();
-                counts.lone_uploads.store(
-                    counts.lone_uploads.load(std::sync::atomic::Ordering::Relaxed).wrapping_add(1),
-                    std::sync::atomic::Ordering::Relaxed,
-                );
-            }
+            // SAFETY: the caller's.
+            return unsafe { self.record_upload(vk, dev, fails, open, image, bytes, size, error) };
         }
 
         // SAFETY: the caller's device; the staging lives until the copy has run (the fence).
@@ -2046,15 +2026,7 @@ impl TextureCache {
             }
         }
         self.budget = crate::env::number(c"MW2_TEXTURE_BUDGET_MB", 0) << 20;
-        #[cfg(feature = "diagnostics")]
-        {
-            let least = super::trace::forcing().staging_least_kb;
-            if least != 0 {
-                self.up.staging_least = (u64::from(least) << 10).min(STAGING_MOST);
-            }
-        }
         if self.budget == 0 {
-            // std::clamp's answer for integers.
             self.budget = (device_local / 2).clamp(256 << 20, 2048 << 20);
         }
 
@@ -2396,7 +2368,7 @@ impl TextureCache {
         self.free_ids.push(id);
     }
 
-    /// A few a frame: destroying one is cheap now that its memory is a range of a block,
+    /// A few a frame: destroying one is cheap, its memory being a range of a block,
     /// but a sweep can let thousands go at once.
     fn destroy_doomed(&mut self, vk: &Vk) {
         let from = outside::now();
@@ -2502,7 +2474,7 @@ impl TextureCache {
             return;
         }
         let n = index as usize;
-        let least = self.up.staging_least;
+        let least = STAGING_LEAST;
         let dev = &self.dev;
         let slot = &mut self.up.slots[n];
         // SAFETY: the cache's device; the GPU is done with everything the slot held.
@@ -3386,7 +3358,7 @@ impl TextureCache {
         self.up.slots[index].recording = false;
         #[cfg(feature = "diagnostics")]
         {
-            // The staging this segment's uploads read, which is S1's untiling on the
+            // The staging this segment's uploads read, the untiled bytes of the
             // game's data.
             let slot = &self.up.slots[index];
             let from = self.up.staging_hashed[index];
@@ -3738,14 +3710,14 @@ impl TextureCache {
     }
 }
 
-/// vk::textures::ForgetViews, as the resolves call it (renderer_resolve.rs, making a
+/// forget_views, as the resolves call it (renderer_resolve.rs, making a
 /// resolve image with the device idle).
 pub fn forget_views(cache: &mut TextureCache) {
     cache.forget_views();
 }
 
-/// What TexturesFor asks of the cache (renderer_draw.rs's textures_for), on the device the
-/// cache uploads with.
+/// What textures_for (renderer_draw.rs) asks of the cache, on the device the cache
+/// uploads with.
 pub struct Bound<'a> {
     pub cache: &'a mut TextureCache,
     pub vk: &'a Vk,

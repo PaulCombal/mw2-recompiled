@@ -331,7 +331,7 @@ fn read_book() -> Book {
             book.first = strtoul(c_str(rest), 16, 64).0;
             continue;
         }
-        // Twelve digits, all of them read (up to a zero byte, where the C's string ended).
+        // Twelve digits, all of them read (up to a zero byte, which ends them).
         let id = if line.len() >= 14 && line[12] == b' ' {
             let digits = c_str(&line[..12]);
             match strtoul(digits, 16, 64) {

@@ -20,9 +20,6 @@ path = "src/main.rs"
 default = ["diagnostics"]
 # The traces, dumps, statistics and test harness (runtime/diagnostics.h).
 diagnostics = []
-# The C++ standard library linked in, for a binary that runs on other machines:
-# the game has C++ only with diagnostics.
-portable = []
 
 [dependencies]
 ppc_recomp = { path = "generated/ppc_recomp" }
@@ -41,7 +38,7 @@ wmapro = { path = "wmapro" }
 # The executable's image and its SHA-256, which the launcher and cargo xtask share
 # (install/).
 mw2-install = { path = "install" }
-# The fonts' rasteriser, which the launcher will share (truetype/).
+# The fonts' rasteriser, which the launcher shares (truetype/).
 mw2-truetype = { path = "truetype" }
 
 [build-dependencies]

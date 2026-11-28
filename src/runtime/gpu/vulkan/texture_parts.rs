@@ -13,9 +13,10 @@
 //
 // The watch decides which parts are read and the signature, as for a whole texture,
 // whether one changed. A copy of the bytes as uploaded is kept beside them, so that
-// whether the texture is still mostly empty is judged as after a whole read. A page written by something the watch does not see would leave
-// its part stale: MW2_CHECK_TEXTURE_PARTS=1 (diagnostics) reads the whole texture after
-// each re-read in parts and counts the bytes that differ from what was uploaded.
+// whether the texture is still mostly empty is judged as after a whole read. A page
+// written by something the watch does not see would leave its part stale:
+// MW2_CHECK_TEXTURE_PARTS=1 (diagnostics) reads the whole texture after each re-read in
+// parts and counts the bytes that differ from what was uploaded.
 
 use super::super::texture::{self, BlockRect, Level, TextureFetch};
 use ash::vk;

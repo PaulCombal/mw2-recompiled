@@ -32,7 +32,7 @@ pub const ARENA_NAMES: [&str; ARENA_KINDS] = ["constants", "vertex data", "indic
 pub const FRAME_SLOTS: u32 = 3;
 
 /// A tile of EDRAM is one surface however the title declares it, so the key holds the host
-/// format, and the scale the image is drawn at (PassScale). The fields' order gives the
+/// format, and the scale the image is drawn at (pass_scale). The fields' order gives the
 /// derived order, on which the clear-rectangle choice depends.
 #[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct TargetKey {
@@ -120,7 +120,7 @@ impl Hash for FetchWords {
     }
 }
 
-/// The pipelines by key (State::pipelines), hashed by words_hash.
+/// The pipelines by key, hashed by words_hash.
 pub type PipelineMap = HashMap<PipelineKey, vk::Pipeline, WordsBuild>;
 
 /// What a pipeline's output stage is built from: the blend, the write mask, and the
@@ -135,7 +135,7 @@ pub struct OutputKey {
 }
 
 /// What is already in the arena this frame, so a draw that reads the same thing as the
-/// last one does not copy it again (State::Cached). Dropped at the reset.
+/// last one does not copy it again. Dropped at the reset.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Cached {
     pub stamp: u64,
@@ -148,7 +148,7 @@ pub struct Cached {
 }
 
 /// Where in this slot's arena a block of 16 vertex constants was copied, at which register
-/// stamp (State::ConstantBlock).
+/// stamp.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct ConstantBlock {
     pub stamp: u64,
@@ -209,8 +209,7 @@ const STENCIL_NONE: vk::StencilOpState = vk::StencilOpState {
     reference: 0,
 };
 
-// ---- the resolve records (Resolved, ResolveRing and the State fields resolvedTo,
-// fetchedWidth and resolveEpoch), shared by the texture lookup and the resolves ----
+// ---- the resolve records, shared by the texture lookup and the resolves ----
 
 /// A resolve that is not the frame is the title handing itself a texture: the pixels never
 /// go through guest memory here, the destination address names one of these images and a
@@ -292,7 +291,7 @@ impl Default for ResolveRing {
     }
 }
 
-/// The State fields the texture lookup and the resolves share: each destination's ring,
+/// What the texture lookup and the resolves share: each destination's ring,
 /// the width a fetch gives the texture at a destination where it is narrower than the
 /// surface's pitch, and the epoch that moves on at every resolve (resolved_to may have
 /// changed).

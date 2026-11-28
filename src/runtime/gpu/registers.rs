@@ -281,9 +281,9 @@ impl RegisterFile {
     /// -- an unchanged dword is stored as it was, and only a change stamps. The run must
     /// lie inside the file (the caller's check); one that does not is not written.
     ///
-    /// The run's range is checked once, and each block indexed from 0 as the C++ register
-    /// file's WriteRun did: a slice checked per block and an iterator's two pointers cost the
-    /// consumer instructions on every register packet.
+    /// The run's range is checked once, and each block indexed from 0: a slice checked per
+    /// block and an iterator's two pointers cost the consumer instructions on every register
+    /// packet.
     #[inline(always)]
     #[expect(clippy::needless_range_loop, reason = "the index from 0 is what makes the loop the C++'s")]
     pub fn write_run(&mut self, first: u32, count: u32, source: impl Fn(usize) -> u32) {

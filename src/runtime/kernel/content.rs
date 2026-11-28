@@ -13,13 +13,11 @@
 
 use super::misc::ERROR_SUCCESS;
 use super::{complete_overlapped, files, stack_argument};
-use crate::env;
 use crate::guest::{Memory, Register, guest_hook, kernel_import};
 use crate::log::{c_string, log_kernel};
 use crate::title;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
 const ERROR_FILE_NOT_FOUND: u32 = 0x0002;
 const ERROR_PATH_NOT_FOUND: u32 = 0x0003;
@@ -82,17 +80,12 @@ fn path_text(path: &Path) -> std::ffi::CString {
 // every launch. There is only one device to choose, so choose it.
 const CONTROLLERS: u32 = 4;
 
-fn choose_device_for_player() -> bool {
-    static ON: LazyLock<bool> = LazyLock::new(|| !env::flag(c"MW2_NO_AUTO_SAVE_DEVICE"));
-    *ON
-}
-
 // Memcard_InitializeSystem. The table is clear when it returns, so this is the moment to
 // answer the question the prompt would ask.
 guest_hook!(T_Memcard_InitializeSystem, |ctx, memory| {
     title::T_Memcard_InitializeSystem.original(ctx, memory);
     let table = title::T_DATA_DeviceTable;
-    if !choose_device_for_player() || table == 0 {
+    if table == 0 {
         return;
     }
     for i in 0..CONTROLLERS {

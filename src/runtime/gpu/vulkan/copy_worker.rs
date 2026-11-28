@@ -164,10 +164,9 @@ fn run() {
 /// one processor thread, nothing is handed over and the consumer makes every copy where
 /// it meets it.
 ///
-/// Off unless asked for: on a processor whose cores share a power budget -- this laptop's,
+/// Off unless asked for: on a processor whose cores share a power budget -- a laptop's,
 /// the Steam Deck's -- the busy core it adds lowers the consumer's clock about as much as
-/// it takes work off it. Standing at Team Player's start, uncapped, the consumer's cycles a
-/// frame went down 6% and the frame rate stayed where it was.
+/// it takes work off it (the consumer's cycles a frame down 6%, the frame rate unchanged).
 pub fn start() {
     let q = &QUEUE;
     if q.running.load(Relaxed)

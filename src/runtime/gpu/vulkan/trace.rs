@@ -15,7 +15,6 @@
 
 use crate::env;
 use crate::log::{log_info, log_warn};
-use crate::runtime::clock;
 use ash::vk;
 use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
@@ -43,26 +42,10 @@ pub fn deterministic() -> bool {
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Forced {
     pub instance_depth_resolve: bool, // MW2_FORCE_INSTANCE_DEPTH_RESOLVE
-    pub resolve_twin: bool,           // MW2_FORCE_RESOLVE_TWIN
-    pub drawn_resolve_sets: u32,      // MW2_DRAWN_RESOLVE_SETS, 0: as built
-    pub resolve_remake: u32,          // MW2_FORCE_RESOLVE_REMAKE, frames; 0: never
     pub no_multi_draw: bool,          // MW2_NO_MULTI_DRAW
-    pub lone_uploads: bool,           // MW2_FORCE_LONE_UPLOADS
-    pub staging_least_kb: u32,        // MW2_STAGING_LEAST_KB, 0: as built
-    pub fake_device_lost: f64,        // MW2_FAKE_DEVICE_LOST, seconds; 0: never
 }
 
-static FORCED: Mutex<Forced> = Mutex::new(Forced {
-    instance_depth_resolve: false,
-    resolve_twin: false,
-    drawn_resolve_sets: 0,
-    resolve_remake: 0,
-    no_multi_draw: false,
-    lone_uploads: false,
-    staging_least_kb: 0,
-    fake_device_lost: 0.0,
-});
-static STARTED: AtomicU64 = AtomicU64::new(0);
+static FORCED: Mutex<Forced> = Mutex::new(Forced { instance_depth_resolve: false, no_multi_draw: false });
 
 pub fn forcing() -> Forced {
     *FORCED.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -79,35 +62,14 @@ pub fn refused_libraries() -> u8 {
 
 /// Counted where a forced path is taken, for the report.
 pub struct ForcedCounts {
-    pub twin_resolves: AtomicU64,
-    pub remade_resolves: AtomicU64,
-    pub lone_uploads: AtomicU64,
-    pub lost_submissions: AtomicU64,
     pub refused_libraries: AtomicU64,
     pub remade_modules: AtomicU64,
 }
 
-static COUNTS: ForcedCounts = ForcedCounts {
-    twin_resolves: AtomicU64::new(0),
-    remade_resolves: AtomicU64::new(0),
-    lone_uploads: AtomicU64::new(0),
-    lost_submissions: AtomicU64::new(0),
-    refused_libraries: AtomicU64::new(0),
-    remade_modules: AtomicU64::new(0),
-};
+static COUNTS: ForcedCounts = ForcedCounts { refused_libraries: AtomicU64::new(0), remade_modules: AtomicU64::new(0) };
 
 pub fn counts() -> &'static ForcedCounts {
     &COUNTS
-}
-
-/// Whether MW2_FAKE_DEVICE_LOST's time has come: every submission from then on fails
-/// with VK_ERROR_DEVICE_LOST. Any thread.
-pub fn device_lost_faked() -> bool {
-    let after = forcing().fake_device_lost;
-    if after <= 0.0 {
-        return false;
-    }
-    clock::nanoseconds().wrapping_sub(STARTED.load(Ordering::Relaxed)) as f64 / 1e9 >= after
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -694,17 +656,10 @@ pub fn start(
     position: fn() -> u64,
 ) {
     use vk::Handle;
-    STARTED.store(clock::nanoseconds(), Ordering::Relaxed);
     DETERMINISTIC.store(env::flag(c"MW2_DETERMINISTIC"), Ordering::Relaxed);
     let forced = Forced {
         instance_depth_resolve: env::flag(c"MW2_FORCE_INSTANCE_DEPTH_RESOLVE"),
-        resolve_twin: env::flag(c"MW2_FORCE_RESOLVE_TWIN"),
-        drawn_resolve_sets: env::number(c"MW2_DRAWN_RESOLVE_SETS", 0) as u32,
-        resolve_remake: env::number(c"MW2_FORCE_RESOLVE_REMAKE", 0) as u32,
         no_multi_draw: env::flag(c"MW2_NO_MULTI_DRAW"),
-        lone_uploads: env::flag(c"MW2_FORCE_LONE_UPLOADS"),
-        staging_least_kb: env::number(c"MW2_STAGING_LEAST_KB", 0) as u32,
-        fake_device_lost: env::real(c"MW2_FAKE_DEVICE_LOST", 0.0),
     };
     *FORCED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = forced;
     let refused_libraries = match env::text(c"MW2_FORCE_REFUSED_LIBRARIES").map(CStr::to_bytes) {
@@ -722,26 +677,8 @@ pub fn start(
     if forced.instance_depth_resolve {
         log_info!("renderer: MW2_FORCE_INSTANCE_DEPTH_RESOLVE: no drawn depth resolve");
     }
-    if forced.resolve_twin {
-        log_info!("renderer: MW2_FORCE_RESOLVE_TWIN: every multisampled resolve goes through the twin");
-    }
-    if forced.drawn_resolve_sets != 0 {
-        log_info!("renderer: MW2_DRAWN_RESOLVE_SETS: %u sets for the drawn depth resolve", forced.drawn_resolve_sets);
-    }
-    if forced.resolve_remake != 0 {
-        log_info!(
-            "renderer: MW2_FORCE_RESOLVE_REMAKE: every resolve image made again every %u frames",
-            forced.resolve_remake
-        );
-    }
     if forced.no_multi_draw {
         log_info!("renderer: MW2_NO_MULTI_DRAW: one call a draw");
-    }
-    if forced.lone_uploads {
-        log_info!("renderer: MW2_FORCE_LONE_UPLOADS: every texture upload submitted alone");
-    }
-    if forced.staging_least_kb != 0 {
-        log_info!("renderer: MW2_STAGING_LEAST_KB: an upload slot's staging starts at %u KB", forced.staging_least_kb);
     }
     if refused_libraries != 0 {
         log_info!(
@@ -752,9 +689,6 @@ pub fn start(
                 _ => c"vertex and pixel",
             }
         );
-    }
-    if forced.fake_device_lost > 0.0 {
-        log_info!("renderer: MW2_FAKE_DEVICE_LOST: the device is lost %.1f s from now", forced.fake_device_lost);
     }
 
     let Some(asked) = env::text(c"MW2_TRACE_COMMANDS") else { return };
@@ -808,7 +742,7 @@ fn path_os(path: &[u8]) -> Option<std::path::PathBuf> {
     std::str::from_utf8(path).ok().map(Into::into)
 }
 
-// vsnprintf into a buffer of `size`: what fits of it.
+// What of `text` fits a buffer of `size` with its terminating zero: at most size - 1 bytes.
 fn clipped(text: &str, size: usize) -> String {
     let bytes = text.as_bytes();
     String::from_utf8_lossy(&bytes[..bytes.len().min(size - 1)]).into_owned()

@@ -47,7 +47,7 @@ static SCALE: LazyLock<f64> = LazyLock::new(|| {
 guest_hook!(T_CG_ViewFov, |ctx, memory| {
     T_CG_ViewFov.original(ctx, memory);
     let scaled = ctx.f1.as_f64() * *SCALE;
-    // std::min, not f64::min: this one hands a NaN on.
+    // Not f64::min, which would drop a NaN: this one hands it on.
     let held = if TITLE_MOST < scaled { TITLE_MOST } else { scaled };
     ctx.f1.f64 = f64::from(held as f32);
 });

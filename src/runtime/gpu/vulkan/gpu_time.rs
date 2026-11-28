@@ -63,7 +63,7 @@ impl Ring {
     }
 }
 
-/// What Collect keeps between calls.
+/// What collect keeps between calls.
 pub struct Collector {
     /// A pair's results from its last round stay readable until the GPU reaches its
     /// reset; seeing them again is "not written yet".
@@ -270,7 +270,7 @@ pub unsafe fn start(physical: vk::PhysicalDevice, raw_device: vk::Device, queue:
     ON.store(true, Ordering::Release);
 }
 
-/// What start() made before something failed, destroyed: Stop() without a Collect.
+/// What start() made before something failed, destroyed: stop() without a collect.
 ///
 /// # Safety
 /// Nothing uses the pools.

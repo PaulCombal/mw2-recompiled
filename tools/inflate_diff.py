@@ -8,9 +8,10 @@
 # fastfile in mw2/game/ and mw2/update/ that is one zlib stream, on zlib streams of the
 # same data at every level and window, with a preset dictionary or a header zlib refuses,
 # on the hand-built deflate streams in a zlib wrapper, and on damaged copies of each. The
-# Rust is built with overflow checks and debug_assert! on.
+# Rust is built with overflow checks and debug_assert! on, and linked with the system's zlib
+# (zlib1g-dev).
 #
-#   usage: inflate_diff.py <build folder> [--seeds N] [--src folder] [--work folder]
+#   usage: inflate_diff.py [--seeds N] [--src folder] [--work folder]
 #
 # --src takes the Rust (inflate.rs) from another folder, to try a deliberate mistake. Exits nonzero at
 # the first difference, leaving the stream beside the corpus.
@@ -387,17 +388,12 @@ def write_corpus(path, streams):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("build")
     parser.add_argument("--seeds", type=int, default=2000)
     parser.add_argument("--src", default=f"{ROOT}/install/src")
-    parser.add_argument("--work")
+    parser.add_argument("--work", default=f"{ROOT}/build/inflate_diff")
     arguments = parser.parse_args()
-    build = os.path.abspath(arguments.build)
-    work = arguments.work or f"{build}/inflate_diff"
+    work = arguments.work
     os.makedirs(work, exist_ok=True)
-    libraries = glob.glob(f"{build}/_deps/zlib-build/libz*.a")
-    if not libraries:
-        sys.exit(f"{build} has no zlib: build it first")
 
     made = crafted()
     streams = {**xlasts(), **synthetic(), **made}
@@ -415,7 +411,7 @@ def main():
     open(source, "w").write(text.replace('#[path = "../install/src/inflate.rs"]', f'#[path = "{arguments.src}/inflate.rs"]'))
     program = f"{work}/inflate_diff"
     subprocess.run(["rustc", "--edition=2024", "-Copt-level=2", "-Cdebug-assertions=on", "-Coverflow-checks=on",
-                    "-Cpanic=abort", "-o", program, source, "-L", os.path.dirname(libraries[0]), "-l", "static=z"], check=True)
+                    "-Cpanic=abort", "-o", program, source, "-l", "z"], check=True)
     for mode, path in (("gzip", corpus), ("zlib", zlib_corpus)):
         result = subprocess.run([program, mode, path, str(arguments.seeds)], text=True, stdout=subprocess.PIPE, timeout=3600)
         print(result.stdout, end="")

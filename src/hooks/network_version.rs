@@ -13,8 +13,8 @@
 //   - PartyHost_HandleJoinPartyRequest refuses a party member of another
 //     protocol ("Incompatible party net code"), and the member sees "Unable to
 //     join game session".
-// The online update never runs here, so every copy said 136. The high half now
-// carries the release (version::NETWORK) instead, and the low half is the title's
+// The online update never runs here, so the high half carries the release
+// (version::NETWORK) instead, and the low half is the title's
 // own, so the disc version and the update still differ. The campaign's co-op has
 // no such check.
 //

@@ -1,5 +1,5 @@
 # The part of stb_truetype that rasterises the game's fonts (src/lib.rs): the system's
-# screens draw their letters with it, and the launcher will. Nothing but std.
+# screens draw their letters with it, and the launcher its window's. Nothing but std.
 [package]
 name = "mw2-truetype"
 version = "0.0.0"

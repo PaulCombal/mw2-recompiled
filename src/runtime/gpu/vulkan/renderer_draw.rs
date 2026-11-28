@@ -1,7 +1,7 @@
 // A draw's arithmetic: the scissor and the viewport out of the registers, where a fetch's
 // answer goes in the recent-textures table, and the parts of the draw's record and dynamic
 // state -- the clip-space transform, the scaled-slot block, the alpha test, the record's
-// length and the depth bias, all pure functions; and TexturesFor (textures_for), which is
+// length and the depth bias, all pure functions; and textures_for, which is
 // not pure: it binds through the texture cache, moves the slot memo, the recent table,
 // their counts and the fetched widths, and logs. Then the draw itself (path).
 
@@ -14,8 +14,9 @@ use crate::runtime::gpu::registers::{
 use crate::runtime::gpu::shader::bindings::{RECORD_TEXTURES, RECORD_VERTEX_TEXTURES};
 use ash::vk;
 
-// std::min, std::max and std::clamp as the C++ library writes them, so that a NaN or a
-// -0 comes out of them as it does there (f32::min and f32::max answer otherwise).
+// std::min, std::max and std::clamp's rule: a comparison picks one argument, so a NaN or a
+// -0 passes through by position -- min and max answer `a` when either is NaN or the two
+// compare equal, clamp answers `v` when it is NaN (f32::min and f32::max answer otherwise).
 #[inline]
 fn std_min(a: f32, b: f32) -> f32 {
     if b < a { b } else { a }
@@ -212,7 +213,7 @@ pub fn depth_bias(r: &RegisterFile, mode_cntl: u32, primitive: u32, pass_scale: 
     ]
 }
 
-// ---- TexturesFor ----
+// ---- textures_for ----
 
 use super::renderer_state::ResolveRecords;
 use crate::log::log_info;
@@ -221,7 +222,7 @@ use crate::runtime::gpu::shader::TranslationMeta;
 use crate::runtime::gpu::shader::bindings::{RECORD_WORDS, TEXTURE_SLOTS};
 use crate::runtime::gpu::texture::TextureFetch;
 
-/// What TexturesFor asks of the texture cache: texture_cache.rs's Bound, which is the
+/// What textures_for asks of the texture cache: texture_cache.rs's Bound, which is the
 /// cache on its device.
 pub trait Textures {
     fn epoch(&self) -> u64;
@@ -233,7 +234,7 @@ pub trait Textures {
 }
 
 /// The binding a texture slot got from the last draw that bound it, kept while neither
-/// epoch has moved (State::TextureSlot).
+/// epoch has moved.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct TextureSlot {
     pub fetch: [u32; 6],
@@ -244,7 +245,7 @@ pub struct TextureSlot {
     pub valid: bool,
 }
 
-/// State's textureSlots, recentTextures and their counts.
+/// The per-slot memo, the recent-textures table and their counts.
 pub struct TextureSlots {
     pub slots: [TextureSlot; TEXTURE_SLOTS as usize],
     /// The last answers for any slot, by a hash of the fetch (recent_texture).
@@ -268,7 +269,7 @@ impl Default for TextureSlots {
     }
 }
 
-/// Where TexturesFor reads the renderer's pass from: the frame's scale and the open pass's
+/// Where textures_for reads the renderer's pass from: the frame's scale and the open pass's
 /// sample count.
 #[derive(Clone, Copy)]
 pub struct TexturePass {
@@ -430,7 +431,7 @@ pub fn textures_for<T: Textures>(
     }
 }
 
-// ---- the draw itself (Draw, DrawOp and MakeGatheredDraws, S9e) -----------------------------
+// ---- the draw itself (draw, DrawOp and make_gathered_draws) --------------------------------
 
 pub use path::DrawCall;
 pub use path::{gathered, make_gathered_draws};
@@ -707,7 +708,7 @@ mod path {
     }
 
     /// The recorder's settle: makes the draws DrawOp held back, before any call that is
-    /// not joining (MakeGatheredDraws).
+    /// not joining.
     ///
     /// # Safety
     /// Called only as the recorder calls it: on the thread that makes the recorder's calls
@@ -790,7 +791,7 @@ mod path {
     }
 
     impl Renderer {
-        /// The draw path: register file in, Vulkan out (vk::renderer::Draw). A PM4 draw
+        /// The draw path: register file in, Vulkan out. A PM4 draw
         /// packet says only "go": everything it draws with is whatever the register file
         /// holds at that moment.
         ///
@@ -1371,7 +1372,7 @@ mod path {
                 }
             }
             // The depth target too, so a dump can tell a depth buffer some pass is testing
-            // against from one no pass has ever core.bound.
+            // against from one no pass has ever bound.
             targets.get_mut(depth_id).draws += 1;
             core.draws_recorded += 1;
             core.segment_draws = true;

@@ -2,8 +2,8 @@
 // blank, and the interrupts both raise into the title's handler. The consumer owns the
 // renderer: made and started here on the run thread, moved into the consumer, which
 // passes it down to the command processor at each batch, and handed back when the
-// consumer is joined, for the shutdown (the plan's §3.6). The C++ -- the pipeline's end
-// and the GPU capture -- is called through bridge::gpu.
+// consumer is joined, for the shutdown. The GPU capture (C++, diagnostics) is called
+// through bridge::gpu.
 //
 // MW2's D3D9 is statically linked, so it is already recompiled and running: it builds
 // real PM4 command streams and publishes a ring write pointer. The consumer here reads
@@ -219,7 +219,7 @@ fn raise_interrupt(source: u32) {
     // The handler runs in its float mode, and the host thread gets its own back after it,
     // as kernel::call_guest gives a caller its own: the handler's vector code can leave
     // MXCSR flushing denormals, and the consumer's and the vblank's host code would flush
-    // from then on (D14).
+    // from then on.
     let before = guest::host_float_mode();
     guest::load_float_mode(&mut ctx);
     function.call(&mut ctx, memory);
@@ -282,8 +282,8 @@ fn guest_blank_period() -> u64 {
     presenter::guest_blank_period()
 }
 
-// A sleep as libc++'s std::this_thread::sleep_for makes it: nanosleep on Linux, and
-// on Windows Sleep of the time rounded up to a whole millisecond. The command
+// A sleep: nanosleep on Linux, and on Windows Sleep of the time rounded up to a whole
+// millisecond. The command
 // processor's WAIT_REG_MEM polls sleep through it too.
 pub(super) fn sleep_for(time: Duration) {
     #[cfg(not(windows))]
@@ -301,7 +301,7 @@ fn spawn<T: Send + 'static>(name: &str, body: impl FnOnce() -> T + Send + 'stati
     // The platform's default thread stack: both run the title's interrupt handler on it.
     thread::Builder::new().name(name.into()).stack_size(platform::default_thread_stack()).spawn(body).unwrap_or_else(
         |_| {
-            // A std::thread that cannot start ends the program.
+            // A thread that cannot start ends the program.
             crate::log::log_error!("gpu: a thread of the GPU would not start");
             std::process::abort()
         },
@@ -321,8 +321,7 @@ fn note(_event: u8, _value: u32) {}
 
 // Executes `available` dwords from `read`: the stutter and report timers around the
 // command processor's execution and nothing else. First, what guest threads told the
-// texture cache of since the last batch (the plan's named fix: MemoryWritten queued to
-// the consumer).
+// texture cache of since the last batch, queued for the consumer.
 fn execute_batch(rd: &mut Renderer, base: u32, read: u32, mask: u32, available: u32) {
     renderer::apply_memory_written_elsewhere(rd);
     #[cfg(feature = "diagnostics")]

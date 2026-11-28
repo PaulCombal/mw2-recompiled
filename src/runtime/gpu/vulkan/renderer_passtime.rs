@@ -155,7 +155,7 @@ impl PassTimes {
         self.draws[s].clear();
     }
 
-    /// StartPassTimes: at the renderer's initialise, unless MW2_DETERMINISTIC.
+    /// At the renderer's initialise, unless MW2_DETERMINISTIC.
     ///
     /// # Safety
     /// `vk` is the renderer's device, of `physical`.
@@ -194,7 +194,7 @@ impl PassTimes {
         }
         self.pool = pool;
         self.table.push(Label::new(b"between passes: copies, resolves, clears, uploads".to_vec()));
-        // std::chrono's time_point plus seconds: a clock's worth past any run never comes.
+        // None when too far for the clock to hold: a time no run reaches.
         self.from = Instant::now().checked_add(Duration::from_secs(seconds));
         self.on = true;
         log_info!("renderer: timing the GPU's passes from %llu s into the run (MW2_TIME_PASSES)", seconds);
@@ -260,7 +260,7 @@ impl PassTimes {
         self.mark(label, draws);
     }
 
-    /// StopPassTimes: with the device idle.
+    /// With the device idle.
     ///
     /// # Safety
     /// `vk` is the renderer's device, idle.

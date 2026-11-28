@@ -70,8 +70,32 @@ fn shader_build(root: &Path) -> String {
     crypto::sha256_hex(text.as_bytes())
 }
 
+// The Vulkan loader's import library for a Windows build, for the game, the launcher and
+// translate-shader alike, which link this crate. vulkan-1.dll comes with every GPU
+// driver, so nothing is shipped; ash links only vkGetInstanceProcAddr and looks up the
+// rest through it.
+fn windows_vulkan(out: &Path) {
+    println!("cargo:rerun-if-env-changed=LLVM_MINGW");
+    let mingw = env::var("LLVM_MINGW").expect("a Windows build needs LLVM_MINGW=<llvm-mingw folder>");
+    let definitions = out.join("vulkan-1.def");
+    fs::write(&definitions, "LIBRARY vulkan-1.dll\nEXPORTS\n    vkGetInstanceProcAddr\n").unwrap();
+    let dlltool = Path::new(&mingw).join("bin/x86_64-w64-mingw32-dlltool");
+    let status = std::process::Command::new(&dlltool)
+        .args(["-m", "i386:x86-64", "-d"])
+        .arg(&definitions)
+        .arg("-l")
+        .arg(out.join("libvulkan-1.a"))
+        .status()
+        .unwrap_or_else(|e| panic!("{}: {e}", dlltool.display()));
+    assert!(status.success(), "{} failed", dlltool.display());
+    println!("cargo:rustc-link-search=native={}", out.display());
+}
+
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let root = manifest.parent().unwrap();
     println!("cargo:rustc-env=MW2_SHADER_BUILD={}", shader_build(root));
+    if env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows" {
+        windows_vulkan(&PathBuf::from(env::var("OUT_DIR").unwrap()));
+    }
 }

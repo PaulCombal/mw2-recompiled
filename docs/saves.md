@@ -63,9 +63,7 @@ word per controller (`T_DATA_DeviceTable` in `title.h`); zero means nobody has
 chosen, which is what puts the prompt in front of the player. The console
 remembers the choice in the profile, so it is made once ever. Here the table
 starts empty at every launch, so the runtime hooks `Memcard_InitializeSystem`
-and, when it returns, fills every empty entry with device 1.
-`MW2_NO_AUTO_SAVE_DEVICE=1` leaves the table alone, and the prompt then works
-as on the console. The table's address is known for the campaign only; in the
+and, when it returns, fills every empty entry with device 1. The table's address is known for the campaign only; in the
 multiplayer build the seed does nothing.
 
 ## The profile (`src/runtime/kernel/profile.rs`)

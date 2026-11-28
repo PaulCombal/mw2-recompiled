@@ -1,8 +1,7 @@
-// FFmpeg's bit reader (libavcodec/get_bits.h) as this build of it is: big-endian, the
-// checked reader, which never moves past eight bits beyond the end of what it reads, and
-// reads the bytes after that end as they are. Its reads see up to eight bytes past the
-// index, so a buffer has that much more behind the bits it holds; a byte outside the slice
-// reads as zero.
+// FFmpeg's bit reader (libavcodec/get_bits.h): big-endian, and the checked reader, which
+// never moves past eight bits beyond the end of what it reads, and reads the bytes after
+// that end as they are. Its reads see up to eight bytes past the index, so a buffer has
+// that much more behind the bits it holds; a byte outside the slice reads as zero.
 //
 // Copyright (c) 2004 Michael Niedermayer
 // Part of a port of FFmpeg, LGPL 2.1 or later: see NOTICE.md in this folder.

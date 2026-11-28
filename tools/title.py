@@ -69,7 +69,7 @@ def _load_symbols():
     """{address: name} from the title's symbol map, a hand-maintained sidecar
     that names functions the recompiler only knows as sub_<ADDR>. One entry per
     line, `ADDR  name` (ADDR hex, 0x optional); blank lines and # comments are
-    ignored. Missing file -> no names. The recompiled C++ is generated and keyed
+    ignored. Missing file -> no names. The recompiled Rust is generated and keyed
     by address, so names live here, not in it."""
     global _syms, _syms_by_name
     if _syms is not None:
